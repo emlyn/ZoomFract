@@ -1,0 +1,224 @@
+:root {
+  font-family: Inter, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #e2e8f0;
+  background: #020817;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  min-height: 100%;
+  height: 100%;
+  background: #020817;
+}
+
+body {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  background: #020817;
+}
+
+.app-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #020817;
+  overflow: hidden;
+}
+
+.canvas-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  transition: opacity 180ms ease;
+}
+
+canvas {
+  display: block;
+  background: transparent;
+}
+
+.sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: min(20rem, 30vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem 1rem 1.5rem;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  border-right: 1px solid rgba(148, 163, 184, 0.2);
+  box-shadow: 0 20px 45px rgba(2, 6, 23, 0.45);
+  transform: translateX(0);
+  transition: transform 240ms ease, opacity 240ms ease, visibility 240ms ease;
+  z-index: 2;
+}
+
+.sidebar.collapsed {
+  transform: translateX(calc(-100% + 0.75rem));
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.panel-reveal {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.8rem;
+  background: rgba(15, 23, 42, 0.58);
+  color: #e2e8f0;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-0.75rem);
+  transition: opacity 180ms ease, transform 180ms ease, visibility 180ms ease;
+  z-index: 5;
+}
+
+.app-shell.panel-handle-visible .panel-reveal {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0);
+}
+
+.panel-reveal:hover {
+  background: rgba(33, 55, 92, 0.9);
+}
+
+.toggle-button {
+  align-self: flex-end;
+  background: rgba(59, 130, 246, 0.22);
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  color: #dbeafe;
+  border-radius: 999px;
+  cursor: pointer;
+  padding: 0.5rem 0.9rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.panel-header h1 {
+  margin: 0;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+
+.value {
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+}
+
+input[type='range'] {
+  width: 100%;
+}
+
+.button-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.button-row button,
+.apply-scene {
+  flex: 1;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.75);
+  color: #e2e8f0;
+  padding: 0.6rem 0.8rem;
+  cursor: pointer;
+}
+
+.scene-label {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.scene-input {
+  width: 100%;
+  min-height: 12rem;
+  resize: vertical;
+  border-radius: 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  padding: 0.75rem 0.85rem;
+}
+
+.scene-status {
+  min-height: 1.25rem;
+  color: #fca5a5;
+  font-size: 0.8rem;
+}
+
+.notes {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.notes p {
+  margin: 0.4rem 0;
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.9em;
+}
