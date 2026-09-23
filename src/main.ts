@@ -37,6 +37,13 @@ type ZoomElement = SceneElement & {
 
 type DrawableElement = RectElement | ZoomElement;
 
+type CapturedScene = {
+  width: number;
+  height: number;
+  levels: HTMLCanvasElement[];
+  leafRasters: Map<string, HTMLCanvasElement>;
+};
+
 type AxisRange = {
   from: number;
   to: number;
@@ -45,6 +52,7 @@ type AxisRange = {
 type SceneDefinition = {
   background: string;
   recursionDepth: number;
+  renderPasses: number;
   seed: {
     color: string;
     opacity: number;
@@ -57,6 +65,7 @@ type SceneDefinition = {
   hueStart: number;
   view: {
     aspect: number;
+    supersampling: number;
     resolution: {
       width: number;
       height: number;
@@ -80,6 +89,7 @@ const DEFAULT_SCENE_TEXT = `background: "#f4f1e8"
 
 view:
   aspect: 1.154
+  supersampling: 4
   resolution:
     width: 1000
   coordinates:
@@ -88,6 +98,7 @@ view:
 
 scene:
   recursionDepth: 6
+  renderPasses: 3
   seed:
     color: "#000000"
   zoom:
@@ -149,6 +160,7 @@ function resolveView(view: Record<string, unknown>) {
   if (requestedWidth && requestedHeight) {
     return {
       aspect: requestedWidth / requestedHeight,
+      supersampling: Math.round(clamp(asNumber(view.supersampling, 4), 1, 4)),
       resolution: {
         width: Math.round(requestedWidth),
         height: Math.round(requestedHeight),
@@ -159,6 +171,7 @@ function resolveView(view: Record<string, unknown>) {
   if (requestedHeight) {
     return {
       aspect: requestedAspect,
+      supersampling: Math.round(clamp(asNumber(view.supersampling, 4), 1, 4)),
       resolution: {
         width: Math.max(1, Math.round(requestedHeight * requestedAspect)),
         height: Math.round(requestedHeight),
@@ -169,6 +182,7 @@ function resolveView(view: Record<string, unknown>) {
   const width = Math.round(requestedWidth ?? 1000);
   return {
     aspect: requestedAspect,
+    supersampling: Math.round(clamp(asNumber(view.supersampling, 4), 1, 4)),
     resolution: {
       width,
       height: Math.max(1, Math.round(width / requestedAspect)),
@@ -229,6 +243,7 @@ const CORNER_SIGNS: Record<CornerName, Vec2> = {
 
 const CORNER_NAMES = Object.keys(CORNER_SIGNS) as CornerName[];
 const RECT_EPSILON = 1e-6;
+const LEAF_RASTER_OVERSAMPLING = 2;
 
 const add = (left: Vec2, right: Vec2): Vec2 => ({ x: left.x + right.x, y: left.y + right.y });
 const subtract = (left: Vec2, right: Vec2): Vec2 => ({ x: left.x - right.x, y: left.y - right.y });
@@ -555,6 +570,7 @@ function parseScene(text: string): SceneDefinition {
   const fallback = {
     background: '#f4f1e8',
     recursionDepth: 6,
+    renderPasses: 3,
     seed: {
       color: '#000000',
       opacity: 1,
@@ -562,6 +578,7 @@ function parseScene(text: string): SceneDefinition {
     hasFractal: false,
     view: {
       aspect: 1,
+      supersampling: 4,
       resolution: { width: 1000, height: 1000 },
       coordinates: {
         x: { from: -100, to: 100 },
@@ -642,6 +659,7 @@ function parseScene(text: string): SceneDefinition {
     return {
       background,
       recursionDepth: Math.round(clamp(asNumber(sceneNode.recursionDepth, fallback.recursionDepth), 0, 12)),
+      renderPasses: Math.round(clamp(asNumber(sceneNode.renderPasses, fallback.renderPasses), 1, 8)),
       seed: {
         color: typeof sceneNode.seed === 'string'
           ? sceneNode.seed
@@ -706,6 +724,7 @@ function parseScene(text: string): SceneDefinition {
   return {
     background: fallback.background,
     recursionDepth: fallback.recursionDepth,
+    renderPasses: fallback.renderPasses,
     seed: fallback.seed,
     hasFractal: true,
     depth: parsedFractal.depth,
@@ -715,6 +734,7 @@ function parseScene(text: string): SceneDefinition {
     hueStart: parsedFractal.hueStart,
     view: {
       aspect: 1,
+      supersampling: 4,
       resolution: { width: 1000, height: 1000 },
       coordinates: {
         x: { from: -100, to: 100 },
@@ -748,7 +768,8 @@ const canvasHost = document.createElement('div');
 canvasHost.className = 'canvas-host';
 
 const canvas = document.createElement('canvas');
-const ctx = canvas.getContext('2d')!;
+const displayContext = canvas.getContext('2d')!;
+let ctx = displayContext;
 
 canvasHost.append(canvas);
 
@@ -821,6 +842,73 @@ depthSlider.addEventListener('input', (event) => {
   render();
 });
 
+const passesRow = document.createElement('label');
+passesRow.className = 'control-row';
+passesRow.innerHTML = '<span>Render passes</span>';
+
+const passesValue = document.createElement('span');
+passesValue.className = 'value';
+passesValue.textContent = '3';
+passesRow.append(passesValue);
+
+const passesSlider = document.createElement('input');
+passesSlider.type = 'range';
+passesSlider.min = '1';
+passesSlider.max = '8';
+passesSlider.step = '1';
+passesSlider.value = '3';
+
+passesSlider.addEventListener('input', (event) => {
+  const nextValue = Number((event.target as HTMLInputElement).value);
+  passesValue.textContent = String(nextValue);
+  state.scene = {
+    ...state.scene,
+    renderPasses: nextValue,
+  };
+  render();
+});
+
+const supersamplingRow = document.createElement('label');
+supersamplingRow.className = 'control-row';
+supersamplingRow.innerHTML = '<span>Supersampling</span>';
+
+const supersamplingValue = document.createElement('span');
+supersamplingValue.className = 'value';
+supersamplingValue.textContent = '4×';
+supersamplingRow.append(supersamplingValue);
+
+const supersamplingSlider = document.createElement('input');
+supersamplingSlider.type = 'range';
+supersamplingSlider.min = '1';
+supersamplingSlider.max = '4';
+supersamplingSlider.step = '1';
+supersamplingSlider.value = '4';
+
+supersamplingSlider.addEventListener('input', (event) => {
+  const nextValue = Number((event.target as HTMLInputElement).value);
+  supersamplingValue.textContent = `${nextValue}×`;
+  state.scene = {
+    ...state.scene,
+    view: {
+      ...state.scene.view,
+      supersampling: nextValue,
+    },
+  };
+  render();
+});
+
+const renderProgress = document.createElement('div');
+renderProgress.className = 'render-progress';
+renderProgress.hidden = true;
+renderProgress.setAttribute('role', 'progressbar');
+renderProgress.setAttribute('aria-label', 'Rendering scene');
+renderProgress.setAttribute('aria-valuemin', '0');
+renderProgress.setAttribute('aria-valuemax', '100');
+
+const renderProgressBar = document.createElement('div');
+renderProgressBar.className = 'render-progress-bar';
+renderProgress.append(renderProgressBar);
+
 const zoomRow = document.createElement('div');
 zoomRow.className = 'button-row';
 
@@ -876,6 +964,10 @@ applySceneButton.addEventListener('click', () => {
     state.scene = nextScene;
     depthSlider.value = String(nextScene.recursionDepth);
     depthValue.textContent = String(nextScene.recursionDepth);
+    passesSlider.value = String(nextScene.renderPasses);
+    passesValue.textContent = String(nextScene.renderPasses);
+    supersamplingSlider.value = String(nextScene.view.supersampling);
+    supersamplingValue.textContent = `${nextScene.view.supersampling}×`;
     sceneStatus.textContent = '';
     resizeCanvas();
     render();
@@ -891,8 +983,20 @@ notes.innerHTML = `
   <p><code>x</code> runs left to right and <code>y</code> runs bottom to top, following mathematical convention.</p>
 `;
 
-controls.append(depthRow, depthSlider, zoomRow, sceneInputLabel, sceneInput, applySceneButton, sceneStatus);
-panel.append(toggleButton, panelHeader, controls, notes);
+controls.append(
+  depthRow,
+  depthSlider,
+  passesRow,
+  passesSlider,
+  supersamplingRow,
+  supersamplingSlider,
+  zoomRow,
+  sceneInputLabel,
+  sceneInput,
+  applySceneButton,
+  sceneStatus,
+);
+panel.append(toggleButton, panelHeader, controls, notes, renderProgress);
 shell.append(panel, panelReveal, canvasHost);
 app.append(shell);
 
@@ -963,10 +1067,109 @@ function drawSeedElement(element: ZoomElement, scene: SceneDefinition) {
   ctx.restore();
 }
 
+function drawCapturedElement(
+  element: ZoomElement,
+  scene: SceneDefinition,
+  capturedScene: CapturedScene,
+) {
+  const [topLeft, topRight, bottomRight, bottomLeft] = elementCorners(element, scene);
+  const transform = ctx.getTransform();
+  const transformPoint = (point: Vec2): Vec2 => ({
+    x: transform.a * point.x + transform.c * point.y + transform.e,
+    y: transform.b * point.x + transform.d * point.y + transform.f,
+  });
+  const displayTopLeft = transformPoint(topLeft);
+  const displayTopRight = transformPoint(topRight);
+  const displayBottomLeft = transformPoint(bottomLeft);
+  const displayBottomRight = transformPoint(bottomRight);
+  const displayWidth = vectorLength(subtract(displayTopRight, displayTopLeft));
+  const displayHeight = vectorLength(subtract(displayBottomLeft, displayTopLeft));
+  const targetScale = Math.max(
+    displayWidth * LEAF_RASTER_OVERSAMPLING / capturedScene.width,
+    displayHeight * LEAF_RASTER_OVERSAMPLING / capturedScene.height,
+  );
+  const targetLevel = targetScale >= 1
+    ? 0
+    : Math.max(0, Math.floor(Math.log2(1 / targetScale)));
+  const source = capturedScene.levels[Math.min(targetLevel, capturedScene.levels.length - 1)];
+  const projectedCorners = [
+    displayTopLeft,
+    displayTopRight,
+    displayBottomRight,
+    displayBottomLeft,
+  ];
+  const left = Math.max(0, Math.floor(Math.min(...projectedCorners.map((point) => point.x))));
+  const top = Math.max(0, Math.floor(Math.min(...projectedCorners.map((point) => point.y))));
+  const right = Math.min(ctx.canvas.width, Math.ceil(Math.max(...projectedCorners.map((point) => point.x))));
+  const bottom = Math.min(ctx.canvas.height, Math.ceil(Math.max(...projectedCorners.map((point) => point.y))));
+  if (right <= left || bottom <= top) {
+    return;
+  }
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  const relativeCorners = projectedCorners.map((point) => ({
+    x: point.x - left,
+    y: point.y - top,
+  }));
+  const cacheKey = [
+    source.width,
+    source.height,
+    width,
+    height,
+    ...relativeCorners.flatMap((point) => [
+      Math.round(point.x * 1000),
+      Math.round(point.y * 1000),
+    ]),
+  ].join(':');
+  let raster = capturedScene.leafRasters.get(cacheKey);
+
+  if (!raster) {
+    const oversampled = document.createElement('canvas');
+    oversampled.width = width * LEAF_RASTER_OVERSAMPLING;
+    oversampled.height = height * LEAF_RASTER_OVERSAMPLING;
+    const rasterContext = oversampled.getContext('2d')!;
+    const [rasterTopLeft, rasterTopRight, , rasterBottomLeft] = relativeCorners
+      .map((point) => scaleVector(point, LEAF_RASTER_OVERSAMPLING));
+
+    rasterContext.imageSmoothingEnabled = true;
+    rasterContext.imageSmoothingQuality = 'high';
+    rasterContext.beginPath();
+    rasterContext.moveTo(
+      relativeCorners[0].x * LEAF_RASTER_OVERSAMPLING,
+      relativeCorners[0].y * LEAF_RASTER_OVERSAMPLING,
+    );
+    relativeCorners.slice(1).forEach((point) => rasterContext.lineTo(
+      point.x * LEAF_RASTER_OVERSAMPLING,
+      point.y * LEAF_RASTER_OVERSAMPLING,
+    ));
+    rasterContext.closePath();
+    rasterContext.clip();
+    rasterContext.transform(
+      (rasterTopRight.x - rasterTopLeft.x) / source.width,
+      (rasterTopRight.y - rasterTopLeft.y) / source.width,
+      (rasterBottomLeft.x - rasterTopLeft.x) / source.height,
+      (rasterBottomLeft.y - rasterTopLeft.y) / source.height,
+      rasterTopLeft.x,
+      rasterTopLeft.y,
+    );
+    rasterContext.drawImage(source, 0, 0);
+    raster = downsampleAlphaPreserving(oversampled);
+    capturedScene.leafRasters.set(cacheKey, raster);
+  }
+
+  const inheritedAlpha = ctx.globalAlpha;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = inheritedAlpha * element.opacity;
+  ctx.drawImage(raster, left, top);
+  ctx.restore();
+}
+
 function drawZoomElement(
   element: ZoomElement,
   scene: SceneDefinition,
   recursionLevel: number,
+  capturedScene: CapturedScene | null,
 ) {
   const [topLeft, topRight, bottomRight, bottomLeft] = elementCorners(element, scene);
   const sourceWidth = scene.view.resolution.width;
@@ -984,7 +1187,7 @@ function drawZoomElement(
     topLeft.x,
     topLeft.y,
   );
-  drawScene(scene, recursionLevel + 1);
+  drawScene(scene, recursionLevel + 1, capturedScene);
   ctx.restore();
 }
 
@@ -1020,12 +1223,18 @@ function drawBranch(branch: BranchNode, scene: SceneDefinition, angle: number, l
   drawBranch(makeBranch(branch.end, rightEnd, branch.depth + 1), scene, scene.branchAngle * (spreadDirection > 0 ? scene.spread : 1 / scene.spread), nextLength);
 }
 
-function drawScene(scene: SceneDefinition, recursionLevel: number) {
+function drawScene(
+  scene: SceneDefinition,
+  recursionLevel: number,
+  capturedScene: CapturedScene | null,
+) {
   for (const element of scene.elements) {
     if (element.kind === 'rect') {
       drawRectElement(element, scene);
     } else if (recursionLevel < scene.recursionDepth) {
-      drawZoomElement(element, scene, recursionLevel);
+      drawZoomElement(element, scene, recursionLevel, capturedScene);
+    } else if (capturedScene) {
+      drawCapturedElement(element, scene, capturedScene);
     } else {
       drawSeedElement(element, scene);
     }
@@ -1049,25 +1258,182 @@ function drawScene(scene: SceneDefinition, recursionLevel: number) {
   drawBranch(makeBranch(baseStart, baseEnd, 0), scene, 0, scene.trunkLength);
 }
 
-function render() {
-  const width = canvas.width;
-  const height = canvas.height;
-  const scene = state.scene;
+function downsampleAlphaPreserving(source: HTMLCanvasElement): HTMLCanvasElement {
+  const width = Math.max(1, Math.ceil(source.width / 2));
+  const height = Math.max(1, Math.ceil(source.height / 2));
+  const sourceContext = source.getContext('2d')!;
+  const sourcePixels = sourceContext.getImageData(0, 0, source.width, source.height);
+  const output = document.createElement('canvas');
+  output.width = width;
+  output.height = height;
+  const outputContext = output.getContext('2d')!;
+  const outputPixels = outputContext.createImageData(width, height);
 
-  canvasHost.style.backgroundColor = scene.background;
-  ctx.clearRect(0, 0, width, height);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      let maxAlpha = 0;
+      let alphaTotal = 0;
+      let red = 0;
+      let green = 0;
+      let blue = 0;
 
+      for (let sourceY = y * 2; sourceY < Math.min(y * 2 + 2, source.height); sourceY += 1) {
+        for (let sourceX = x * 2; sourceX < Math.min(x * 2 + 2, source.width); sourceX += 1) {
+          const sourceIndex = (sourceY * source.width + sourceX) * 4;
+          const alpha = sourcePixels.data[sourceIndex + 3];
+          maxAlpha = Math.max(maxAlpha, alpha);
+          alphaTotal += alpha;
+          red += sourcePixels.data[sourceIndex] * alpha;
+          green += sourcePixels.data[sourceIndex + 1] * alpha;
+          blue += sourcePixels.data[sourceIndex + 2] * alpha;
+        }
+      }
+
+      const outputIndex = (y * width + x) * 4;
+      if (alphaTotal > 0) {
+        outputPixels.data[outputIndex] = Math.round(red / alphaTotal);
+        outputPixels.data[outputIndex + 1] = Math.round(green / alphaTotal);
+        outputPixels.data[outputIndex + 2] = Math.round(blue / alphaTotal);
+        outputPixels.data[outputIndex + 3] = maxAlpha;
+      }
+    }
+  }
+
+  outputContext.putImageData(outputPixels, 0, 0);
+  return output;
+}
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+async function captureCanvas(
+  source: HTMLCanvasElement,
+  onLevel: () => Promise<boolean>,
+): Promise<CapturedScene | null> {
+  const fullResolution = document.createElement('canvas');
+  fullResolution.width = source.width;
+  fullResolution.height = source.height;
+  fullResolution.getContext('2d')!.drawImage(source, 0, 0);
+
+  const levels = [fullResolution];
+  while (levels.at(-1)!.width > 1 || levels.at(-1)!.height > 1) {
+    levels.push(downsampleAlphaPreserving(levels.at(-1)!));
+    if (!await onLevel()) {
+      return null;
+    }
+  }
+
+  return {
+    width: fullResolution.width,
+    height: fullResolution.height,
+    levels,
+    leafRasters: new Map(),
+  };
+}
+
+function renderPass(
+  target: HTMLCanvasElement,
+  scene: SceneDefinition,
+  capturedScene: CapturedScene | null,
+) {
+  ctx = target.getContext('2d')!;
+  const supersampling = scene.view.supersampling;
   const viewWidth = scene.view.resolution.width;
   const viewHeight = scene.view.resolution.height;
-  const scale = Math.min(width / viewWidth, height / viewHeight) * state.zoom;
 
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, target.width, target.height);
   ctx.save();
-  ctx.translate(width / 2, height / 2);
-  ctx.scale(scale, scale);
+  ctx.scale(supersampling, supersampling);
+  ctx.translate(viewWidth / 2, viewHeight / 2);
+  ctx.scale(state.zoom, state.zoom);
   ctx.translate(-viewWidth / 2, -viewHeight / 2);
 
-  drawScene(scene, 0);
+  drawScene(scene, 0, capturedScene);
   ctx.restore();
+}
+
+let renderRevision = 0;
+let rendererIsRunning = false;
+
+function setRenderProgress(progress: number | null) {
+  renderProgress.hidden = progress === null;
+  if (progress === null) {
+    renderProgressBar.style.width = '0%';
+    renderProgress.removeAttribute('aria-valuenow');
+    return;
+  }
+
+  const percentage = Math.round(clamp(progress, 0, 1) * 100);
+  renderProgressBar.style.width = `${percentage}%`;
+  renderProgress.setAttribute('aria-valuenow', String(percentage));
+}
+
+function mipLevelCount(width: number, height: number): number {
+  return Math.ceil(Math.log2(Math.max(width, height)));
+}
+
+async function renderScene(scene: SceneDefinition, revision: number): Promise<boolean> {
+  canvasHost.style.backgroundColor = scene.background;
+  const workingCanvas = document.createElement('canvas');
+  workingCanvas.width = scene.view.resolution.width * scene.view.supersampling;
+  workingCanvas.height = scene.view.resolution.height * scene.view.supersampling;
+  const mipLevels = mipLevelCount(workingCanvas.width, workingCanvas.height);
+  const totalSteps = scene.renderPasses + (scene.renderPasses - 1) * mipLevels + 1;
+  let completedSteps = 0;
+  const advance = async () => {
+    completedSteps += 1;
+    setRenderProgress(completedSteps / totalSteps);
+    await nextFrame();
+    return revision === renderRevision;
+  };
+
+  let capturedScene: CapturedScene | null = null;
+  for (let pass = 0; pass < scene.renderPasses; pass += 1) {
+    renderPass(workingCanvas, scene, capturedScene);
+    if (!await advance()) {
+      return false;
+    }
+    if (pass < scene.renderPasses - 1) {
+      capturedScene = await captureCanvas(workingCanvas, advance);
+      if (!capturedScene) {
+        return false;
+      }
+    }
+  }
+
+  ctx = displayContext;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(workingCanvas, 0, 0, canvas.width, canvas.height);
+  return advance();
+}
+
+async function runRenderer() {
+  if (rendererIsRunning) {
+    return;
+  }
+
+  rendererIsRunning = true;
+  setRenderProgress(0);
+  await nextFrame();
+
+  while (true) {
+    const revision = renderRevision;
+    const completed = await renderScene(state.scene, revision);
+    if (completed && revision === renderRevision) {
+      break;
+    }
+  }
+
+  setRenderProgress(null);
+  rendererIsRunning = false;
+}
+
+function render() {
+  renderRevision += 1;
+  void runRenderer();
 }
 
 window.addEventListener('resize', () => {

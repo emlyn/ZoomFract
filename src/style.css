@@ -74,7 +74,7 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 1rem 1rem 1.5rem;
+  padding: 1rem 1rem 2rem;
   background: rgba(15, 23, 42, 0.92);
   backdrop-filter: blur(12px);
   border-right: 1px solid rgba(148, 163, 184, 0.2);
@@ -164,6 +164,32 @@ canvas {
 
 input[type='range'] {
   width: 100%;
+}
+
+.render-progress {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.75rem;
+  left: 1rem;
+  height: 0.4rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  opacity: 1;
+  transition: opacity 140ms ease;
+}
+
+.render-progress[hidden] {
+  display: block;
+  opacity: 0;
+}
+
+.render-progress-bar {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: #60a5fa;
+  transition: width 100ms linear;
 }
 
 .button-row {
