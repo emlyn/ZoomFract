@@ -42,6 +42,7 @@ textarea {
 }
 
 .app-shell {
+  --panel-width: min(20rem, 30vw);
   position: relative;
   width: 100%;
   height: 100%;
@@ -69,19 +70,58 @@ canvas {
   position: absolute;
   top: 0;
   left: 0;
-  width: min(20rem, 30vw);
+  width: var(--panel-width);
   height: 100%;
   display: flex;
   flex-direction: column;
   gap: 1rem;
   padding: 1rem 1rem 2rem;
-  background: rgba(15, 23, 42, 0.92);
+  background: rgba(38, 39, 42, 0.94);
   backdrop-filter: blur(12px);
-  border-right: 1px solid rgba(148, 163, 184, 0.2);
-  box-shadow: 0 20px 45px rgba(2, 6, 23, 0.45);
+  border-right: 1px solid rgba(212, 212, 216, 0.16);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.38);
   transform: translateX(0);
   transition: transform 240ms ease, opacity 240ms ease, visibility 240ms ease;
   z-index: 2;
+}
+
+.panel-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -0.3rem;
+  width: 0.6rem;
+  height: 100%;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.panel-resize-handle::after {
+  position: absolute;
+  top: 0;
+  right: 0.25rem;
+  width: 1px;
+  height: 100%;
+  background: rgba(212, 212, 216, 0.16);
+  content: '';
+  transition: background 160ms ease, width 160ms ease;
+}
+
+.panel-resize-handle:hover::after,
+.panel-resizing .panel-resize-handle::after {
+  width: 2px;
+  background: rgba(228, 228, 231, 0.55);
+}
+
+.panel-resizing {
+  cursor: ew-resize;
+  user-select: none;
+}
+
+.panel-resizing .panel-toggle {
+  transition:
+    opacity 180ms ease,
+    background 180ms ease,
+    visibility 0ms linear;
 }
 
 .sidebar.collapsed {
@@ -91,42 +131,92 @@ canvas {
   pointer-events: none;
 }
 
-.panel-reveal {
+.panel-toggle {
   position: absolute;
   top: 0.5rem;
-  left: 0.5rem;
+  left: calc(var(--panel-width) - 3.25rem);
   width: 2.75rem;
   height: 2.75rem;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid rgba(212, 212, 216, 0.18);
   border-radius: 0.8rem;
-  background: rgba(15, 23, 42, 0.58);
-  color: #e2e8f0;
+  background: rgba(47, 48, 51, 0.68);
+  color: #e4e4e7;
   cursor: pointer;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateX(-0.75rem);
-  transition: opacity 180ms ease, transform 180ms ease, visibility 180ms ease;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    left 240ms ease,
+    opacity 180ms ease 0ms,
+    background 180ms ease,
+    visibility 0ms linear 0ms;
   z-index: 5;
 }
 
-.app-shell.panel-handle-visible .panel-reveal {
+.app-shell.panel-collapsed .panel-toggle {
+  left: 0.5rem;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    left 240ms ease,
+    opacity 180ms ease 240ms,
+    background 180ms ease,
+    visibility 0ms linear 420ms;
+}
+
+.app-shell.panel-collapsed.panel-handle-visible .panel-toggle {
   opacity: 1;
   visibility: visible;
-  transform: translateX(0);
+  transition:
+    left 240ms ease,
+    opacity 180ms ease 0ms,
+    background 180ms ease,
+    visibility 0ms linear 0ms;
 }
 
-.panel-reveal:hover {
-  background: rgba(33, 55, 92, 0.9);
-}
-
-.toggle-button {
-  align-self: flex-end;
-  background: rgba(59, 130, 246, 0.22);
-  border: 1px solid rgba(96, 165, 250, 0.5);
-  color: #dbeafe;
+.panel-toggle-icon,
+.panel-toggle-icon::before,
+.panel-toggle-icon::after {
+  position: absolute;
+  left: 50%;
+  width: 1.15rem;
+  height: 2px;
   border-radius: 999px;
-  cursor: pointer;
-  padding: 0.5rem 0.9rem;
+  content: '';
+  transition:
+    background-color 180ms ease,
+    transform 240ms ease;
+}
+
+.panel-toggle-icon {
+  top: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+}
+
+.panel-toggle-icon::before,
+.panel-toggle-icon::after {
+  top: 0;
+  background: currentColor;
+}
+
+.panel-toggle-icon::before {
+  transform: translate(-50%, 0) rotate(45deg);
+}
+
+.panel-toggle-icon::after {
+  transform: translate(-50%, 0) rotate(-45deg);
+}
+
+.panel-collapsed .panel-toggle-icon {
+  background: currentColor;
+}
+
+.panel-collapsed .panel-toggle-icon::before {
+  transform: translate(-50%, -0.38rem);
+}
+
+.panel-collapsed .panel-toggle-icon::after {
+  transform: translate(-50%, 0.38rem);
 }
 
 .panel-header {
@@ -148,7 +238,8 @@ canvas {
   gap: 0.75rem;
 }
 
-.control-row {
+.control-row,
+.quality-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -157,13 +248,24 @@ canvas {
   color: #cbd5e1;
 }
 
+.quality-row select {
+  min-width: 7rem;
+  border: 1px solid rgba(212, 212, 216, 0.18);
+  border-radius: 0.6rem;
+  background: rgba(63, 63, 66, 0.78);
+  color: #f4f4f5;
+  padding: 0.4rem 0.55rem;
+}
+
+.quality-details {
+  min-height: 1.25rem;
+  color: #a1a1aa;
+  font-size: 0.78rem;
+}
+
 .value {
   font-variant-numeric: tabular-nums;
   color: #f8fafc;
-}
-
-input[type='range'] {
-  width: 100%;
 }
 
 .render-progress {
@@ -174,7 +276,7 @@ input[type='range'] {
   height: 0.4rem;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.18);
+  background: rgba(161, 161, 170, 0.2);
   opacity: 1;
   transition: opacity 140ms ease;
 }
@@ -188,22 +290,16 @@ input[type='range'] {
   width: 0%;
   height: 100%;
   border-radius: inherit;
-  background: #60a5fa;
+  background: #d4d4d8;
   transition: width 100ms linear;
 }
 
-.button-row {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.button-row button,
 .apply-scene {
-  flex: 1;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  width: 100%;
+  border: 1px solid rgba(212, 212, 216, 0.18);
   border-radius: 0.75rem;
-  background: rgba(15, 23, 42, 0.75);
-  color: #e2e8f0;
+  background: rgba(63, 63, 66, 0.78);
+  color: #f4f4f5;
   padding: 0.6rem 0.8rem;
   cursor: pointer;
 }
@@ -217,12 +313,16 @@ input[type='range'] {
 
 .scene-input {
   width: 100%;
-  min-height: 12rem;
+  min-height: 24rem;
   resize: vertical;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  tab-size: 2;
   border-radius: 0.8rem;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  background: rgba(15, 23, 42, 0.7);
-  color: #e2e8f0;
+  border: 1px solid rgba(212, 212, 216, 0.18);
+  background: rgba(39, 39, 42, 0.82);
+  color: #f4f4f5;
   padding: 0.75rem 0.85rem;
 }
 
@@ -230,18 +330,6 @@ input[type='range'] {
   min-height: 1.25rem;
   color: #fca5a5;
   font-size: 0.8rem;
-}
-
-.notes {
-  margin-top: auto;
-  padding-top: 1rem;
-  border-top: 1px solid rgba(148, 163, 184, 0.15);
-  color: #cbd5e1;
-  font-size: 0.82rem;
-}
-
-.notes p {
-  margin: 0.4rem 0;
 }
 
 code {

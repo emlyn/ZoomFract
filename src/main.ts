@@ -49,10 +49,55 @@ type AxisRange = {
   to: number;
 };
 
-type SceneDefinition = {
-  background: string;
+type QualityPresetName = 'fast' | 'balanced' | 'high' | 'proof';
+
+type QualityPreset = {
+  label: string;
+  renderPasses: number;
+  supersampling: number;
+  minimumLeafPixels: number;
+  maximumLeaves: number;
+};
+
+type RenderSettings = {
   recursionDepth: number;
   renderPasses: number;
+  supersampling: number;
+};
+
+const QUALITY_PRESETS: Record<QualityPresetName, QualityPreset> = {
+  fast: {
+    label: 'Fast',
+    renderPasses: 3,
+    supersampling: 1,
+    minimumLeafPixels: 10,
+    maximumLeaves: 50,
+  },
+  balanced: {
+    label: 'Balanced',
+    renderPasses: 3,
+    supersampling: 2,
+    minimumLeafPixels: 4,
+    maximumLeaves: 1000,
+  },
+  high: {
+    label: 'High',
+    renderPasses: 4,
+    supersampling: 3,
+    minimumLeafPixels: 2,
+    maximumLeaves: 5000,
+  },
+  proof: {
+    label: 'Proof',
+    renderPasses: 6,
+    supersampling: 4,
+    minimumLeafPixels: 0.75,
+    maximumLeaves: 10000,
+  },
+};
+
+type SceneDefinition = {
+  background: string;
   seed: {
     color: string;
     opacity: number;
@@ -65,7 +110,6 @@ type SceneDefinition = {
   hueStart: number;
   view: {
     aspect: number;
-    supersampling: number;
     resolution: {
       width: number;
       height: number;
@@ -85,20 +129,17 @@ type SceneDefinition = {
   elements: DrawableElement[];
 };
 
-const DEFAULT_SCENE_TEXT = `background: "#f4f1e8"
+const DEFAULT_SCENE_TEXT = `background: "#ffffff"
 
 view:
   aspect: 1.154
-  supersampling: 4
   resolution:
-    width: 1000
+    height: 1200
   coordinates:
     x: [-1, 1]
     y: [-1, 1]
 
 scene:
-  recursionDepth: 6
-  renderPasses: 3
   seed:
     color: "#000000"
   zoom:
@@ -160,7 +201,6 @@ function resolveView(view: Record<string, unknown>) {
   if (requestedWidth && requestedHeight) {
     return {
       aspect: requestedWidth / requestedHeight,
-      supersampling: Math.round(clamp(asNumber(view.supersampling, 4), 1, 4)),
       resolution: {
         width: Math.round(requestedWidth),
         height: Math.round(requestedHeight),
@@ -171,7 +211,6 @@ function resolveView(view: Record<string, unknown>) {
   if (requestedHeight) {
     return {
       aspect: requestedAspect,
-      supersampling: Math.round(clamp(asNumber(view.supersampling, 4), 1, 4)),
       resolution: {
         width: Math.max(1, Math.round(requestedHeight * requestedAspect)),
         height: Math.round(requestedHeight),
@@ -179,10 +218,19 @@ function resolveView(view: Record<string, unknown>) {
     };
   }
 
-  const width = Math.round(requestedWidth ?? 1000);
+  if (!requestedWidth) {
+    return {
+      aspect: requestedAspect,
+      resolution: {
+        width: Math.max(1, Math.round(1200 * requestedAspect)),
+        height: 1200,
+      },
+    };
+  }
+
+  const width = Math.round(requestedWidth);
   return {
     aspect: requestedAspect,
-    supersampling: Math.round(clamp(asNumber(view.supersampling, 4), 1, 4)),
     resolution: {
       width,
       height: Math.max(1, Math.round(width / requestedAspect)),
@@ -568,9 +616,7 @@ function parseElementCandidates<T>(
 
 function parseScene(text: string): SceneDefinition {
   const fallback = {
-    background: '#f4f1e8',
-    recursionDepth: 6,
-    renderPasses: 3,
+    background: '#ffffff',
     seed: {
       color: '#000000',
       opacity: 1,
@@ -578,8 +624,7 @@ function parseScene(text: string): SceneDefinition {
     hasFractal: false,
     view: {
       aspect: 1,
-      supersampling: 4,
-      resolution: { width: 1000, height: 1000 },
+      resolution: { width: 1200, height: 1200 },
       coordinates: {
         x: { from: -100, to: 100 },
         y: { from: -100, to: 100 },
@@ -658,8 +703,6 @@ function parseScene(text: string): SceneDefinition {
 
     return {
       background,
-      recursionDepth: Math.round(clamp(asNumber(sceneNode.recursionDepth, fallback.recursionDepth), 0, 12)),
-      renderPasses: Math.round(clamp(asNumber(sceneNode.renderPasses, fallback.renderPasses), 1, 8)),
       seed: {
         color: typeof sceneNode.seed === 'string'
           ? sceneNode.seed
@@ -723,8 +766,6 @@ function parseScene(text: string): SceneDefinition {
 
   return {
     background: fallback.background,
-    recursionDepth: fallback.recursionDepth,
-    renderPasses: fallback.renderPasses,
     seed: fallback.seed,
     hasFractal: true,
     depth: parsedFractal.depth,
@@ -734,8 +775,7 @@ function parseScene(text: string): SceneDefinition {
     hueStart: parsedFractal.hueStart,
     view: {
       aspect: 1,
-      supersampling: 4,
-      resolution: { width: 1000, height: 1000 },
+      resolution: { width: 1200, height: 1200 },
       coordinates: {
         x: { from: -100, to: 100 },
         y: { from: -100, to: 100 },
@@ -758,11 +798,20 @@ shell.className = 'app-shell';
 const panel = document.createElement('aside');
 panel.className = 'sidebar';
 
-const panelReveal = document.createElement('button');
-panelReveal.className = 'panel-reveal';
-panelReveal.type = 'button';
-panelReveal.textContent = '☰';
-panelReveal.setAttribute('aria-label', 'Show panel');
+const panelResizeHandle = document.createElement('div');
+panelResizeHandle.className = 'panel-resize-handle';
+panelResizeHandle.setAttribute('role', 'separator');
+panelResizeHandle.setAttribute('aria-label', 'Resize panel');
+panelResizeHandle.setAttribute('aria-orientation', 'vertical');
+
+const panelToggle = document.createElement('button');
+panelToggle.className = 'panel-toggle';
+panelToggle.type = 'button';
+panelToggle.setAttribute('aria-label', 'Hide panel');
+
+const panelToggleIcon = document.createElement('span');
+panelToggleIcon.className = 'panel-toggle-icon';
+panelToggle.append(panelToggleIcon);
 
 const canvasHost = document.createElement('div');
 canvasHost.className = 'canvas-host';
@@ -773,28 +822,41 @@ let ctx = displayContext;
 
 canvasHost.append(canvas);
 
-const toggleButton = document.createElement('button');
-toggleButton.className = 'toggle-button';
-toggleButton.type = 'button';
-toggleButton.textContent = 'Hide panel';
-
 let panelIsOpen = true;
+let panelIsResizing = false;
 
 function setPanelOpen(isOpen: boolean) {
   panelIsOpen = isOpen;
   panel.classList.toggle('collapsed', !isOpen);
   shell.classList.toggle('panel-collapsed', !isOpen);
   shell.classList.remove('panel-handle-visible');
-  toggleButton.textContent = isOpen ? 'Hide panel' : 'Show panel';
-  panelReveal.setAttribute('aria-label', isOpen ? 'Hide panel' : 'Show panel');
+  panelToggle.setAttribute('aria-label', isOpen ? 'Hide panel' : 'Show panel');
 }
 
-toggleButton.addEventListener('click', () => {
+panelToggle.addEventListener('click', () => {
   setPanelOpen(!panelIsOpen);
 });
 
-panelReveal.addEventListener('click', () => {
-  setPanelOpen(true);
+panelResizeHandle.addEventListener('pointerdown', (event) => {
+  panelIsResizing = true;
+  panelResizeHandle.setPointerCapture(event.pointerId);
+  shell.classList.add('panel-resizing');
+});
+
+panelResizeHandle.addEventListener('pointermove', (event) => {
+  if (!panelIsResizing) {
+    return;
+  }
+
+  const width = clamp(event.clientX, 240, Math.min(560, window.innerWidth * 0.6));
+  shell.style.setProperty('--panel-width', `${width}px`);
+  panelResizeHandle.setAttribute('aria-valuenow', String(Math.round(width)));
+});
+
+panelResizeHandle.addEventListener('pointerup', (event) => {
+  panelIsResizing = false;
+  panelResizeHandle.releasePointerCapture(event.pointerId);
+  shell.classList.remove('panel-resizing');
 });
 
 window.addEventListener('pointermove', (event) => {
@@ -814,86 +876,25 @@ panelHeader.innerHTML = '<h1>ZoomFract</h1>';
 const controls = document.createElement('div');
 controls.className = 'controls';
 
-const depthRow = document.createElement('label');
-depthRow.className = 'control-row';
+const qualityRow = document.createElement('label');
+qualityRow.className = 'quality-row';
+qualityRow.innerHTML = '<span>Quality</span>';
 
-depthRow.innerHTML = '<span>Scene recursion depth</span>';
+const qualitySelect = document.createElement('select');
+for (const [name, preset] of Object.entries(QUALITY_PRESETS)) {
+  const option = document.createElement('option');
+  option.value = name;
+  option.textContent = preset.label;
+  qualitySelect.append(option);
+}
+qualitySelect.value = 'balanced';
+qualityRow.append(qualitySelect);
 
-const depthValue = document.createElement('span');
-depthValue.className = 'value';
-depthValue.textContent = '6';
+const qualityDetails = document.createElement('div');
+qualityDetails.className = 'quality-details';
 
-depthRow.append(depthValue);
-
-const depthSlider = document.createElement('input');
-depthSlider.type = 'range';
-depthSlider.min = '0';
-depthSlider.max = '12';
-depthSlider.step = '1';
-depthSlider.value = '6';
-
-depthSlider.addEventListener('input', (event) => {
-  const nextValue = Number((event.target as HTMLInputElement).value);
-  depthValue.textContent = String(nextValue);
-  state.scene = {
-    ...state.scene,
-    recursionDepth: nextValue,
-  };
-  render();
-});
-
-const passesRow = document.createElement('label');
-passesRow.className = 'control-row';
-passesRow.innerHTML = '<span>Render passes</span>';
-
-const passesValue = document.createElement('span');
-passesValue.className = 'value';
-passesValue.textContent = '3';
-passesRow.append(passesValue);
-
-const passesSlider = document.createElement('input');
-passesSlider.type = 'range';
-passesSlider.min = '1';
-passesSlider.max = '8';
-passesSlider.step = '1';
-passesSlider.value = '3';
-
-passesSlider.addEventListener('input', (event) => {
-  const nextValue = Number((event.target as HTMLInputElement).value);
-  passesValue.textContent = String(nextValue);
-  state.scene = {
-    ...state.scene,
-    renderPasses: nextValue,
-  };
-  render();
-});
-
-const supersamplingRow = document.createElement('label');
-supersamplingRow.className = 'control-row';
-supersamplingRow.innerHTML = '<span>Supersampling</span>';
-
-const supersamplingValue = document.createElement('span');
-supersamplingValue.className = 'value';
-supersamplingValue.textContent = '4×';
-supersamplingRow.append(supersamplingValue);
-
-const supersamplingSlider = document.createElement('input');
-supersamplingSlider.type = 'range';
-supersamplingSlider.min = '1';
-supersamplingSlider.max = '4';
-supersamplingSlider.step = '1';
-supersamplingSlider.value = '4';
-
-supersamplingSlider.addEventListener('input', (event) => {
-  const nextValue = Number((event.target as HTMLInputElement).value);
-  supersamplingValue.textContent = `${nextValue}×`;
-  state.scene = {
-    ...state.scene,
-    view: {
-      ...state.scene.view,
-      supersampling: nextValue,
-    },
-  };
+qualitySelect.addEventListener('change', () => {
+  state.quality = qualitySelect.value as QualityPresetName;
   render();
 });
 
@@ -909,44 +910,13 @@ const renderProgressBar = document.createElement('div');
 renderProgressBar.className = 'render-progress-bar';
 renderProgress.append(renderProgressBar);
 
-const zoomRow = document.createElement('div');
-zoomRow.className = 'button-row';
-
-const zoomOut = document.createElement('button');
-zoomOut.type = 'button';
-zoomOut.textContent = '−';
-zoomOut.addEventListener('click', () => {
-  state.zoom = Math.max(0.4, state.zoom * 0.8);
-  render();
-});
-
-const zoomReset = document.createElement('button');
-zoomReset.type = 'button';
-zoomReset.textContent = 'Reset';
-zoomReset.addEventListener('click', () => {
-  state.zoom = 1;
-  state.offsetX = 0;
-  state.offsetY = -10;
-  render();
-});
-
-const zoomIn = document.createElement('button');
-zoomIn.type = 'button';
-zoomIn.textContent = '+';
-zoomIn.addEventListener('click', () => {
-  state.zoom = Math.min(3, state.zoom * 1.25);
-  render();
-});
-
-zoomRow.append(zoomOut, zoomReset, zoomIn);
-
 const sceneInputLabel = document.createElement('label');
 sceneInputLabel.className = 'scene-label';
 sceneInputLabel.textContent = 'Scene definition';
 
 const sceneInput = document.createElement('textarea');
 sceneInput.className = 'scene-input';
-sceneInput.rows = 10;
+sceneInput.rows = 18;
 sceneInput.value = DEFAULT_SCENE_TEXT;
 
 const applySceneButton = document.createElement('button');
@@ -962,12 +932,6 @@ applySceneButton.addEventListener('click', () => {
   try {
     const nextScene = parseScene(sceneInput.value);
     state.scene = nextScene;
-    depthSlider.value = String(nextScene.recursionDepth);
-    depthValue.textContent = String(nextScene.recursionDepth);
-    passesSlider.value = String(nextScene.renderPasses);
-    passesValue.textContent = String(nextScene.renderPasses);
-    supersamplingSlider.value = String(nextScene.view.supersampling);
-    supersamplingValue.textContent = `${nextScene.view.supersampling}×`;
     sceneStatus.textContent = '';
     resizeCanvas();
     render();
@@ -976,33 +940,21 @@ applySceneButton.addEventListener('click', () => {
   }
 });
 
-const notes = document.createElement('div');
-notes.className = 'notes';
-notes.innerHTML = `
-  <p>Scene model: the renderer now reads a YAML-inspired document with <code>background</code>, <code>view</code>, and <code>scene</code> sections.</p>
-  <p><code>x</code> runs left to right and <code>y</code> runs bottom to top, following mathematical convention.</p>
-`;
-
 controls.append(
-  depthRow,
-  depthSlider,
-  passesRow,
-  passesSlider,
-  supersamplingRow,
-  supersamplingSlider,
-  zoomRow,
+  qualityRow,
+  qualityDetails,
   sceneInputLabel,
   sceneInput,
   applySceneButton,
   sceneStatus,
 );
-panel.append(toggleButton, panelHeader, controls, notes, renderProgress);
-shell.append(panel, panelReveal, canvasHost);
+panel.append(panelHeader, controls, renderProgress, panelResizeHandle);
+shell.append(panel, panelToggle, canvasHost);
 app.append(shell);
 
 const baseScene = parseScene(DEFAULT_SCENE_TEXT);
 const state = {
-  zoom: 1,
+  quality: 'balanced' as QualityPresetName,
   offsetX: 0,
   offsetY: -10,
   scene: baseScene,
@@ -1038,6 +990,51 @@ function scenePointToCanvas(point: Vec2, scene: SceneDefinition): Vec2 {
 function elementCorners(element: RectGeometry, scene: SceneDefinition): Vec2[] {
   return (['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as CornerName[])
     .map((name) => scenePointToCanvas(rectCorner(element, name), scene));
+}
+
+function resolveRenderSettings(
+  scene: SceneDefinition,
+  preset: QualityPreset,
+): RenderSettings {
+  const zooms = scene.elements.filter((element): element is ZoomElement => element.kind === 'zoom');
+  if (zooms.length === 0) {
+    return {
+      recursionDepth: 0,
+      renderPasses: preset.renderPasses,
+      supersampling: preset.supersampling,
+    };
+  }
+
+  const coordinateWidth = Math.abs(scene.view.coordinates.x.to - scene.view.coordinates.x.from);
+  const coordinateHeight = Math.abs(scene.view.coordinates.y.to - scene.view.coordinates.y.from);
+  const workingWidth = scene.view.resolution.width * preset.supersampling;
+  const workingHeight = scene.view.resolution.height * preset.supersampling;
+  const largestZoomScale = Math.max(...zooms.map((zoom) => Math.max(
+    zoom.width / coordinateWidth,
+    zoom.height / coordinateHeight,
+  )));
+  let largestLeafPixels = Math.max(...zooms.map((zoom) => Math.max(
+    zoom.width / coordinateWidth * workingWidth,
+    zoom.height / coordinateHeight * workingHeight,
+  )));
+  let leafCount = zooms.length;
+  let recursionDepth = 0;
+
+  while (recursionDepth < 12 && largestLeafPixels > preset.minimumLeafPixels) {
+    const nextLeafCount = leafCount * zooms.length;
+    if (nextLeafCount > preset.maximumLeaves) {
+      break;
+    }
+    recursionDepth += 1;
+    leafCount = nextLeafCount;
+    largestLeafPixels *= largestZoomScale;
+  }
+
+  return {
+    recursionDepth,
+    renderPasses: preset.renderPasses,
+    supersampling: preset.supersampling,
+  };
 }
 
 function tracePolygon(points: Vec2[]) {
@@ -1168,6 +1165,7 @@ function drawCapturedElement(
 function drawZoomElement(
   element: ZoomElement,
   scene: SceneDefinition,
+  settings: RenderSettings,
   recursionLevel: number,
   capturedScene: CapturedScene | null,
 ) {
@@ -1187,7 +1185,7 @@ function drawZoomElement(
     topLeft.x,
     topLeft.y,
   );
-  drawScene(scene, recursionLevel + 1, capturedScene);
+  drawScene(scene, settings, recursionLevel + 1, capturedScene);
   ctx.restore();
 }
 
@@ -1225,14 +1223,15 @@ function drawBranch(branch: BranchNode, scene: SceneDefinition, angle: number, l
 
 function drawScene(
   scene: SceneDefinition,
+  settings: RenderSettings,
   recursionLevel: number,
   capturedScene: CapturedScene | null,
 ) {
   for (const element of scene.elements) {
     if (element.kind === 'rect') {
       drawRectElement(element, scene);
-    } else if (recursionLevel < scene.recursionDepth) {
-      drawZoomElement(element, scene, recursionLevel, capturedScene);
+    } else if (recursionLevel < settings.recursionDepth) {
+      drawZoomElement(element, scene, settings, recursionLevel, capturedScene);
     } else if (capturedScene) {
       drawCapturedElement(element, scene, capturedScene);
     } else {
@@ -1333,23 +1332,27 @@ async function captureCanvas(
 function renderPass(
   target: HTMLCanvasElement,
   scene: SceneDefinition,
+  settings: RenderSettings,
   capturedScene: CapturedScene | null,
 ) {
   ctx = target.getContext('2d')!;
-  const supersampling = scene.view.supersampling;
-  const viewWidth = scene.view.resolution.width;
-  const viewHeight = scene.view.resolution.height;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, target.width, target.height);
   ctx.save();
-  ctx.scale(supersampling, supersampling);
-  ctx.translate(viewWidth / 2, viewHeight / 2);
-  ctx.scale(state.zoom, state.zoom);
-  ctx.translate(-viewWidth / 2, -viewHeight / 2);
+  ctx.scale(settings.supersampling, settings.supersampling);
 
-  drawScene(scene, 0, capturedScene);
+  drawScene(scene, settings, 0, capturedScene);
   ctx.restore();
+}
+
+function displayWorkingCanvas(workingCanvas: HTMLCanvasElement) {
+  ctx = displayContext;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(workingCanvas, 0, 0, canvas.width, canvas.height);
 }
 
 let renderRevision = 0;
@@ -1373,12 +1376,15 @@ function mipLevelCount(width: number, height: number): number {
 }
 
 async function renderScene(scene: SceneDefinition, revision: number): Promise<boolean> {
+  const preset = QUALITY_PRESETS[state.quality];
+  const settings = resolveRenderSettings(scene, preset);
+  qualityDetails.textContent = `Depth ${settings.recursionDepth} · ${settings.renderPasses} passes · ${settings.supersampling}×`;
   canvasHost.style.backgroundColor = scene.background;
   const workingCanvas = document.createElement('canvas');
-  workingCanvas.width = scene.view.resolution.width * scene.view.supersampling;
-  workingCanvas.height = scene.view.resolution.height * scene.view.supersampling;
+  workingCanvas.width = scene.view.resolution.width * settings.supersampling;
+  workingCanvas.height = scene.view.resolution.height * settings.supersampling;
   const mipLevels = mipLevelCount(workingCanvas.width, workingCanvas.height);
-  const totalSteps = scene.renderPasses + (scene.renderPasses - 1) * mipLevels + 1;
+  const totalSteps = settings.renderPasses + (settings.renderPasses - 1) * mipLevels;
   let completedSteps = 0;
   const advance = async () => {
     completedSteps += 1;
@@ -1388,12 +1394,16 @@ async function renderScene(scene: SceneDefinition, revision: number): Promise<bo
   };
 
   let capturedScene: CapturedScene | null = null;
-  for (let pass = 0; pass < scene.renderPasses; pass += 1) {
-    renderPass(workingCanvas, scene, capturedScene);
+  for (let pass = 0; pass < settings.renderPasses; pass += 1) {
+    renderPass(workingCanvas, scene, settings, capturedScene);
+    if (revision !== renderRevision) {
+      return false;
+    }
+    displayWorkingCanvas(workingCanvas);
     if (!await advance()) {
       return false;
     }
-    if (pass < scene.renderPasses - 1) {
+    if (pass < settings.renderPasses - 1) {
       capturedScene = await captureCanvas(workingCanvas, advance);
       if (!capturedScene) {
         return false;
@@ -1401,13 +1411,7 @@ async function renderScene(scene: SceneDefinition, revision: number): Promise<bo
     }
   }
 
-  ctx = displayContext;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(workingCanvas, 0, 0, canvas.width, canvas.height);
-  return advance();
+  return true;
 }
 
 async function runRenderer() {
