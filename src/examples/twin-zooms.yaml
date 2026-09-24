@@ -1,0 +1,39 @@
+frame:
+  width: 14
+  radius: 4
+  color: "#30343f"
+  wall: "#c8ccd4"
+  background: "#f7f8fa"
+  padding: 16
+  margin: 28
+
+view:
+  aspect: 1.5
+  resolution:
+    height: 1200
+  coordinates:
+    x: [-1.5, 1.5]
+    y: [-1, 1]
+
+seed:
+  color: "#111827"
+  opacity: 0.95
+
+scene:
+  - type: rect
+    centre: [0, 0]
+    width: 0.22
+    height: 1.5
+    rotation: -18deg
+    color: "#ef8354"
+    opacity: 0.9
+  - type: zoom
+    name: left
+    centre: [-0.72, -0.08]
+    width: 1.15
+    rotation: 14deg
+  - type: zoom
+    name: right
+    centre: [0.76, 0.12]
+    height: 0.78
+    rotation: -22deg

@@ -1,15 +1,14 @@
 import './style.css';
 import YAML from 'yaml';
+import {
+  DEFAULT_EXAMPLE,
+  EXAMPLES,
+  findExample,
+} from './examples';
 
 type Vec2 = {
   x: number;
   y: number;
-};
-
-type BranchNode = {
-  start: Vec2;
-  end: Vec2;
-  depth: number;
 };
 
 type SceneElement = {
@@ -65,6 +64,21 @@ type RenderSettings = {
   supersampling: number;
 };
 
+type DefinitionLocation =
+  | { kind: 'example'; id: string }
+  | { kind: 'source'; url: string }
+  | { kind: 'custom' };
+
+type FrameDefinition = {
+  width: number;
+  radius: number;
+  color: string;
+  wall: string;
+  background: string;
+  padding: number;
+  margin: number;
+};
+
 const QUALITY_PRESETS: Record<QualityPresetName, QualityPreset> = {
   fast: {
     label: 'Fast',
@@ -97,17 +111,11 @@ const QUALITY_PRESETS: Record<QualityPresetName, QualityPreset> = {
 };
 
 type SceneDefinition = {
-  background: string;
+  frame: FrameDefinition;
   seed: {
     color: string;
     opacity: number;
   };
-  hasFractal: boolean;
-  depth: number;
-  trunkLength: number;
-  branchAngle: number;
-  spread: number;
-  hueStart: number;
   view: {
     aspect: number;
     resolution: {
@@ -119,39 +127,12 @@ type SceneDefinition = {
       y: AxisRange;
     };
   };
-  fractal: {
-    depth: number;
-    trunkLength: number;
-    branchAngle: number;
-    spread: number;
-    hueStart: number;
-  };
   elements: DrawableElement[];
 };
 
-const DEFAULT_SCENE_TEXT = `background: "#ffffff"
-
-view:
-  aspect: 1.154
-  resolution:
-    height: 1200
-  coordinates:
-    x: [-1, 1]
-    y: [-1, 1]
-
-scene:
-  seed:
-    color: "#000000"
-  zoom:
-    - name: bottom-left
-      bottomLeft: [-1, -1]
-      topRight: [0, 0]
-    - name: bottom-right
-      bottomLeft: [0, -1]
-      topRight: [1, 0]
-    - name: top
-      bottomLeft: [-0.5, 0]
-      topRight: [0.5, 1]`;
+const DEFAULT_SCENE_TEXT = DEFAULT_EXAMPLE.text;
+const REMOTE_DEFINITION_TIMEOUT_MS = 10_000;
+const REMOTE_DEFINITION_MAX_BYTES = 512 * 1024;
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
@@ -190,13 +171,18 @@ function asPositiveNumber(value: unknown): number | undefined {
   return number > 0 ? number : undefined;
 }
 
+function asNonNegativeNumber(value: unknown, fallback: number): number {
+  const number = asNumber(value, fallback);
+  return number >= 0 ? number : fallback;
+}
+
 function resolveView(view: Record<string, unknown>) {
   const resolutionNode = view.resolution && typeof view.resolution === 'object' && !Array.isArray(view.resolution)
     ? (view.resolution as Record<string, unknown>)
     : {};
   const requestedWidth = asPositiveNumber(resolutionNode.width);
   const requestedHeight = asPositiveNumber(resolutionNode.height);
-  const requestedAspect = parseAspectRatio(view.aspect ?? view.aspectRatio ?? view.ratio);
+  const requestedAspect = parseAspectRatio(view.aspect);
 
   if (requestedWidth && requestedHeight) {
     return {
@@ -254,28 +240,6 @@ function parseAxisRange(value: unknown, fallback: AxisRange): AxisRange {
   }
 
   return from === to ? fallback : { from, to };
-}
-
-function legacyCoordinates(
-  value: unknown,
-  resolution: { width: number; height: number },
-): SceneDefinition['view']['coordinates'] | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  const legacy = value as Record<string, unknown>;
-  const centered = legacy.origin !== 'top-left';
-  const originX = centered ? resolution.width / 2 : 0;
-  const originY = centered ? resolution.height / 2 : 0;
-  const x = legacy.x === 'left'
-    ? { from: originX, to: originX - resolution.width }
-    : { from: -originX, to: resolution.width - originX };
-  const y = legacy.y === 'down'
-    ? { from: resolution.height - originY, to: -originY }
-    : { from: originY - resolution.height, to: originY };
-
-  return { x, y };
 }
 
 type CornerName = 'topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft';
@@ -428,10 +392,7 @@ function resolveRectGeometry(
   defaultAspect?: number,
   elementName = 'Rectangle',
 ): RectGeometry {
-  const center = parsePoint(rect.center ?? rect.centre)
-    ?? (rect.x !== undefined || rect.y !== undefined
-      ? { x: asNumber(rect.x, 0), y: asNumber(rect.y, 0) }
-      : undefined);
+  const center = parsePoint(rect.centre);
   const corners = Object.fromEntries(
     CORNER_NAMES
       .map((name) => [name, parsePoint(rect[name])] as const)
@@ -569,12 +530,7 @@ function resolveRectGeometry(
   return unique[0];
 }
 
-function parseRectElement(value: unknown): RectElement | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  const rect = value as Record<string, unknown>;
+function parseRectElement(rect: Record<string, unknown>): RectElement {
   const geometry = resolveRectGeometry(rect);
   const opacity = clamp(asNumber(rect.opacity, 1), 0, 1);
 
@@ -582,19 +538,15 @@ function parseRectElement(value: unknown): RectElement | null {
     kind: 'rect',
     name: typeof rect.name === 'string' && rect.name.trim() ? rect.name.trim() : undefined,
     ...geometry,
-    color: typeof rect.color === 'string'
-      ? rect.color
-      : typeof rect.fill === 'string' ? rect.fill : '#1d4ed8',
+    color: typeof rect.color === 'string' ? rect.color : '#1d4ed8',
     opacity,
   };
 }
 
-function parseZoomElement(value: unknown, viewAspect: number): ZoomElement | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-
-  const zoom = value as Record<string, unknown>;
+function parseZoomElement(
+  zoom: Record<string, unknown>,
+  viewAspect: number,
+): ZoomElement {
   return {
     kind: 'zoom',
     name: typeof zoom.name === 'string' && zoom.name.trim() ? zoom.name.trim() : undefined,
@@ -603,25 +555,45 @@ function parseZoomElement(value: unknown, viewAspect: number): ZoomElement | nul
   };
 }
 
-function parseElementCandidates<T>(
-  candidates: unknown,
-  parse: (candidate: unknown) => T | null,
-): T[] {
-  const values = Array.isArray(candidates) ? candidates : [candidates];
-  return values.flatMap((candidate) => {
-    const parsed = parse(candidate);
-    return parsed ? [parsed] : [];
-  });
+function parseSceneElement(
+  value: unknown,
+  index: number,
+  viewAspect: number,
+): DrawableElement {
+  const itemNumber = index + 1;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Scene item ${itemNumber} must be an object`);
+  }
+
+  const item = value as Record<string, unknown>;
+  if (typeof item.type !== 'string' || !item.type.trim()) {
+    throw new Error(`Scene item ${itemNumber} must have a type`);
+  }
+
+  if (item.type === 'rect') {
+    return parseRectElement(item);
+  }
+  if (item.type === 'zoom') {
+    return parseZoomElement(item, viewAspect);
+  }
+  throw new Error(`Scene item ${itemNumber} has unknown type: ${item.type}`);
 }
 
 function parseScene(text: string): SceneDefinition {
   const fallback = {
-    background: '#ffffff',
+    frame: {
+      width: 12,
+      radius: 6,
+      color: '#444',
+      wall: '#ddd',
+      background: '#fff',
+      padding: 12,
+      margin: 24,
+    },
     seed: {
       color: '#000000',
       opacity: 1,
     },
-    hasFractal: false,
     view: {
       aspect: 1,
       resolution: { width: 1200, height: 1200 },
@@ -630,38 +602,38 @@ function parseScene(text: string): SceneDefinition {
         y: { from: -100, to: 100 },
       },
     },
-    fractal: {
-      depth: 10,
-      trunkLength: 90,
-      branchAngle: 0.72,
-      spread: 1.2,
-      hueStart: 190,
-    },
     elements: [] as DrawableElement[],
   };
 
   const rawText = text.trim();
   if (!rawText) {
-    return {
-      ...fallback,
-      depth: fallback.fractal.depth,
-      trunkLength: fallback.fractal.trunkLength,
-      branchAngle: fallback.fractal.branchAngle,
-      spread: fallback.fractal.spread,
-      hueStart: fallback.fractal.hueStart,
-    };
+    return fallback;
   }
 
-  let parsed: unknown = null;
+  let parsed: unknown;
   try {
     parsed = YAML.parse(rawText);
-  } catch {
-    parsed = null;
+  } catch (error) {
+    throw new Error(error instanceof Error ? error.message : 'Invalid YAML');
   }
 
-  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const sceneRoot = parsed as Record<string, unknown>;
-    const background = typeof sceneRoot.background === 'string' ? sceneRoot.background : fallback.background;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Scene definition must be a YAML object');
+  }
+
+  const sceneRoot = parsed as Record<string, unknown>;
+  const frameNode = sceneRoot.frame && typeof sceneRoot.frame === 'object' && !Array.isArray(sceneRoot.frame)
+    ? (sceneRoot.frame as Record<string, unknown>)
+    : {};
+    const frame: FrameDefinition = {
+      width: asNonNegativeNumber(frameNode.width, fallback.frame.width),
+      radius: asNonNegativeNumber(frameNode.radius, fallback.frame.radius),
+      color: typeof frameNode.color === 'string' ? frameNode.color : fallback.frame.color,
+      wall: typeof frameNode.wall === 'string' ? frameNode.wall : fallback.frame.wall,
+      background: typeof frameNode.background === 'string' ? frameNode.background : fallback.frame.background,
+      padding: asNonNegativeNumber(frameNode.padding, fallback.frame.padding),
+      margin: asNonNegativeNumber(frameNode.margin, fallback.frame.margin),
+    };
     const viewNode = sceneRoot.view && typeof sceneRoot.view === 'object' && !Array.isArray(sceneRoot.view)
       ? (sceneRoot.view as Record<string, unknown>)
       : {};
@@ -674,116 +646,131 @@ function parseScene(text: string): SceneDefinition {
           x: parseAxisRange(coordinatesNode.x, fallback.view.coordinates.x),
           y: parseAxisRange(coordinatesNode.y, fallback.view.coordinates.y),
         }
-      : legacyCoordinates(viewNode.coordinateSystem, resolvedView.resolution) ?? fallback.view.coordinates;
+      : fallback.view.coordinates;
 
-    const sceneNode = sceneRoot.scene && typeof sceneRoot.scene === 'object' && !Array.isArray(sceneRoot.scene)
-      ? (sceneRoot.scene as Record<string, unknown>)
+    if (!Array.isArray(sceneRoot.scene)) {
+      throw new Error('scene must be a list of typed items');
+    }
+    if (
+      sceneRoot.seed !== undefined
+      && typeof sceneRoot.seed !== 'string'
+      && (!sceneRoot.seed || typeof sceneRoot.seed !== 'object' || Array.isArray(sceneRoot.seed))
+    ) {
+      throw new Error('seed must be a colour string or an object');
+    }
+    const seedNode = sceneRoot.seed && typeof sceneRoot.seed === 'object' && !Array.isArray(sceneRoot.seed)
+      ? (sceneRoot.seed as Record<string, unknown>)
       : {};
-    const fractalNode = sceneNode.fractal && typeof sceneNode.fractal === 'object' && !Array.isArray(sceneNode.fractal)
-      ? (sceneNode.fractal as Record<string, unknown>)
-      : {};
-    const seedNode = sceneNode.seed && typeof sceneNode.seed === 'object' && !Array.isArray(sceneNode.seed)
-      ? (sceneNode.seed as Record<string, unknown>)
-      : {};
-
-    const fractal = {
-      depth: Math.round(clamp(asNumber(fractalNode.depth ?? sceneRoot.depth, 10), 2, 15)),
-      trunkLength: clamp(asNumber(fractalNode.trunkLength ?? sceneRoot.trunkLength, 90), 20, 180),
-      branchAngle: clamp(asNumber(fractalNode.branchAngle ?? sceneRoot.branchAngle, 0.72), 0.3, 1.4),
-      spread: clamp(asNumber(fractalNode.spread ?? sceneRoot.spread, 1.2), 0.8, 2),
-      hueStart: ((asNumber(fractalNode.hueStart ?? sceneRoot.hueStart, 190) % 360) + 360) % 360,
-    };
-
-    const rectCandidates = sceneNode.rect !== undefined ? sceneNode.rect : sceneNode.rects ?? [];
-    const zoomCandidates = sceneNode.zoom !== undefined ? sceneNode.zoom : sceneNode.zooms ?? [];
-    const elements: DrawableElement[] = [
-      ...parseElementCandidates(rectCandidates, parseRectElement),
-      ...parseElementCandidates(zoomCandidates, (candidate) => parseZoomElement(candidate, resolvedView.aspect)),
-    ];
+    const elements = sceneRoot.scene.map((item, index) =>
+      parseSceneElement(item, index, resolvedView.aspect));
 
     return {
-      background,
+      frame,
       seed: {
-        color: typeof sceneNode.seed === 'string'
-          ? sceneNode.seed
+        color: typeof sceneRoot.seed === 'string'
+          ? sceneRoot.seed
           : typeof seedNode.color === 'string' ? seedNode.color : fallback.seed.color,
         opacity: clamp(asNumber(seedNode.opacity, fallback.seed.opacity), 0, 1),
       },
-      hasFractal: Object.keys(fractalNode).length > 0,
-      depth: fractal.depth,
-      trunkLength: fractal.trunkLength,
-      branchAngle: fractal.branchAngle,
-      spread: fractal.spread,
-      hueStart: fractal.hueStart,
       view: {
         ...resolvedView,
         coordinates,
       },
-      fractal,
       elements,
     };
+}
+
+function normalizeRemoteDefinitionUrl(value: string): URL {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('Source must be a valid HTTP or HTTPS URL');
   }
 
-  const values = new Map<string, number>();
-  const maybeBackground = /^background\s*:\s*(.+)$/i;
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Source must use HTTP or HTTPS');
+  }
 
-  for (const rawLine of rawText.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) {
-      continue;
-    }
-
-    const backgroundMatch = line.match(maybeBackground);
-    if (backgroundMatch) {
-      const value = backgroundMatch[1].trim();
-      if (value.startsWith('"') || value.startsWith("'")) {
-        fallback.background = value.slice(1, -1);
-      }
-      continue;
-    }
-
-    const separatorIndex = line.indexOf(':');
-    if (separatorIndex === -1) {
-      continue;
-    }
-
-    const key = line.slice(0, separatorIndex).trim();
-    const valueText = line.slice(separatorIndex + 1).trim();
-    const value = Number.parseFloat(valueText);
-
-    if (key && Number.isFinite(value)) {
-      values.set(key, value);
+  if (url.hostname === 'github.com') {
+    const segments = url.pathname.split('/').filter(Boolean);
+    const blobIndex = segments.indexOf('blob');
+    if (blobIndex === 2 && segments.length > 4) {
+      url = new URL(`https://raw.githubusercontent.com/${[
+        segments[0],
+        segments[1],
+        segments[3],
+        ...segments.slice(4),
+      ].join('/')}`);
     }
   }
 
-  const parsedFractal = {
-    depth: Math.round(clamp(values.get('depth') ?? 10, 2, 15)),
-    trunkLength: clamp(values.get('trunkLength') ?? 90, 20, 180),
-    branchAngle: clamp(values.get('branchAngle') ?? 0.72, 0.3, 1.4),
-    spread: clamp(values.get('spread') ?? 1.2, 0.8, 2),
-    hueStart: ((values.get('hueStart') ?? 190) % 360 + 360) % 360,
-  };
+  return url;
+}
 
-  return {
-    background: fallback.background,
-    seed: fallback.seed,
-    hasFractal: true,
-    depth: parsedFractal.depth,
-    trunkLength: parsedFractal.trunkLength,
-    branchAngle: parsedFractal.branchAngle,
-    spread: parsedFractal.spread,
-    hueStart: parsedFractal.hueStart,
-    view: {
-      aspect: 1,
-      resolution: { width: 1200, height: 1200 },
-      coordinates: {
-        x: { from: -100, to: 100 },
-        y: { from: -100, to: 100 },
-      },
-    },
-    fractal: parsedFractal,
-    elements: [],
-  };
+async function fetchRemoteDefinition(source: string): Promise<string> {
+  const url = normalizeRemoteDefinitionUrl(source);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REMOTE_DEFINITION_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      credentials: 'omit',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`Could not load source: HTTP ${response.status}`);
+    }
+
+    const declaredSize = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredSize) && declaredSize > REMOTE_DEFINITION_MAX_BYTES) {
+      throw new Error('Remote definition is larger than 512 KiB');
+    }
+
+    const text = await response.text();
+    if (new TextEncoder().encode(text).byteLength > REMOTE_DEFINITION_MAX_BYTES) {
+      throw new Error('Remote definition is larger than 512 KiB');
+    }
+    return text;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('Remote definition request timed out');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function definitionLocationFromUrl(): DefinitionLocation {
+  const parameters = new URLSearchParams(window.location.search);
+  const example = parameters.get('example');
+  const source = parameters.get('source');
+
+  if (example && source) {
+    throw new Error('Use either "example" or "source", not both');
+  }
+  if (example) {
+    return { kind: 'example', id: example };
+  }
+  if (source) {
+    return { kind: 'source', url: source };
+  }
+  return { kind: 'example', id: DEFAULT_EXAMPLE.id };
+}
+
+function updateDefinitionUrl(location: DefinitionLocation) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('example');
+  url.searchParams.delete('source');
+
+  if (location.kind === 'example') {
+    url.searchParams.set('example', location.id);
+  } else if (location.kind === 'source') {
+    url.searchParams.set('source', location.url);
+  }
+
+  window.history.replaceState(null, '', url);
 }
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -816,11 +803,15 @@ panelToggle.append(panelToggleIcon);
 const canvasHost = document.createElement('div');
 canvasHost.className = 'canvas-host';
 
+const canvasFrame = document.createElement('div');
+canvasFrame.className = 'canvas-frame';
+
 const canvas = document.createElement('canvas');
 const displayContext = canvas.getContext('2d')!;
 let ctx = displayContext;
 
-canvasHost.append(canvas);
+canvasFrame.append(canvas);
+canvasHost.append(canvasFrame);
 
 let panelIsOpen = true;
 let panelIsResizing = false;
@@ -898,6 +889,28 @@ qualitySelect.addEventListener('change', () => {
   render();
 });
 
+const exampleRow = document.createElement('label');
+exampleRow.className = 'example-row';
+exampleRow.innerHTML = '<span>Example</span>';
+
+const exampleSelect = document.createElement('select');
+const customExampleOption = document.createElement('option');
+customExampleOption.value = '';
+customExampleOption.textContent = 'Custom';
+exampleSelect.append(customExampleOption);
+for (const example of EXAMPLES) {
+  const option = document.createElement('option');
+  option.value = example.id;
+  option.textContent = example.label;
+  exampleSelect.append(option);
+}
+exampleSelect.value = DEFAULT_EXAMPLE.id;
+exampleRow.append(exampleSelect);
+
+const exampleDetails = document.createElement('div');
+exampleDetails.className = 'example-details';
+exampleDetails.textContent = DEFAULT_EXAMPLE.description;
+
 const renderProgress = document.createElement('div');
 renderProgress.className = 'render-progress';
 renderProgress.hidden = true;
@@ -918,6 +931,10 @@ const sceneInput = document.createElement('textarea');
 sceneInput.className = 'scene-input';
 sceneInput.rows = 18;
 sceneInput.value = DEFAULT_SCENE_TEXT;
+sceneInput.addEventListener('input', () => {
+  exampleSelect.value = '';
+  exampleDetails.textContent = 'Custom definition';
+});
 
 const applySceneButton = document.createElement('button');
 applySceneButton.type = 'button';
@@ -929,20 +946,24 @@ sceneStatus.className = 'scene-status';
 sceneStatus.setAttribute('role', 'status');
 
 applySceneButton.addEventListener('click', () => {
-  try {
-    const nextScene = parseScene(sceneInput.value);
-    state.scene = nextScene;
-    sceneStatus.textContent = '';
-    resizeCanvas();
-    render();
-  } catch (error) {
-    sceneStatus.textContent = error instanceof Error ? error.message : 'Invalid scene definition';
+  definitionLoadRevision += 1;
+  applyDefinition(sceneInput.value, { kind: 'custom' }, true);
+});
+
+exampleSelect.addEventListener('change', () => {
+  const example = findExample(exampleSelect.value);
+  if (!example) {
+    exampleDetails.textContent = 'Custom definition';
+    return;
   }
+  void loadDefinitionLocation({ kind: 'example', id: example.id }, true);
 });
 
 controls.append(
   qualityRow,
   qualityDetails,
+  exampleRow,
+  exampleDetails,
   sceneInputLabel,
   sceneInput,
   applySceneButton,
@@ -958,21 +979,120 @@ const state = {
   offsetX: 0,
   offsetY: -10,
   scene: baseScene,
+  definitionLocation: { kind: 'example', id: DEFAULT_EXAMPLE.id } as DefinitionLocation,
 };
+let definitionLoadRevision = 0;
+
+function showSceneStatus(message: string, isError = false) {
+  sceneStatus.textContent = message;
+  sceneStatus.classList.toggle('error', isError);
+}
+
+function applyDefinition(
+  text: string,
+  location: DefinitionLocation,
+  updateUrl: boolean,
+): boolean {
+  try {
+    const nextScene = parseScene(text);
+    state.scene = nextScene;
+    state.definitionLocation = location;
+    sceneInput.value = text.trim();
+
+    if (location.kind === 'example') {
+      const example = findExample(location.id);
+      exampleSelect.value = example?.id ?? '';
+      exampleDetails.textContent = example?.description ?? 'Custom definition';
+    } else if (location.kind === 'source') {
+      exampleSelect.value = '';
+      exampleDetails.textContent = `Remote: ${location.url}`;
+    } else {
+      exampleSelect.value = '';
+      exampleDetails.textContent = 'Custom definition';
+    }
+
+    showSceneStatus('');
+    if (updateUrl) {
+      updateDefinitionUrl(location);
+    }
+    resizeCanvas();
+    render();
+    return true;
+  } catch (error) {
+    showSceneStatus(error instanceof Error ? error.message : 'Invalid scene definition', true);
+    return false;
+  }
+}
+
+async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: boolean) {
+  const revision = ++definitionLoadRevision;
+
+  if (location.kind === 'example') {
+    const example = findExample(location.id);
+    if (!example) {
+      showSceneStatus(`Unknown example: ${location.id}`, true);
+      return;
+    }
+    if (revision !== definitionLoadRevision) {
+      return;
+    }
+    applyDefinition(example.text, location, updateUrl);
+    return;
+  }
+
+  if (location.kind === 'source') {
+    showSceneStatus('Loading remote definition...');
+    try {
+      const text = await fetchRemoteDefinition(location.url);
+      if (revision !== definitionLoadRevision) {
+        return;
+      }
+      applyDefinition(text, location, updateUrl);
+    } catch (error) {
+      if (revision !== definitionLoadRevision) {
+        return;
+      }
+      showSceneStatus(error instanceof Error ? error.message : 'Could not load source', true);
+    }
+    return;
+  }
+
+  applyDefinition(sceneInput.value, location, updateUrl);
+}
+
+async function loadDefinitionFromAddressBar() {
+  try {
+    await loadDefinitionLocation(definitionLocationFromUrl(), false);
+  } catch (error) {
+    showSceneStatus(error instanceof Error ? error.message : 'Invalid definition location', true);
+  }
+}
 
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
+  const frame = state.scene.frame;
   const resolution = state.scene.view.resolution;
-  const displayScale = Math.min(host.width / resolution.width, host.height / resolution.height);
+  const horizontalSpace = 2 * (frame.margin + frame.width + frame.padding);
+  const verticalSpace = 2 * (frame.margin + frame.width + frame.padding);
+  const availableWidth = Math.max(1, host.width - horizontalSpace);
+  const availableHeight = Math.max(1, host.height - verticalSpace);
+  const displayScale = Math.min(
+    availableWidth / resolution.width,
+    availableHeight / resolution.height,
+  );
+
+  canvasHost.style.backgroundColor = frame.wall;
+  canvasHost.style.padding = `${frame.margin}px`;
+  canvasFrame.style.padding = `${frame.padding}px`;
+  canvasFrame.style.borderWidth = `${frame.width}px`;
+  canvasFrame.style.borderColor = frame.color;
+  canvasFrame.style.borderRadius = `${frame.radius}px`;
+  canvasFrame.style.backgroundColor = frame.background;
 
   canvas.width = resolution.width;
   canvas.height = resolution.height;
   canvas.style.width = `${resolution.width * displayScale}px`;
   canvas.style.height = `${resolution.height * displayScale}px`;
-}
-
-function makeBranch(start: Vec2, end: Vec2, depth: number): BranchNode {
-  return { start, end, depth };
 }
 
 function scenePointToCanvas(point: Vec2, scene: SceneDefinition): Vec2 {
@@ -1189,38 +1309,6 @@ function drawZoomElement(
   ctx.restore();
 }
 
-function drawBranch(branch: BranchNode, scene: SceneDefinition, angle: number, length: number) {
-  const dx = branch.end.x - branch.start.x;
-  const dy = branch.end.y - branch.start.y;
-  const angleRadians = Math.atan2(dy, dx) + angle;
-  const nextLength = length * 0.73;
-
-  ctx.beginPath();
-  ctx.moveTo(branch.start.x, branch.start.y);
-  ctx.lineTo(branch.end.x, branch.end.y);
-  ctx.strokeStyle = `hsla(${scene.hueStart + branch.depth * 10}, 70%, ${scene.depth > 2 ? 60 : 50}%, 0.9)`;
-  ctx.lineWidth = Math.max(1, 2.4 - branch.depth * 0.12);
-  ctx.stroke();
-
-  if (branch.depth >= scene.depth) {
-    return;
-  }
-
-  const spreadDirection = branch.depth % 2 === 0 ? 1 : -1;
-  const leftEnd: Vec2 = {
-    x: branch.end.x + Math.cos(angleRadians - scene.branchAngle) * nextLength,
-    y: branch.end.y + Math.sin(angleRadians - scene.branchAngle) * nextLength,
-  };
-
-  const rightEnd: Vec2 = {
-    x: branch.end.x + Math.cos(angleRadians + scene.branchAngle * (spreadDirection > 0 ? scene.spread : 1 / scene.spread)) * nextLength,
-    y: branch.end.y + Math.sin(angleRadians + scene.branchAngle * (spreadDirection > 0 ? scene.spread : 1 / scene.spread)) * nextLength,
-  };
-
-  drawBranch(makeBranch(branch.end, leftEnd, branch.depth + 1), scene, -scene.branchAngle, nextLength);
-  drawBranch(makeBranch(branch.end, rightEnd, branch.depth + 1), scene, scene.branchAngle * (spreadDirection > 0 ? scene.spread : 1 / scene.spread), nextLength);
-}
-
 function drawScene(
   scene: SceneDefinition,
   settings: RenderSettings,
@@ -1239,22 +1327,6 @@ function drawScene(
     }
   }
 
-  if (!scene.hasFractal) {
-    return;
-  }
-
-  const viewWidth = scene.view.resolution.width;
-  const viewHeight = scene.view.resolution.height;
-  const baseStart: Vec2 = {
-    x: viewWidth / 2 + state.offsetX,
-    y: viewHeight * 0.82 + state.offsetY,
-  };
-  const baseEnd: Vec2 = {
-    x: viewWidth / 2 + state.offsetX,
-    y: viewHeight * 0.52 + state.offsetY,
-  };
-
-  drawBranch(makeBranch(baseStart, baseEnd, 0), scene, 0, scene.trunkLength);
 }
 
 function downsampleAlphaPreserving(source: HTMLCanvasElement): HTMLCanvasElement {
@@ -1379,7 +1451,6 @@ async function renderScene(scene: SceneDefinition, revision: number): Promise<bo
   const preset = QUALITY_PRESETS[state.quality];
   const settings = resolveRenderSettings(scene, preset);
   qualityDetails.textContent = `Depth ${settings.recursionDepth} · ${settings.renderPasses} passes · ${settings.supersampling}×`;
-  canvasHost.style.backgroundColor = scene.background;
   const workingCanvas = document.createElement('canvas');
   workingCanvas.width = scene.view.resolution.width * settings.supersampling;
   workingCanvas.height = scene.view.resolution.height * settings.supersampling;
@@ -1445,5 +1516,10 @@ window.addEventListener('resize', () => {
   render();
 });
 
+window.addEventListener('popstate', () => {
+  void loadDefinitionFromAddressBar();
+});
+
 resizeCanvas();
 render();
+void loadDefinitionFromAddressBar();

@@ -1,0 +1,33 @@
+frame:
+  width: 10
+  radius: 18
+  color: "#553c2d"
+  wall: "#d8c9b8"
+  background: "#fffaf2"
+  padding: 18
+  margin: 24
+
+view:
+  aspect: 1
+  resolution:
+    height: 1200
+  coordinates:
+    x: [-1, 1]
+    y: [-1, 1]
+
+seed:
+  color: "#d1495b"
+
+scene:
+  - type: rect
+    name: anchor
+    centre: [0.62, -0.62]
+    width: 0.16
+    height: 0.16
+    rotation: 18deg
+    color: "#edae49"
+  - type: zoom
+    name: spiral
+    centre: [0, 0]
+    width: 1.58
+    rotation: 18deg

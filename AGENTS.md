@@ -34,6 +34,8 @@ Do not commit generated or local artifacts:
 
 - `src/main.ts`: scene types, YAML parsing, geometry resolution, UI creation,
   rendering, quality presets, cancellation, and progress.
+- `src/examples.ts`: built-in example registry and metadata.
+- `src/examples/*.yaml`: loadable example scene definitions.
 - `src/style.css`: full-window layout, overlay panel, controls, animations,
   and canvas presentation.
 - `index.html`: application shell.
@@ -44,7 +46,10 @@ files unless extracting a module clearly reduces complexity.
 
 ## Scene language invariants
 
-- The top-level model contains `background`, `view`, and `scene`.
+- The top-level model contains `frame`, `view`, `seed`, and `scene`.
+- `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
+  border `color`, outer `wall`, inner `background`, canvas `padding`, and
+  window-edge `margin`.
 - `view.aspect` is width divided by height.
 - Resolution may specify `width`, `height`, or both. Infer the missing
   dimension from `aspect`; infer `aspect` when both dimensions are present.
@@ -53,18 +58,26 @@ files unless extracting a module clearly reduces complexity.
 - `view.coordinates.y` runs bottom to top, following mathematical convention.
 - Axis ranges accept `[from, to]` and object forms such as
   `{ from: -1, to: 1 }`.
-- The scene background belongs to `.canvas-host`, not the canvas bitmap.
-  Canvas pixels must remain transparent where no element is drawn.
+- The frame wall belongs to `.canvas-host`, and the frame background belongs
+  to `.canvas-frame`, not the canvas bitmap. Canvas pixels must remain
+  transparent where no element is drawn.
 - Elements may have an optional non-blank `name` for future references.
-- Preserve compatible aliases already supported by the parser unless an
-  intentional language migration removes them.
+- `scene` is an ordered list of typed items. Every item has a `type`, currently
+  `rect` or `zoom`, and later items draw on top of earlier items.
+- Do not add or preserve legacy configuration aliases unless explicitly
+  requested. This is a lightweight prototype, so prefer one clear current
+  syntax over migration machinery.
+- Built-in examples use stable IDs and ordinary YAML files. Keep the registry
+  metadata in `src/examples.ts`.
+- `?example=<id>` loads a built-in definition. `?source=<http-url>` loads a
+  remote YAML definition; never add credentials or a server-side proxy.
 - Invalid, ambiguous, conflicting, or underdetermined definitions must produce
   a visible error. Do not silently invent missing geometry.
 
 ### Rectangles
 
 - `rect` is borderless by default and uses `color` plus optional `opacity`.
-- Geometry may be determined from a sufficient combination of centre/center,
+- Geometry may be determined from a sufficient combination of `centre`,
   width, height, named corners, and rotation.
 - Numeric rotations are degrees. Explicit `deg`, `rad`, and unit-object forms
   are supported.
@@ -74,8 +87,8 @@ files unless extracting a module clearly reduces complexity.
 - `zoom` uses the rectangle constraint model.
 - A missing zoom dimension is inferred from the view aspect.
 - A zoom draws a transformed replica of the transparent scene.
-- Terminal zoom leaves use `scene.seed`; the seed may be a colour string or an
-  object containing colour and opacity.
+- Terminal zoom leaves use top-level `seed`; the seed may be a colour string
+  or an object containing colour and opacity.
 - Keep quality controls out of the scene definition. Recursion depth, render
   passes, supersampling, leaf-size thresholds, and leaf budgets are application
   quality settings.

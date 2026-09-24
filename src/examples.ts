@@ -1,0 +1,51 @@
+import frameAndRectanglesText from './examples/frame-and-rectangles.yaml?raw';
+import rotatedSpiralText from './examples/rotated-spiral.yaml?raw';
+import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
+import sierpinskiText from './examples/sierpinski.yaml?raw';
+import twinZoomsText from './examples/twin-zooms.yaml?raw';
+
+export type ExampleDefinition = {
+  id: string;
+  label: string;
+  description: string;
+  text: string;
+};
+
+export const EXAMPLES: ExampleDefinition[] = [
+  {
+    id: 'sierpinski',
+    label: 'Sierpiński triangle',
+    description: 'Three ordered axis-aligned zooms with a black terminal seed.',
+    text: sierpinskiText,
+  },
+  {
+    id: 'sierpinski-carpet',
+    label: 'Sierpiński Carpet',
+    description: 'Eight zooms around an empty centre form a recursive square carpet.',
+    text: sierpinskiCarpetText,
+  },
+  {
+    id: 'rotated-spiral',
+    label: 'Rotated spiral',
+    description: 'A single rotated zoom with a coloured anchor rectangle.',
+    text: rotatedSpiralText,
+  },
+  {
+    id: 'twin-zooms',
+    label: 'Twin zooms',
+    description: 'Ordered asymmetric zooms with overlapping scene geometry.',
+    text: twinZoomsText,
+  },
+  {
+    id: 'frame-and-rectangles',
+    label: 'Frame and rectangles',
+    description: 'Frame presentation and rectangle constraint examples without recursion.',
+    text: frameAndRectanglesText,
+  },
+];
+
+export const DEFAULT_EXAMPLE = EXAMPLES[0];
+
+export function findExample(id: string): ExampleDefinition | undefined {
+  return EXAMPLES.find((example) => example.id === id);
+}

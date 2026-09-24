@@ -61,6 +61,13 @@ textarea {
   transition: opacity 180ms ease;
 }
 
+.canvas-frame {
+  display: grid;
+  place-items: center;
+  border-style: solid;
+  overflow: hidden;
+}
+
 canvas {
   display: block;
   background: transparent;
@@ -239,7 +246,8 @@ canvas {
 }
 
 .control-row,
-.quality-row {
+.quality-row,
+.example-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -248,7 +256,8 @@ canvas {
   color: #cbd5e1;
 }
 
-.quality-row select {
+.quality-row select,
+.example-row select {
   min-width: 7rem;
   border: 1px solid rgba(212, 212, 216, 0.18);
   border-radius: 0.6rem;
@@ -259,6 +268,13 @@ canvas {
 
 .quality-details {
   min-height: 1.25rem;
+  color: #a1a1aa;
+  font-size: 0.78rem;
+}
+
+.example-details {
+  min-height: 1.25rem;
+  overflow-wrap: anywhere;
   color: #a1a1aa;
   font-size: 0.78rem;
 }
@@ -328,8 +344,12 @@ canvas {
 
 .scene-status {
   min-height: 1.25rem;
-  color: #fca5a5;
+  color: #a1a1aa;
   font-size: 0.8rem;
+}
+
+.scene-status.error {
+  color: #fca5a5;
 }
 
 code {
