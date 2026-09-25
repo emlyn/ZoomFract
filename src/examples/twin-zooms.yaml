@@ -24,16 +24,16 @@ scene:
     centre: [0, 0]
     width: 0.22
     height: 1.5
-    rotation: -18deg
+    rotation: 18deg
     color: "#ef8354"
     opacity: 0.9
   - type: zoom
     name: left
     centre: [-0.72, -0.08]
     width: 1.15
-    rotation: 14deg
+    rotation: -14deg
   - type: zoom
     name: right
     centre: [0.76, 0.12]
     height: 0.78
-    rotation: -22deg
+    rotation: 22deg

@@ -1,3 +1,4 @@
+import fernText from './examples/fern.yaml?raw';
 import frameAndRectanglesText from './examples/frame-and-rectangles.yaml?raw';
 import rotatedSpiralText from './examples/rotated-spiral.yaml?raw';
 import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
@@ -23,6 +24,12 @@ export const EXAMPLES: ExampleDefinition[] = [
     label: 'Sierpiński Carpet',
     description: 'Eight zooms around an empty centre form a recursive square carpet.',
     text: sierpinskiCarpetText,
+  },
+  {
+    id: 'fern',
+    label: 'Fern',
+    description: 'Three scaled, rotated zooms aligned to the top of a stem.',
+    text: fernText,
   },
   {
     id: 'rotated-spiral',

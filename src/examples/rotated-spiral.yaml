@@ -24,10 +24,10 @@ scene:
     centre: [0.62, -0.62]
     width: 0.16
     height: 0.16
-    rotation: 18deg
+    rotation: -18deg
     color: "#edae49"
   - type: zoom
     name: spiral
     centre: [0, 0]
     width: 1.58
-    rotation: 18deg
+    rotation: -18deg

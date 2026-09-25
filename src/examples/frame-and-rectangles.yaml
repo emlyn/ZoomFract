@@ -34,6 +34,6 @@ scene:
     centre: [1.6, -0.45]
     width: 2.8
     height: 1.55
-    rotation: -16deg
+    rotation: 16deg
     color: "#527aa3"
     opacity: 0.88

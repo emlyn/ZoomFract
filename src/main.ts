@@ -32,6 +32,7 @@ type ZoomElement = SceneElement & {
   height: number;
   rotation: number;
   opacity: number;
+  alignTargets: Vec2[];
 };
 
 type DrawableElement = RectElement | ZoomElement;
@@ -246,6 +247,28 @@ type CornerName = 'topLeft' | 'topRight' | 'bottomRight' | 'bottomLeft';
 
 type RectGeometry = Pick<RectElement, 'center' | 'width' | 'height' | 'rotation'>;
 
+type PointPart = CornerName | 'centre' | 'top' | 'bottom' | 'left' | 'right';
+
+type PointResolver = (value: unknown, label: string) => Vec2 | undefined;
+
+// Signed extents: width and height are negative when an axis runs backwards.
+type ViewFrame = {
+  centre: Vec2;
+  width: number;
+  height: number;
+};
+
+type AlignPair = {
+  from: Vec2;
+  to: Vec2;
+};
+
+type ZoomConstraints = {
+  aspect: number;
+  view: ViewFrame;
+  align: AlignPair[];
+};
+
 const CORNER_SIGNS: Record<CornerName, Vec2> = {
   topLeft: { x: -1, y: 1 },
   topRight: { x: 1, y: 1 },
@@ -253,9 +276,22 @@ const CORNER_SIGNS: Record<CornerName, Vec2> = {
   bottomLeft: { x: -1, y: -1 },
 };
 
+const POINT_SIGNS: Record<PointPart, Vec2> = {
+  ...CORNER_SIGNS,
+  centre: { x: 0, y: 0 },
+  top: { x: 0, y: 1 },
+  bottom: { x: 0, y: -1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
+
+const isPointPart = (value: string): value is PointPart => Object.hasOwn(POINT_SIGNS, value);
+
 const CORNER_NAMES = Object.keys(CORNER_SIGNS) as CornerName[];
 const RECT_EPSILON = 1e-6;
 const LEAF_RASTER_OVERSAMPLING = 2;
+const EDIT_MODE_ZOOM_OPACITY = 0.6;
+const EDIT_MODE_OUTLINE_CSS_PIXELS = 1.5;
 
 const add = (left: Vec2, right: Vec2): Vec2 => ({ x: left.x + right.x, y: left.y + right.y });
 const subtract = (left: Vec2, right: Vec2): Vec2 => ({ x: left.x - right.x, y: left.y - right.y });
@@ -283,7 +319,13 @@ function parsePoint(value: unknown): Vec2 | undefined {
   return undefined;
 }
 
+// Scene rotations are clockwise; internal geometry uses anticlockwise radians.
 function parseRotation(value: unknown): number | undefined {
+  const angle = parseAngle(value);
+  return angle === undefined ? undefined : -angle;
+}
+
+function parseAngle(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value * Math.PI / 180;
   }
@@ -311,8 +353,8 @@ function parseRotation(value: unknown): number | undefined {
   return match[2] === 'rad' ? angle : angle * Math.PI / 180;
 }
 
-function rectCorner(geometry: RectGeometry, name: CornerName): Vec2 {
-  const sign = CORNER_SIGNS[name];
+function rectPoint(geometry: RectGeometry, part: PointPart): Vec2 {
+  const sign = POINT_SIGNS[part];
   return add(
     geometry.center,
     rotateVector({
@@ -320,6 +362,96 @@ function rectCorner(geometry: RectGeometry, name: CornerName): Vec2 {
       y: sign.y * geometry.height / 2,
     }, geometry.rotation),
   );
+}
+
+function rectCorner(geometry: RectGeometry, name: CornerName): Vec2 {
+  return rectPoint(geometry, name);
+}
+
+function viewPoint(view: ViewFrame, part: PointPart): Vec2 {
+  const sign = POINT_SIGNS[part];
+  return {
+    x: view.centre.x + sign.x * view.width / 2,
+    y: view.centre.y + sign.y * view.height / 2,
+  };
+}
+
+// Offset from a zoom's centre to where a source-scene point lands inside it.
+function zoomOffset(point: Vec2, view: ViewFrame, width: number, height: number, rotation: number): Vec2 {
+  return rotateVector({
+    x: (point.x - view.centre.x) / view.width * width,
+    y: (point.y - view.centre.y) / view.height * height,
+  }, rotation);
+}
+
+function isPointLike(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 2 && value.every((part) => Number.isFinite(asNumber(part, Number.NaN)));
+  }
+  return Boolean(value) && typeof value === 'object';
+}
+
+function parseAlignPairs(
+  value: unknown,
+  resolvePoint: PointResolver,
+  elementName: string,
+): AlignPair[] {
+  const toPair = (pair: unknown, label: string): AlignPair => {
+    const [fromValue, toValue] = Array.isArray(pair) && pair.length === 2
+      ? pair
+      : pair && typeof pair === 'object' && !Array.isArray(pair)
+        ? [(pair as Record<string, unknown>).from, (pair as Record<string, unknown>).to]
+        : [undefined, undefined];
+    const from = resolvePoint(fromValue, `${label} from`);
+    const to = resolvePoint(toValue, `${label} to`);
+    if (!from || !to) {
+      throw new Error(`${label} must be [from, to] or { from, to }`);
+    }
+    return { from, to };
+  };
+
+  const label = `${elementName} align`;
+  const isSinglePair = Array.isArray(value) && value.length === 2 && isPointLike(value[0]);
+  const isObjectPair = Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  if (isSinglePair || isObjectPair) {
+    return [toPair(value, label)];
+  }
+  if (Array.isArray(value) && value.length === 2) {
+    return value.map((pair, index) => toPair(pair, `${label} pair ${index + 1}`));
+  }
+  throw new Error(`${label} must be one [from, to] pair or a list of two pairs`);
+}
+
+function geometryFromAlignPairs(
+  [first, second]: AlignPair[],
+  view: ViewFrame,
+  elementName: string,
+): RectGeometry {
+  const source = subtract(second.from, first.from);
+  const target = subtract(second.to, first.to);
+  const sourceLength = vectorLength(source);
+  const targetLength = vectorLength(target);
+  if (sourceLength <= RECT_EPSILON || targetLength <= RECT_EPSILON) {
+    throw new Error(`${elementName} align pairs must use two distinct from points and two distinct to points`);
+  }
+
+  const scale = targetLength / sourceLength;
+  const width = scale * Math.abs(view.width);
+  const height = scale * Math.abs(view.height);
+  const orientedSource = {
+    x: source.x * Math.sign(view.width),
+    y: source.y * Math.sign(view.height),
+  };
+  const rotation = Math.atan2(target.y, target.x) - Math.atan2(orientedSource.y, orientedSource.x);
+  return {
+    center: subtract(first.to, zoomOffset(first.from, view, width, height, rotation)),
+    width,
+    height,
+    rotation,
+  };
 }
 
 function geometryFromAnchor(
@@ -389,25 +521,58 @@ function geometryMatches(
 
 function resolveRectGeometry(
   rect: Record<string, unknown>,
-  defaultAspect?: number,
-  elementName = 'Rectangle',
+  resolvePoint: PointResolver,
+  elementName: string,
+  zoom?: ZoomConstraints,
 ): RectGeometry {
-  const center = parsePoint(rect.centre);
+  let center = resolvePoint(rect.centre, `${elementName} centre`);
   const corners = Object.fromEntries(
     CORNER_NAMES
-      .map((name) => [name, parsePoint(rect[name])] as const)
+      .map((name) => [name, resolvePoint(rect[name], `${elementName} ${name}`)] as const)
       .filter((entry): entry is [CornerName, Vec2] => Boolean(entry[1])),
   ) as Partial<Record<CornerName, Vec2>>;
   let width = asPositiveNumber(rect.width);
   let height = asPositiveNumber(rect.height);
-  if (defaultAspect && width && !height) {
-    height = width / defaultAspect;
-  } else if (defaultAspect && height && !width) {
-    width = height * defaultAspect;
+  if (zoom && rect.scale !== undefined) {
+    const scale = asPositiveNumber(rect.scale);
+    if (!scale) {
+      throw new Error(`${elementName} scale must be a positive number`);
+    }
+    if (width || height) {
+      throw new Error(`${elementName} must use either scale or width/height, not both`);
+    }
+    width = scale * Math.abs(zoom.view.width);
+    height = scale * Math.abs(zoom.view.height);
   }
-  const rotation = parseRotation(rect.rotation);
+  if (zoom && width && !height) {
+    height = width / zoom.aspect;
+  } else if (zoom && height && !width) {
+    width = height * zoom.aspect;
+  }
+  let rotation = parseRotation(rect.rotation);
   if (rect.rotation !== undefined && rotation === undefined) {
     throw new Error(`${elementName} rotation must be degrees, "<angle>deg", "<angle>rad", or a unit object`);
+  }
+
+  if (zoom?.align.length === 2) {
+    const aligned = geometryFromAlignPairs(zoom.align, zoom.view, elementName);
+    if (!geometryMatches(aligned, center, corners, width, height, rotation)) {
+      throw new Error(`${elementName} align conflicts with its other constraints`);
+    }
+    return aligned;
+  }
+
+  if (zoom?.align.length === 1) {
+    if (!width || !height) {
+      throw new Error(`${elementName} align needs scale, width, or height`);
+    }
+    rotation ??= 0;
+    const [{ from, to }] = zoom.align;
+    const alignedCenter = subtract(to, zoomOffset(from, zoom.view, width, height, rotation));
+    if (center && vectorLength(subtract(center, alignedCenter)) > RECT_EPSILON) {
+      throw new Error(`${elementName} align conflicts with its centre`);
+    }
+    center = alignedCenter;
   }
   const specifiedCorners = CORNER_NAMES.filter((name) => corners[name]);
   const candidates: RectGeometry[] = [];
@@ -530,53 +695,159 @@ function resolveRectGeometry(
   return unique[0];
 }
 
-function parseRectElement(rect: Record<string, unknown>): RectElement {
-  const geometry = resolveRectGeometry(rect);
+function parseRectElement(
+  rect: Record<string, unknown>,
+  name: string | undefined,
+  elementName: string,
+  resolvePoint: PointResolver,
+): RectElement {
+  if (rect.scale !== undefined || rect.align !== undefined) {
+    throw new Error(`${elementName}: scale and align are only supported on zooms`);
+  }
+  const geometry = resolveRectGeometry(rect, resolvePoint, elementName);
   const opacity = clamp(asNumber(rect.opacity, 1), 0, 1);
 
   return {
     kind: 'rect',
-    name: typeof rect.name === 'string' && rect.name.trim() ? rect.name.trim() : undefined,
+    name,
     ...geometry,
-    color: typeof rect.color === 'string' ? rect.color : '#1d4ed8',
+    color: typeof rect.color === 'string' ? rect.color : '#000',
     opacity,
   };
 }
 
 function parseZoomElement(
   zoom: Record<string, unknown>,
-  viewAspect: number,
+  name: string | undefined,
+  elementName: string,
+  resolvePoint: PointResolver,
+  aspect: number,
+  view: ViewFrame,
 ): ZoomElement {
+  const align = zoom.align === undefined ? [] : parseAlignPairs(zoom.align, resolvePoint, elementName);
   return {
     kind: 'zoom',
-    name: typeof zoom.name === 'string' && zoom.name.trim() ? zoom.name.trim() : undefined,
-    ...resolveRectGeometry(zoom, viewAspect, 'Zoom'),
+    name,
+    ...resolveRectGeometry(zoom, resolvePoint, elementName, { aspect, view, align }),
     opacity: clamp(asNumber(zoom.opacity, 1), 0, 1),
+    alignTargets: align.map((pair) => pair.to),
   };
 }
 
-function parseSceneElement(
-  value: unknown,
-  index: number,
-  viewAspect: number,
-): DrawableElement {
-  const itemNumber = index + 1;
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Scene item ${itemNumber} must be an object`);
-  }
+type SceneItem = {
+  record: Record<string, unknown>;
+  type: string;
+  name?: string;
+  label: string;
+};
 
-  const item = value as Record<string, unknown>;
-  if (typeof item.type !== 'string' || !item.type.trim()) {
-    throw new Error(`Scene item ${itemNumber} must have a type`);
-  }
+function parseSceneItems(values: unknown[]): SceneItem[] {
+  const names = new Set<string>();
+  return values.map((value, index) => {
+    const itemNumber = index + 1;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`Scene item ${itemNumber} must be an object`);
+    }
 
-  if (item.type === 'rect') {
-    return parseRectElement(item);
-  }
-  if (item.type === 'zoom') {
-    return parseZoomElement(item, viewAspect);
-  }
-  throw new Error(`Scene item ${itemNumber} has unknown type: ${item.type}`);
+    const record = value as Record<string, unknown>;
+    if (typeof record.type !== 'string' || !record.type.trim()) {
+      throw new Error(`Scene item ${itemNumber} must have a type`);
+    }
+    if (record.type !== 'rect' && record.type !== 'zoom') {
+      throw new Error(`Scene item ${itemNumber} has unknown type: ${record.type}`);
+    }
+
+    let name: string | undefined;
+    if (record.name !== undefined) {
+      if (typeof record.name !== 'string' || !record.name.trim()) {
+        throw new Error(`Scene item ${itemNumber} name must be a non-blank string`);
+      }
+      name = record.name.trim();
+      if (name === 'view') {
+        throw new Error(`Scene item ${itemNumber} cannot be named "view"; it is reserved`);
+      }
+      if (/[.\s]/.test(name)) {
+        throw new Error(`Scene item ${itemNumber} name "${name}" cannot contain dots or spaces`);
+      }
+      if (names.has(name)) {
+        throw new Error(`Scene item name "${name}" is used more than once`);
+      }
+      names.add(name);
+    }
+
+    const kind = record.type === 'rect' ? 'Rectangle' : 'Zoom';
+    return {
+      record,
+      type: record.type,
+      name,
+      label: name ? `${kind} "${name}"` : `${kind} ${itemNumber}`,
+    };
+  });
+}
+
+function resolveSceneElements(
+  items: SceneItem[],
+  aspect: number,
+  view: ViewFrame,
+): DrawableElement[] {
+  const indexByName = new Map(items.flatMap((item, index) => item.name ? [[item.name, index] as const] : []));
+  const resolved: (DrawableElement | undefined)[] = [];
+  const resolving = new Set<number>();
+
+  const pointResolverFor = (ownIndex: number): PointResolver => (value, label) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (typeof value !== 'string') {
+      const point = parsePoint(value);
+      if (!point) {
+        throw new Error(`${label} must be [x, y], { x, y }, or a name.part reference`);
+      }
+      return point;
+    }
+
+    const match = value.trim().match(/^([^.\s]+)\.([A-Za-z]+)$/);
+    if (!match) {
+      throw new Error(`${label} reference "${value}" must look like name.part`);
+    }
+    const [, name, part] = match;
+    if (!isPointPart(part)) {
+      throw new Error(`${label} reference "${value}" has unknown part "${part}"`);
+    }
+    if (name === 'view') {
+      return viewPoint(view, part);
+    }
+    const target = indexByName.get(name);
+    if (target === undefined) {
+      throw new Error(`${label} refers to unknown element "${name}"`);
+    }
+    if (target === ownIndex) {
+      throw new Error(`${label} cannot refer to its own element`);
+    }
+    return rectPoint(resolveElement(target), part);
+  };
+
+  const resolveElement = (index: number): DrawableElement => {
+    const existing = resolved[index];
+    if (existing) {
+      return existing;
+    }
+    const item = items[index];
+    if (resolving.has(index)) {
+      throw new Error(`${item.label} is part of a reference loop`);
+    }
+
+    resolving.add(index);
+    const resolvePoint = pointResolverFor(index);
+    const element = item.type === 'rect'
+      ? parseRectElement(item.record, item.name, item.label, resolvePoint)
+      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view);
+    resolving.delete(index);
+    resolved[index] = element;
+    return element;
+  };
+
+  return items.map((_, index) => resolveElement(index));
 }
 
 function parseScene(text: string): SceneDefinition {
@@ -591,7 +862,7 @@ function parseScene(text: string): SceneDefinition {
       margin: 24,
     },
     seed: {
-      color: '#000000',
+      color: 'transparent',
       opacity: 1,
     },
     view: {
@@ -661,8 +932,19 @@ function parseScene(text: string): SceneDefinition {
     const seedNode = sceneRoot.seed && typeof sceneRoot.seed === 'object' && !Array.isArray(sceneRoot.seed)
       ? (sceneRoot.seed as Record<string, unknown>)
       : {};
-    const elements = sceneRoot.scene.map((item, index) =>
-      parseSceneElement(item, index, resolvedView.aspect));
+    const viewFrame: ViewFrame = {
+      centre: {
+        x: (coordinates.x.from + coordinates.x.to) / 2,
+        y: (coordinates.y.from + coordinates.y.to) / 2,
+      },
+      width: coordinates.x.to - coordinates.x.from,
+      height: coordinates.y.to - coordinates.y.from,
+    };
+    const elements = resolveSceneElements(
+      parseSceneItems(sceneRoot.scene),
+      resolvedView.aspect,
+      viewFrame,
+    );
 
     return {
       frame,
@@ -889,6 +1171,19 @@ qualitySelect.addEventListener('change', () => {
   render();
 });
 
+const editModeRow = document.createElement('label');
+editModeRow.className = 'edit-mode-row';
+editModeRow.innerHTML = '<span>Edit mode</span>';
+
+const editModeToggle = document.createElement('input');
+editModeToggle.type = 'checkbox';
+editModeRow.append(editModeToggle);
+
+editModeToggle.addEventListener('change', () => {
+  state.editMode = editModeToggle.checked;
+  render();
+});
+
 const exampleRow = document.createElement('label');
 exampleRow.className = 'example-row';
 exampleRow.innerHTML = '<span>Example</span>';
@@ -966,6 +1261,7 @@ controls.append(
   exampleDetails,
   sceneInputLabel,
   sceneInput,
+  editModeRow,
   applySceneButton,
   sceneStatus,
 );
@@ -976,6 +1272,7 @@ app.append(shell);
 const baseScene = parseScene(DEFAULT_SCENE_TEXT);
 const state = {
   quality: 'balanced' as QualityPresetName,
+  editMode: false,
   offsetX: 0,
   offsetY: -10,
   scene: baseScene,
@@ -1314,19 +1611,75 @@ function drawScene(
   settings: RenderSettings,
   recursionLevel: number,
   capturedScene: CapturedScene | null,
+  fadeZooms = false,
 ) {
   for (const element of scene.elements) {
     if (element.kind === 'rect') {
       drawRectElement(element, scene);
-    } else if (recursionLevel < settings.recursionDepth) {
+      continue;
+    }
+
+    ctx.save();
+    if (fadeZooms) {
+      ctx.globalAlpha *= EDIT_MODE_ZOOM_OPACITY;
+    }
+    if (recursionLevel < settings.recursionDepth) {
       drawZoomElement(element, scene, settings, recursionLevel, capturedScene);
     } else if (capturedScene) {
       drawCapturedElement(element, scene, capturedScene);
     } else {
       drawSeedElement(element, scene);
     }
+    ctx.restore();
   }
+}
 
+function drawZoomOutlines(scene: SceneDefinition) {
+  const cssWidth = canvas.getBoundingClientRect().width;
+  const pixelsPerCssPixel = cssWidth > 0 ? canvas.width / cssWidth : 1;
+  const lineWidth = EDIT_MODE_OUTLINE_CSS_PIXELS * pixelsPerCssPixel;
+  const zooms = scene.elements.filter((element): element is ZoomElement => element.kind === 'zoom');
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.lineJoin = 'miter';
+  for (const zoom of zooms) {
+    const corners = elementCorners(zoom, scene);
+    tracePolygon(corners);
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = lineWidth * 3;
+    ctx.stroke();
+    ctx.setLineDash([lineWidth * 4, lineWidth * 3]);
+    ctx.strokeStyle = '#e11d48';
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(corners[0].x, corners[0].y, lineWidth * 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#e11d48';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+
+    for (const target of zoom.alignTargets.map((point) => scenePointToCanvas(point, scene))) {
+      const size = lineWidth * 5;
+      ctx.beginPath();
+      ctx.moveTo(target.x - size, target.y);
+      ctx.lineTo(target.x + size, target.y);
+      ctx.moveTo(target.x, target.y - size);
+      ctx.lineTo(target.x, target.y + size);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.lineWidth = lineWidth * 3;
+      ctx.stroke();
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = lineWidth;
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 function downsampleAlphaPreserving(source: HTMLCanvasElement): HTMLCanvasElement {
@@ -1406,6 +1759,7 @@ function renderPass(
   scene: SceneDefinition,
   settings: RenderSettings,
   capturedScene: CapturedScene | null,
+  fadeZooms = false,
 ) {
   ctx = target.getContext('2d')!;
 
@@ -1414,17 +1768,24 @@ function renderPass(
   ctx.save();
   ctx.scale(settings.supersampling, settings.supersampling);
 
-  drawScene(scene, settings, 0, capturedScene);
+  drawScene(scene, settings, 0, capturedScene, fadeZooms);
   ctx.restore();
 }
 
-function displayWorkingCanvas(workingCanvas: HTMLCanvasElement) {
+function displayWorkingCanvas(
+  workingCanvas: HTMLCanvasElement,
+  scene: SceneDefinition,
+  editMode: boolean,
+) {
   ctx = displayContext;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(workingCanvas, 0, 0, canvas.width, canvas.height);
+  if (editMode) {
+    drawZoomOutlines(scene);
+  }
 }
 
 let renderRevision = 0;
@@ -1451,9 +1812,16 @@ async function renderScene(scene: SceneDefinition, revision: number): Promise<bo
   const preset = QUALITY_PRESETS[state.quality];
   const settings = resolveRenderSettings(scene, preset);
   qualityDetails.textContent = `Depth ${settings.recursionDepth} · ${settings.renderPasses} passes · ${settings.supersampling}×`;
+  const editMode = state.editMode;
   const workingCanvas = document.createElement('canvas');
   workingCanvas.width = scene.view.resolution.width * settings.supersampling;
   workingCanvas.height = scene.view.resolution.height * settings.supersampling;
+  // Captures feed deeper recursion, so edit-mode fading uses a separate display-only pass.
+  const editCanvas = editMode ? document.createElement('canvas') : null;
+  if (editCanvas) {
+    editCanvas.width = workingCanvas.width;
+    editCanvas.height = workingCanvas.height;
+  }
   const mipLevels = mipLevelCount(workingCanvas.width, workingCanvas.height);
   const totalSteps = settings.renderPasses + (settings.renderPasses - 1) * mipLevels;
   let completedSteps = 0;
@@ -1466,15 +1834,21 @@ async function renderScene(scene: SceneDefinition, revision: number): Promise<bo
 
   let capturedScene: CapturedScene | null = null;
   for (let pass = 0; pass < settings.renderPasses; pass += 1) {
-    renderPass(workingCanvas, scene, settings, capturedScene);
+    const needsCapture = pass < settings.renderPasses - 1;
+    if (!editCanvas || needsCapture) {
+      renderPass(workingCanvas, scene, settings, capturedScene);
+    }
+    if (editCanvas) {
+      renderPass(editCanvas, scene, settings, capturedScene, true);
+    }
     if (revision !== renderRevision) {
       return false;
     }
-    displayWorkingCanvas(workingCanvas);
+    displayWorkingCanvas(editCanvas ?? workingCanvas, scene, editMode);
     if (!await advance()) {
       return false;
     }
-    if (pass < settings.renderPasses - 1) {
+    if (needsCapture) {
       capturedScene = await captureCanvas(workingCanvas, advance);
       if (!capturedScene) {
         return false;

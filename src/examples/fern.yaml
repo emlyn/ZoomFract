@@ -1,0 +1,41 @@
+frame:
+  width: 12
+  radius: 6
+  color: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 0.8
+  resolution:
+    height: 1200
+  coordinates:
+    x: [-0.8, 0.8]
+    y: [-1, 1]
+
+seed:
+  color: "#5d5"
+
+scene:
+  - type: rect
+    name: stem
+    bottomLeft: [-0.21, -1]
+    topRight: [-0.19, -0.7]
+    color: "#4c4"
+  - type: zoom
+    name: top
+    scale: 0.85
+    align: [stem.bottom, stem.top]
+    rotation: 4deg
+  - type: zoom
+    name: left
+    scale: 0.3
+    align: [stem.bottom, stem.top]
+    rotation: -80deg
+  - type: zoom
+    name: right
+    scale: 0.3
+    align: [stem.bottom, stem.top]
+    rotation: 80deg

@@ -247,6 +247,7 @@ canvas {
 
 .control-row,
 .quality-row,
+.edit-mode-row,
 .example-row {
   display: flex;
   align-items: center;
@@ -264,6 +265,13 @@ canvas {
   background: rgba(63, 63, 66, 0.78);
   color: #f4f4f5;
   padding: 0.4rem 0.55rem;
+}
+
+.edit-mode-row input {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  accent-color: #a1a1aa;
 }
 
 .quality-details {

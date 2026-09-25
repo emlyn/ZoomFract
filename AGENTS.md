@@ -61,9 +61,15 @@ files unless extracting a module clearly reduces complexity.
 - The frame wall belongs to `.canvas-host`, and the frame background belongs
   to `.canvas-frame`, not the canvas bitmap. Canvas pixels must remain
   transparent where no element is drawn.
-- Elements may have an optional non-blank `name` for future references.
+- Elements may have an optional `name`. Names must be unique, non-blank,
+  contain no dots or spaces, and cannot be the reserved name `view`.
 - `scene` is an ordered list of typed items. Every item has a `type`, currently
   `rect` or `zoom`, and later items draw on top of earlier items.
+- Anywhere a point is accepted, it may be `[x, y]`, `{ x, y }`, or a
+  `name.part` reference. Parts are `topLeft`, `topRight`, `bottomLeft`,
+  `bottomRight`, `centre`, `top`, `bottom`, `left`, and `right`; `view.<part>`
+  refers to the view rectangle. References resolve on demand, so they may
+  point forward in the list; self-references and loops are errors.
 - Do not add or preserve legacy configuration aliases unless explicitly
   requested. This is a lightweight prototype, so prefer one clear current
   syntax over migration machinery.
@@ -76,19 +82,29 @@ files unless extracting a module clearly reduces complexity.
 
 ### Rectangles
 
-- `rect` is borderless by default and uses `color` plus optional `opacity`.
+- `rect` is borderless by default and uses `color` (default black) plus
+  optional `opacity`.
 - Geometry may be determined from a sufficient combination of `centre`,
   width, height, named corners, and rotation.
-- Numeric rotations are degrees. Explicit `deg`, `rad`, and unit-object forms
-  are supported.
+- Numeric rotations are degrees, and positive rotations are clockwise.
+  Explicit `deg`, `rad`, and unit-object forms are supported. Internal
+  geometry uses anticlockwise radians; only `parseRotation` flips the sign.
 
 ### Zooms and seeds
 
 - `zoom` uses the rectangle constraint model.
 - A missing zoom dimension is inferred from the view aspect.
 - A zoom draws a transformed replica of the transparent scene.
+- `scale: s` makes a zoom `s` times the view size and cannot be combined with
+  `width` or `height`.
+- `align: [from, to]` places a zoom so that `from`, a point in the unzoomed
+  scene, lands on `to` in the parent scene. It needs a known size; rotation
+  defaults to 0. Pairs may also be written `{ from, to }`.
+- `align` with a list of two pairs determines scale, rotation, and position
+  together. Any other constraints given alongside it must agree.
 - Terminal zoom leaves use top-level `seed`; the seed may be a colour string
-  or an object containing colour and opacity.
+  or an object containing colour and opacity. Without a seed colour, terminal
+  leaves are transparent.
 - Keep quality controls out of the scene definition. Recursion depth, render
   passes, supersampling, leaf-size thresholds, and leaf budgets are application
   quality settings.
@@ -114,6 +130,11 @@ files unless extracting a module clearly reduces complexity.
   quality threshold or another level would exceed its leaf budget.
 - Be mindful of multiplicative cost: zoom count, recursion depth, passes,
   supersampling, mip generation, and temporary canvas size all compound.
+- Edit mode is an application setting, not scene syntax. It fades top-level
+  zoom contents and outlines each zoom, marking its top-left corner and any
+  `align` target points. Captures
+  used for recursion must stay unfaded, so edit mode renders a separate
+  display-only pass and draws outlines on the display canvas.
 
 ## Panel behaviour
 
