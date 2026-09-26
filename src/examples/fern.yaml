@@ -1,7 +1,7 @@
 frame:
   width: 12
   radius: 6
-  color: "#444"
+  colour: "#444"
   wall: "#ddd"
   background: "#fff"
   padding: 12
@@ -20,7 +20,7 @@ scene:
     name: stem
     bottomLeft: [-0.11, -1]
     topRight: [-0.09, -0.7]
-    color: "#4c4"
+    colour: "#4c4"
   - type: zoom
     name: top
     scale: 0.86

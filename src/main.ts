@@ -1,4 +1,5 @@
 import './style.css';
+import { createSceneEditor } from './editor';
 import GUIDE_HTML from './guide.html?raw';
 import {
   DEFAULT_EXAMPLE,
@@ -480,11 +481,7 @@ guideBody.addEventListener('click', (event) => {
   }
 });
 
-const sceneInput = document.createElement('textarea');
-sceneInput.className = 'scene-input';
-sceneInput.rows = 18;
-sceneInput.value = DEFAULT_SCENE_TEXT;
-sceneInput.addEventListener('input', () => {
+const sceneEditor = createSceneEditor(DEFAULT_SCENE_TEXT, () => {
   exampleSelect.value = '';
   exampleDetails.textContent = 'Custom definition';
 });
@@ -500,7 +497,7 @@ sceneStatus.setAttribute('role', 'status');
 
 applySceneButton.addEventListener('click', () => {
   definitionLoadRevision += 1;
-  applyDefinition(sceneInput.value, { kind: 'custom' }, true);
+  applyDefinition(sceneEditor.text(), { kind: 'custom' }, true);
 });
 
 const downloadButton = document.createElement('button');
@@ -542,7 +539,7 @@ controls.append(
   exampleRow,
   exampleDetails,
   sceneLabelRow,
-  sceneInput,
+  sceneEditor.element,
   editModeRow,
   applySceneButton,
   downloadButton,
@@ -580,7 +577,7 @@ function applyDefinition(
     const nextScene = parseScene(text);
     state.scene = nextScene;
     state.definitionLocation = location;
-    sceneInput.value = text.trim();
+    sceneEditor.setText(text.trim());
 
     if (location.kind === 'example') {
       const example = findExample(location.id);
@@ -640,7 +637,7 @@ async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: b
     return;
   }
 
-  applyDefinition(sceneInput.value, location, updateUrl);
+  applyDefinition(sceneEditor.text(), location, updateUrl);
 }
 
 async function loadDefinitionFromAddressBar() {

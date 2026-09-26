@@ -570,17 +570,24 @@ canvas {
 
 .scene-input {
   width: 100%;
-  min-height: 24rem;
+  height: 24rem;
+  min-height: 8rem;
   resize: vertical;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  overflow: hidden;
   font-size: 0.85rem;
-  line-height: 1.45;
-  tab-size: 2;
   border-radius: 0.8rem;
   border: 1px solid rgba(212, 212, 216, 0.18);
   background: rgba(39, 39, 42, 0.82);
-  color: #f4f4f5;
-  padding: 0.75rem 0.85rem;
+}
+
+.scene-input.cm-focused {
+  outline: none;
+  border-color: rgba(212, 212, 216, 0.4);
+}
+
+.scene-input .cm-scroller {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  line-height: 1.45;
 }
 
 .scene-status {

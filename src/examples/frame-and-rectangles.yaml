@@ -1,7 +1,7 @@
 frame:
   width: 20
   radius: 32
-  color: "#262626"
+  colour: "#262626"
   wall: "#b8b8b8"
   background: "#f5f0e8"
   padding: 36
@@ -21,13 +21,13 @@ scene:
     centre: [0, 0]
     width: 6.4
     height: 4.3
-    color: "#d9e2ec"
+    colour: "#d9e2ec"
   - type: rect
     name: warm-block
     topLeft: [-2.8, 2.1]
     topRight: [-0.3, 1.65]
     height: 2.2
-    color: "#d97757"
+    colour: "#d97757"
     opacity: 0.9
   - type: rect
     name: cool-block
@@ -35,5 +35,5 @@ scene:
     width: 2.8
     height: 1.55
     rotation: 16deg
-    color: "#527aa3"
+    colour: "#527aa3"
     opacity: 0.88

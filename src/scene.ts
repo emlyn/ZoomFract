@@ -1,6 +1,185 @@
 import YAML from 'yaml';
 import { evaluateExpression, isIdentifier, isReservedName, type Variables } from './expression';
 
+// Keys and list indexes leading to a value in the definition.
+type ScenePath = (string | number)[];
+
+export type SceneDiagnostic = {
+  from: number;
+  to: number;
+  severity: 'error' | 'warning';
+  message: string;
+};
+
+// A definition mistake, with where it occurs in the definition text.
+export class SceneError extends Error {
+  constructor(message: string, readonly diagnostics: SceneDiagnostic[]) {
+    super(message);
+  }
+}
+
+// An error tagged with the definition path it belongs to.
+class PathError extends Error {
+  constructor(message: string, readonly path: ScenePath) {
+    super(message);
+  }
+}
+
+// Runs a step, tagging any untagged error with the path being parsed. The
+// innermost tag wins, so errors in referenced values point at their source.
+function atPath<T>(path: ScenePath, compute: () => T): T {
+  try {
+    return compute();
+  } catch (error) {
+    if (error instanceof PathError) {
+      throw error;
+    }
+    throw new PathError(error instanceof Error ? error.message : String(error), path);
+  }
+}
+
+// American spellings accepted for setting names, mapped to the British
+// names used internally and suggested for misspellings. Writing both spellings in one place is an error.
+const SPELLINGS: Record<string, string> = {
+  color: 'colour',
+  colors: 'colours',
+  center: 'centre',
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+
+function normaliseSpellings(value: unknown, path: ScenePath = []): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => normaliseSpellings(item, [...path, index]));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  const result: Record<string, unknown> = {};
+  const written = new Map<string, string>();
+  for (const [key, item] of Object.entries(value)) {
+    const name = SPELLINGS[key] ?? key;
+    const earlier = written.get(name);
+    if (earlier !== undefined) {
+      throw new PathError(`Use either "${earlier}" or "${key}", not both`, [...path, key]);
+    }
+    written.set(name, key);
+    result[name] = normaliseSpellings(item, [...path, key]);
+  }
+  return result;
+}
+
+// The settings each part of a definition accepts. Parts without keys, such
+// as colour mappings, are not checked.
+type Shape = {
+  keys?: Record<string, Shape>;
+  items?: Shape;
+  byType?: Record<string, Shape>;
+};
+
+const LEAF: Shape = {};
+const leaves = (...names: string[]): Record<string, Shape> =>
+  Object.fromEntries(names.map((name) => [name, LEAF]));
+
+const POINT: Shape = { keys: leaves('x', 'y') };
+const ROTATION: Shape = { keys: leaves('degrees', 'deg', 'radians', 'rad') };
+const AXIS: Shape = { keys: leaves('from', 'to', 'min', 'max') };
+const GEOMETRY: Record<string, Shape> = {
+  ...leaves('type', 'name', 'width', 'height', 'opacity'),
+  centre: POINT,
+  topLeft: POINT,
+  topRight: POINT,
+  bottomLeft: POINT,
+  bottomRight: POINT,
+  rotation: ROTATION,
+};
+// Align items may be pairs or, for a single pair written as a list, points.
+const ALIGN_ITEM: Shape = { keys: { from: POINT, to: POINT, ...leaves('x', 'y') } };
+const ALIGN: Shape = { keys: { from: POINT, to: POINT }, items: ALIGN_ITEM };
+
+const DEFINITION: Shape = {
+  keys: {
+    frame: { keys: leaves('width', 'radius', 'colour', 'wall', 'background', 'padding', 'margin') },
+    view: {
+      keys: {
+        aspect: LEAF,
+        resolution: { keys: leaves('width', 'height') },
+        coordinates: { keys: { x: AXIS, y: AXIS } },
+      },
+    },
+    variables: { items: { keys: leaves('name', 'value') } },
+    shading: { keys: { ...leaves('mode', 'scale'), colours: LEAF } },
+    seed: { keys: leaves('colour', 'opacity') },
+    scene: {
+      items: {
+        byType: {
+          // Scale and align are listed so rectangles get a specific error.
+          rect: { keys: { ...GEOMETRY, ...leaves('colour', 'weight', 'scale', 'align') } },
+          zoom: { keys: { ...GEOMETRY, scale: LEAF, align: ALIGN } },
+        },
+      },
+    },
+  },
+};
+
+// Edit distance counting a swap of neighbouring letters as one edit, used to
+// suggest the setting a misspelt key was meant to be.
+function editDistance(left: string, right: string): number {
+  const a = left.toLowerCase();
+  const b = right.toLowerCase();
+  const rows = [Array.from({ length: b.length + 1 }, (_, index) => index)];
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      row[j] = Math.min(
+        rows[i - 1][j] + 1,
+        row[j - 1] + 1,
+        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        row[j] = Math.min(row[j], rows[i - 2][j - 2] + 1);
+      }
+    }
+    rows.push(row);
+  }
+  return rows[a.length][b.length];
+}
+
+function unknownKeyError(key: string, known: string[], path: ScenePath): PathError {
+  // American spellings are compared too, but the British name is suggested.
+  const spellings = Object.entries(SPELLINGS).filter(([, name]) => known.includes(name));
+  const [closest] = [...known.map((name) => [name, name]), ...spellings.map(([alias, name]) => [alias, name])]
+    .map(([written, name]) => ({ name, distance: editDistance(key, written) }))
+    .filter(({ distance }) => distance <= Math.max(1, Math.ceil(key.length / 3)))
+    .sort((left, right) => left.distance - right.distance);
+  const hint = closest ? `; did you mean "${closest.name}"?` : '';
+  return new PathError(`Unknown setting "${key}"${hint}`, [...path, key]);
+}
+
+function checkKeys(value: unknown, shape: Shape, path: ScenePath = []): void {
+  if (Array.isArray(value)) {
+    if (shape.items) {
+      value.forEach((item, index) => checkKeys(item, shape.items!, [...path, index]));
+    }
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  const typed = shape.byType && typeof value.type === 'string' ? shape.byType[value.type] : undefined;
+  const keys = typed?.keys ?? shape.keys;
+  if (!keys) {
+    return;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (!Object.hasOwn(keys, key)) {
+      throw unknownKeyError(key, Object.keys(keys), path);
+    }
+    checkKeys(item, keys[key], [...path, key]);
+  }
+}
+
 export type Vec2 = {
   x: number;
   y: number;
@@ -77,13 +256,13 @@ function parseStopPosition(key: string): ColorStop['at'] {
   if (percent) {
     const value = Number(percent[1]);
     if (value > 100) {
-      throw new Error(`shading colors position "${key}" must be at most 100%`);
+      throw new Error(`shading colours position "${key}" must be at most 100%`);
     }
     return { kind: 'fraction', value: value / 100 };
   }
   const count = Number(key);
   if (key.trim() === '' || !Number.isFinite(count) || count < 0) {
-    throw new Error(`shading colors position "${key}" must be a hit count or a percentage such as 50%`);
+    throw new Error(`shading colours position "${key}" must be a hit count or a percentage such as 50%`);
   }
   return { kind: 'count', value: count };
 }
@@ -91,26 +270,27 @@ function parseStopPosition(key: string): ColorStop['at'] {
 // Colours are a list spread evenly, or a mapping from hit counts or
 // percentages to colours.
 function parseColorStops(colors: unknown): ColorStop[] {
+  const path = ['shading', 'colours'];
   const range = `2 to ${MAXIMUM_DENSITY_COLORS}`;
   if (Array.isArray(colors)) {
     if (colors.length < 2 || colors.length > MAXIMUM_DENSITY_COLORS || !colors.every((color) => typeof color === 'string')) {
-      throw new Error(`shading colors must be a list of ${range} colours`);
+      throw new Error(`shading colours must be a list of ${range} colours`);
     }
     return evenStops(colors);
   }
   if (!colors || typeof colors !== 'object') {
-    throw new Error(`shading colors must be a list or mapping of ${range} colours`);
+    throw new Error(`shading colours must be a list or mapping of ${range} colours`);
   }
   const entries = Object.entries(colors);
   if (entries.length < 2 || entries.length > MAXIMUM_DENSITY_COLORS) {
-    throw new Error(`shading colors must map ${range} positions to colours`);
+    throw new Error(`shading colours must map ${range} positions to colours`);
   }
-  return entries.map(([key, color]) => {
+  return entries.map(([key, color]) => atPath([...path, key], () => {
     if (typeof color !== 'string') {
-      throw new Error(`shading colors position "${key}" must have a colour`);
+      throw new Error(`shading colours position "${key}" must have a colour`);
     }
     return { at: parseStopPosition(key), color };
-  });
+  }));
 }
 
 export type SceneDefinition = {
@@ -184,9 +364,9 @@ function resolveView(view: Record<string, unknown>, variables: Variables) {
   const resolutionNode = view.resolution && typeof view.resolution === 'object' && !Array.isArray(view.resolution)
     ? (view.resolution as Record<string, unknown>)
     : {};
-  const requestedWidth = asPositiveNumber(resolutionNode.width, variables);
-  const requestedHeight = asPositiveNumber(resolutionNode.height, variables);
-  const requestedAspect = parseAspectRatio(view.aspect, variables);
+  const requestedWidth = atPath(['view', 'resolution', 'width'], () => asPositiveNumber(resolutionNode.width, variables));
+  const requestedHeight = atPath(['view', 'resolution', 'height'], () => asPositiveNumber(resolutionNode.height, variables));
+  const requestedAspect = atPath(['view', 'aspect'], () => parseAspectRatio(view.aspect, variables));
 
   if (requestedWidth && requestedHeight) {
     return {
@@ -228,17 +408,17 @@ function resolveView(view: Record<string, unknown>, variables: Variables) {
   };
 }
 
-function parseAxisRange(value: unknown, fallback: AxisRange, variables: Variables): AxisRange {
+function parseAxisRange(value: unknown, fallback: AxisRange, variables: Variables, path: ScenePath): AxisRange {
   let from: number;
   let to: number;
 
   if (Array.isArray(value)) {
-    from = asNumber(value[0], fallback.from, variables);
-    to = asNumber(value[1], fallback.to, variables);
+    from = atPath([...path, 0], () => asNumber(value[0], fallback.from, variables));
+    to = atPath([...path, 1], () => asNumber(value[1], fallback.to, variables));
   } else if (value && typeof value === 'object') {
     const range = value as Record<string, unknown>;
-    from = asNumber(range.from ?? range.min, fallback.from, variables);
-    to = asNumber(range.to ?? range.max, fallback.to, variables);
+    from = atPath([...path, range.from === undefined ? 'min' : 'from'], () => asNumber(range.from ?? range.min, fallback.from, variables));
+    to = atPath([...path, range.to === undefined ? 'max' : 'to'], () => asNumber(range.to ?? range.max, fallback.to, variables));
   } else {
     return fallback;
   }
@@ -396,29 +576,31 @@ function parseAlignPairs(
   resolvePoint: PointResolver,
   elementName: string,
   variables: Variables,
+  path: ScenePath,
 ): AlignPair[] {
-  const toPair = (pair: unknown, label: string): AlignPair => {
+  const toPair = (pair: unknown, label: string, pairPath: ScenePath): AlignPair => atPath(pairPath, () => {
     const [fromValue, toValue] = Array.isArray(pair) && pair.length === 2
       ? pair
       : pair && typeof pair === 'object' && !Array.isArray(pair)
         ? [(pair as Record<string, unknown>).from, (pair as Record<string, unknown>).to]
         : [undefined, undefined];
-    const from = resolvePoint(fromValue, `${label} from`);
-    const to = resolvePoint(toValue, `${label} to`);
+    const isList = Array.isArray(pair);
+    const from = atPath([...pairPath, isList ? 0 : 'from'], () => resolvePoint(fromValue, `${label} from`));
+    const to = atPath([...pairPath, isList ? 1 : 'to'], () => resolvePoint(toValue, `${label} to`));
     if (!from || !to) {
       throw new Error(`${label} must be [from, to] or { from, to }`);
     }
     return { from, to };
-  };
+  });
 
   const label = `${elementName} align`;
   const isSinglePair = Array.isArray(value) && value.length === 2 && isPointLike(value[0], variables);
   const isObjectPair = Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   if (isSinglePair || isObjectPair) {
-    return [toPair(value, label)];
+    return [toPair(value, label, path)];
   }
   if (Array.isArray(value) && value.length === 2) {
-    return value.map((pair, index) => toPair(pair, `${label} pair ${index + 1}`));
+    return value.map((pair, index) => toPair(pair, `${label} pair ${index + 1}`, [...path, index]));
   }
   throw new Error(`${label} must be one [from, to] pair or a list of two pairs`);
 }
@@ -522,23 +704,25 @@ function resolveRectGeometry(
   resolvePoint: PointResolver,
   elementName: string,
   variables: Variables,
+  path: ScenePath,
   zoom?: ZoomConstraints,
 ): RectGeometry {
-  let center = resolvePoint(rect.centre, `${elementName} centre`);
+  const at = <T>(key: string, compute: () => T) => atPath([...path, key], compute);
+  let center = at('centre', () => resolvePoint(rect.centre, `${elementName} centre`));
   const corners = Object.fromEntries(
     CORNER_NAMES
-      .map((name) => [name, resolvePoint(rect[name], `${elementName} ${name}`)] as const)
+      .map((name) => [name, at(name, () => resolvePoint(rect[name], `${elementName} ${name}`))] as const)
       .filter((entry): entry is [CornerName, Vec2] => Boolean(entry[1])),
   ) as Partial<Record<CornerName, Vec2>>;
-  let width = asPositiveNumber(rect.width, variables);
-  let height = asPositiveNumber(rect.height, variables);
+  let width = at('width', () => asPositiveNumber(rect.width, variables));
+  let height = at('height', () => asPositiveNumber(rect.height, variables));
   if (zoom && rect.scale !== undefined) {
-    const scale = asPositiveNumber(rect.scale, variables);
+    const scale = at('scale', () => asPositiveNumber(rect.scale, variables));
     if (!scale) {
-      throw new Error(`${elementName} scale must be a positive number`);
+      throw new PathError(`${elementName} scale must be a positive number`, [...path, 'scale']);
     }
     if (width || height) {
-      throw new Error(`${elementName} must use either scale or width/height, not both`);
+      throw new PathError(`${elementName} must use either scale or width/height, not both`, [...path, 'scale']);
     }
     width = scale * Math.abs(zoom.view.width);
     height = scale * Math.abs(zoom.view.height);
@@ -548,28 +732,28 @@ function resolveRectGeometry(
   } else if (zoom && height && !width) {
     width = height * zoom.aspect;
   }
-  let rotation = parseRotation(rect.rotation, variables);
+  let rotation = at('rotation', () => parseRotation(rect.rotation, variables));
   if (rect.rotation !== undefined && rotation === undefined) {
-    throw new Error(`${elementName} rotation must be degrees, an expression with an optional deg or rad unit, or a unit object`);
+    throw new PathError(`${elementName} rotation must be degrees, an expression with an optional deg or rad unit, or a unit object`, [...path, 'rotation']);
   }
 
   if (zoom?.align.length === 2) {
-    const aligned = geometryFromAlignPairs(zoom.align, zoom.view, elementName);
+    const aligned = at('align', () => geometryFromAlignPairs(zoom.align, zoom.view, elementName));
     if (!geometryMatches(aligned, center, corners, width, height, rotation)) {
-      throw new Error(`${elementName} align conflicts with its other constraints`);
+      throw new PathError(`${elementName} align conflicts with its other constraints`, [...path, 'align']);
     }
     return aligned;
   }
 
   if (zoom?.align.length === 1) {
     if (!width || !height) {
-      throw new Error(`${elementName} align needs scale, width, or height`);
+      throw new PathError(`${elementName} align needs scale, width, or height`, [...path, 'align']);
     }
     rotation ??= 0;
     const [{ from, to }] = zoom.align;
     const alignedCenter = subtract(to, zoomOffset(from, zoom.view, width, height, rotation));
     if (center && vectorLength(subtract(center, alignedCenter)) > RECT_EPSILON) {
-      throw new Error(`${elementName} align conflicts with its centre`);
+      throw new PathError(`${elementName} align conflicts with its centre`, [...path, 'align']);
     }
     center = alignedCenter;
   }
@@ -701,28 +885,33 @@ function parseRectElement(
   resolvePoint: PointResolver,
   variables: Variables,
   density: boolean,
+  path: ScenePath,
 ): RectElement {
+  const at = <T>(key: string, compute: () => T) => atPath([...path, key], compute);
   if (rect.scale !== undefined || rect.align !== undefined) {
-    throw new Error(`${elementName}: scale and align are only supported on zooms`);
+    throw new PathError(`${elementName}: scale and align are only supported on zooms`, [...path, rect.scale !== undefined ? 'scale' : 'align']);
   }
-  if (density && (rect.color !== undefined || rect.opacity !== undefined)) {
-    throw new Error(`${elementName}: color and opacity are not used with density shading; use weight instead`);
+  if (density && (rect.colour !== undefined || rect.opacity !== undefined)) {
+    throw new PathError(
+      `${elementName}: colour and opacity are not used with density shading; use weight instead`,
+      [...path, rect.colour !== undefined ? 'colour' : 'opacity'],
+    );
   }
   if (!density && rect.weight !== undefined) {
-    throw new Error(`${elementName}: weight is only used with density shading`);
+    throw new PathError(`${elementName}: weight is only used with density shading`, [...path, 'weight']);
   }
-  const weight = rect.weight === undefined ? 1 : asPositiveNumber(rect.weight, variables);
+  const weight = rect.weight === undefined ? 1 : at('weight', () => asPositiveNumber(rect.weight, variables));
   if (!weight) {
-    throw new Error(`${elementName} weight must be a positive number`);
+    throw new PathError(`${elementName} weight must be a positive number`, [...path, 'weight']);
   }
-  const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables);
-  const opacity = clamp(asNumber(rect.opacity, 1, variables), 0, 1);
+  const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables, path);
+  const opacity = clamp(at('opacity', () => asNumber(rect.opacity, 1, variables)), 0, 1);
 
   return {
     kind: 'rect',
     name,
     ...geometry,
-    color: typeof rect.color === 'string' ? rect.color : '#000',
+    color: typeof rect.colour === 'string' ? rect.colour : '#000',
     opacity,
     weight,
   };
@@ -737,16 +926,20 @@ function parseZoomElement(
   view: ViewFrame,
   variables: Variables,
   density: boolean,
+  path: ScenePath,
 ): ZoomElement {
+  const alignPath = [...path, 'align'];
   if (density && zoom.opacity !== undefined) {
-    throw new Error(`${elementName}: opacity is not used with density shading`);
+    throw new PathError(`${elementName}: opacity is not used with density shading`, [...path, 'opacity']);
   }
-  const align = zoom.align === undefined ? [] : parseAlignPairs(zoom.align, resolvePoint, elementName, variables);
+  const align = zoom.align === undefined
+    ? []
+    : atPath(alignPath, () => parseAlignPairs(zoom.align, resolvePoint, elementName, variables, alignPath));
   return {
     kind: 'zoom',
     name,
-    ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, { aspect, view, align }),
-    opacity: clamp(asNumber(zoom.opacity, 1, variables), 0, 1),
+    ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, path, { aspect, view, align }),
+    opacity: clamp(atPath([...path, 'opacity'], () => asNumber(zoom.opacity, 1, variables)), 0, 1),
     alignTargets: align.map((pair) => pair.to),
   };
 }
@@ -760,8 +953,9 @@ type SceneItem = {
 
 function parseSceneItems(values: unknown[]): SceneItem[] {
   const names = new Set<string>();
-  return values.map((value, index) => {
+  return values.map((value, index) => atPath(['scene', index], () => {
     const itemNumber = index + 1;
+    const at = <T>(key: string, compute: () => T) => atPath(['scene', index, key], compute);
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error(`Scene item ${itemNumber} must be an object`);
     }
@@ -771,15 +965,14 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
       throw new Error(`Scene item ${itemNumber} must have a type`);
     }
     if (record.type !== 'rect' && record.type !== 'zoom') {
-      throw new Error(`Scene item ${itemNumber} has unknown type: ${record.type}`);
+      throw new PathError(`Scene item ${itemNumber} has unknown type: ${record.type}`, ['scene', index, 'type']);
     }
 
-    let name: string | undefined;
-    if (record.name !== undefined) {
+    const name = record.name === undefined ? undefined : at('name', () => {
       if (typeof record.name !== 'string' || !record.name.trim()) {
         throw new Error(`Scene item ${itemNumber} name must be a non-blank string`);
       }
-      name = record.name.trim();
+      const name = record.name.trim();
       if (name === 'view') {
         throw new Error(`Scene item ${itemNumber} cannot be named "view"; it is reserved`);
       }
@@ -790,7 +983,8 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
         throw new Error(`Scene item name "${name}" is used more than once`);
       }
       names.add(name);
-    }
+      return name;
+    });
 
     const kind = record.type === 'rect' ? 'Rectangle' : 'Zoom';
     return {
@@ -799,7 +993,7 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
       name,
       label: name ? `${kind} "${name}"` : `${kind} ${itemNumber}`,
     };
-  });
+  }));
 }
 
 function resolveSceneElements(
@@ -829,7 +1023,8 @@ function resolveSceneElements(
     if (!match) {
       throw new Error(`${label} reference "${value}" must look like name.part`);
     }
-    const [, name, part] = match;
+    const [, name, written] = match;
+    const part = SPELLINGS[written] ?? written;
     if (!isPointPart(part)) {
       throw new Error(`${label} reference "${value}" has unknown part "${part}"`);
     }
@@ -858,9 +1053,10 @@ function resolveSceneElements(
 
     resolving.add(index);
     const resolvePoint = pointResolverFor(index);
-    const element = item.type === 'rect'
-      ? parseRectElement(item.record, item.name, item.label, resolvePoint, variables, density)
-      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density);
+    const path = ['scene', index];
+    const element = atPath(path, () => item.type === 'rect'
+      ? parseRectElement(item.record, item.name, item.label, resolvePoint, variables, density, path)
+      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density, path));
     resolving.delete(index);
     resolved[index] = element;
     return element;
@@ -893,8 +1089,10 @@ function lazy<T>(label: string, compute: () => T): () => T {
 
 // Variables are a list of { name, value }. Values may be numbers or
 // expressions referring to other variables or view values in any order.
-function parseVariableDefinitions(node: unknown): Map<string, number | string> {
-  const definitions = new Map<string, number | string>();
+type VariableDefinition = { value: number | string; index: number };
+
+function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition> {
+  const definitions = new Map<string, VariableDefinition>();
   if (node === undefined) {
     return definitions;
   }
@@ -902,26 +1100,27 @@ function parseVariableDefinitions(node: unknown): Map<string, number | string> {
     throw new Error('variables must be a list of { name, value } items');
   }
 
-  node.forEach((item, index) => {
+  node.forEach((item, index) => atPath(['variables', index], () => {
     const label = `Variable ${index + 1}`;
+    const at = (key: string, message: string) => new PathError(message, ['variables', index, key]);
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`${label} must be an object with a name and a value`);
     }
     const { name, value } = item as Record<string, unknown>;
     if (typeof name !== 'string' || !isIdentifier(name)) {
-      throw new Error(`${label} name must start with a letter or underscore and contain only letters, digits, and underscores`);
+      throw at('name', `${label} name must start with a letter or underscore and contain only letters, digits, and underscores`);
     }
     if (isReservedName(name)) {
-      throw new Error(`Variable "${name}" has the same name as a built-in constant or function`);
+      throw at('name', `Variable "${name}" has the same name as a built-in constant or function`);
     }
     if (definitions.has(name)) {
-      throw new Error(`Variable "${name}" is defined more than once`);
+      throw at('name', `Variable "${name}" is defined more than once`);
     }
     if (typeof value !== 'number' && typeof value !== 'string') {
-      throw new Error(`Variable "${name}" value must be a number or an expression`);
+      throw at('value', `Variable "${name}" value must be a number or an expression`);
     }
-    definitions.set(name, value);
-  });
+    definitions.set(name, { value, index });
+  }));
   return definitions;
 }
 
@@ -932,43 +1131,46 @@ function parseShading(node: unknown): Shading {
   if (!node || typeof node !== 'object' || Array.isArray(node)) {
     throw new Error('shading must be an object');
   }
-  const { mode = 'paint', scale, colors, ...rest } = node as Record<string, unknown>;
-  const unknown = Object.keys(rest);
-  if (unknown.length > 0) {
-    throw new Error(`shading has unknown setting "${unknown[0]}"`);
-  }
+  const { mode = 'paint', scale, colours } = node as Record<string, unknown>;
   if (mode === 'paint') {
-    if (scale !== undefined || colors !== undefined) {
-      throw new Error('shading scale and colors are only used with density mode');
+    if (scale !== undefined || colours !== undefined) {
+      throw new PathError('shading scale and colours are only used with density mode', ['shading', scale !== undefined ? 'scale' : 'colours']);
     }
     return { mode };
   }
   if (mode !== 'density') {
-    throw new Error('shading mode must be paint or density');
+    throw new PathError('shading mode must be paint or density', ['shading', 'mode']);
   }
   if (scale !== undefined && scale !== 'log' && scale !== 'sqrt' && scale !== 'linear') {
-    throw new Error('shading scale must be log, sqrt, or linear');
+    throw new PathError('shading scale must be log, sqrt, or linear', ['shading', 'scale']);
   }
   return {
     mode,
     scale: scale ?? 'log',
-    colors: colors === undefined ? evenStops(DEFAULT_DENSITY_COLORS) : parseColorStops(colors),
+    colors: colours === undefined
+      ? evenStops(DEFAULT_DENSITY_COLORS)
+      : atPath(['shading', 'colours'], () => parseColorStops(colours)),
   };
 }
 
-function variableCell(name: string, value: number | string, lookup: Variables): () => number {
+function variableCell(name: string, { value, index }: VariableDefinition, lookup: Variables): () => number {
   return lazy(`Variable "${name}"`, () => {
     try {
       return asNumber(value, Number.NaN, lookup);
     } catch (error) {
+      if (error instanceof PathError) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(message.startsWith('Variable "') ? message : `Variable "${name}": ${message}`);
+      throw new PathError(
+        message.startsWith('Variable "') ? message : `Variable "${name}": ${message}`,
+        ['variables', index, 'value'],
+      );
     }
   });
 }
 
-export function parseScene(text: string): SceneDefinition {
-  const fallback = {
+const fallback = {
     frame: {
       width: 12,
       radius: 6,
@@ -991,25 +1193,104 @@ export function parseScene(text: string): SceneDefinition {
       },
     },
     elements: [] as DrawableElement[],
-  };
+};
 
-  const rawText = text.trim();
-  if (!rawText) {
-    return { ...fallback, shading: { mode: 'paint' } };
+type YamlNode = YAML.Node | YAML.Pair | null | undefined | unknown;
+
+const nodeRange = (node: YamlNode): [number, number] | undefined =>
+  YAML.isNode(node) && node.range ? [node.range[0], node.range[1]] : undefined;
+
+// The key of a pair, extended over its value when that fits on the line.
+function pairRange(pair: YAML.Pair): [number, number] | undefined {
+  const key = nodeRange(pair.key);
+  const value = YAML.isScalar(pair.value) ? nodeRange(pair.value) : undefined;
+  return key && value ? [key[0], value[1]] : key;
+}
+
+// The first line of a node: a scalar, or the first entry of a collection.
+function headRange(node: YamlNode): [number, number] | undefined {
+  if (YAML.isMap(node) && YAML.isPair(node.items[0])) {
+    return pairRange(node.items[0]);
   }
+  if (YAML.isSeq(node) && node.items.length > 0) {
+    return headRange(node.items[0]);
+  }
+  return nodeRange(node);
+}
 
-  let parsed: unknown;
+// Finds the text range for a definition path, stopping at the deepest part
+// that exists so missing values point at their parent.
+function rangeForPath(document: YAML.Document, path: ScenePath): [number, number] {
+  let node: YamlNode = document.contents;
+  let range = headRange(node) ?? [0, 0];
+  for (const key of path) {
+    if (YAML.isMap(node)) {
+      const keyOf = (item: YAML.Pair) => YAML.isScalar(item.key) ? String(item.key.value) : undefined;
+      const pair = node.items.find((item) => keyOf(item) === String(key))
+        ?? node.items.find((item) => SPELLINGS[keyOf(item) ?? ''] === String(key));
+      if (!pair) {
+        break;
+      }
+      range = (YAML.isScalar(pair.value) ? pairRange(pair) : nodeRange(pair.key)) ?? range;
+      node = pair.value;
+    } else if (YAML.isSeq(node) && typeof key === 'number' && key < node.items.length) {
+      node = node.items[key];
+      range = headRange(node) ?? range;
+    } else {
+      break;
+    }
+  }
+  return range;
+}
+
+const yamlDiagnostic = (severity: SceneDiagnostic['severity']) => (error: YAML.YAMLError): SceneDiagnostic => ({
+  from: error.pos[0],
+  to: error.pos[1],
+  severity,
+  message: error.message,
+});
+
+export type ParsedScene = {
+  scene: SceneDefinition;
+  warnings: SceneDiagnostic[];
+};
+
+// Parses a definition, reporting mistakes with their positions in the text.
+export function parseSceneWithDiagnostics(text: string): ParsedScene {
+  if (!text.trim()) {
+    return { scene: { ...fallback, shading: { mode: 'paint' } }, warnings: [] };
+  }
+  const document = YAML.parseDocument(text, { prettyErrors: false });
+  const lineOf = (offset: number) => text.slice(0, offset).split('\n').length;
+  const warnings = document.warnings.map(yamlDiagnostic('warning'));
+  if (document.errors.length > 0) {
+    const [first] = document.errors;
+    throw new SceneError(`Line ${lineOf(first.pos[0])}: ${first.message}`, [
+      ...document.errors.map(yamlDiagnostic('error')),
+      ...warnings,
+    ]);
+  }
   try {
-    parsed = YAML.parse(rawText);
+    return { scene: sceneFromValue(document.toJS()), warnings };
   } catch (error) {
-    throw new Error(error instanceof Error ? error.message : 'Invalid YAML');
+    const message = error instanceof Error ? error.message : String(error);
+    const [from, to] = error instanceof PathError ? rangeForPath(document, error.path) : headRange(document.contents) ?? [0, 0];
+    throw new SceneError(`Line ${lineOf(from)}: ${message}`, [{ from, to, severity: 'error', message }, ...warnings]);
   }
+}
 
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+export function parseScene(text: string): SceneDefinition {
+  return parseSceneWithDiagnostics(text).scene;
+}
+
+function sceneFromValue(value: unknown): SceneDefinition {
+  const parsed = normaliseSpellings(value);
+  if (!isRecord(parsed)) {
     throw new Error('Scene definition must be a YAML object');
   }
+  checkKeys(parsed, DEFINITION);
 
-  const sceneRoot = parsed as Record<string, unknown>;
+  const sceneRoot = parsed;
   const viewNode = sceneRoot.view && typeof sceneRoot.view === 'object' && !Array.isArray(sceneRoot.view)
     ? (sceneRoot.view as Record<string, unknown>)
     : {};
@@ -1021,9 +1302,14 @@ export function parseScene(text: string): SceneDefinition {
   // may refer to the others as long as there is no loop.
   const cells = new Map<string, () => number>();
   const variables: Variables = (name) => cells.get(name)?.();
-  const resolvedView = lazy('view.resolution', () => resolveView(viewNode, variables));
-  const xRange = lazy('view.coordinates.x', () => parseAxisRange(coordinatesNode.x, fallback.view.coordinates.x, variables));
-  const yRange = lazy('view.coordinates.y', () => parseAxisRange(coordinatesNode.y, fallback.view.coordinates.y, variables));
+  const resolvedView = lazy('view.resolution', () => atPath(['view'], () => resolveView(viewNode, variables)));
+  const axis = (key: 'x' | 'y') => {
+    const path = ['view', 'coordinates', key];
+    return lazy(`view.coordinates.${key}`, () => atPath(path, () =>
+      parseAxisRange(coordinatesNode[key], fallback.view.coordinates[key], variables, path)));
+  };
+  const xRange = axis('x');
+  const yRange = axis('y');
   const viewValues: Record<string, () => number> = {
     'view.left': () => xRange().from,
     'view.right': () => xRange().to,
@@ -1033,6 +1319,8 @@ export function parseScene(text: string): SceneDefinition {
     'view.height': () => yRange().to - yRange().from,
     'view.centre.x': () => (xRange().from + xRange().to) / 2,
     'view.centre.y': () => (yRange().from + yRange().to) / 2,
+    'view.center.x': () => (xRange().from + xRange().to) / 2,
+    'view.center.y': () => (yRange().from + yRange().to) / 2,
     'view.aspect': () => resolvedView().aspect,
     'view.pixels.width': () => resolvedView().resolution.width,
     'view.pixels.height': () => resolvedView().resolution.height,
@@ -1040,39 +1328,41 @@ export function parseScene(text: string): SceneDefinition {
     'view.pixel.height': () => (yRange().to - yRange().from) / resolvedView().resolution.height,
   };
   Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
-  parseVariableDefinitions(sceneRoot.variables)
-    .forEach((value, name) => cells.set(name, variableCell(name, value, variables)));
+  atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))
+    .forEach((definition, name) => cells.set(name, variableCell(name, definition, variables)));
   // Evaluate everything so mistakes in unused variables are still reported.
   cells.forEach((cell) => cell());
 
   const frameNode = sceneRoot.frame && typeof sceneRoot.frame === 'object' && !Array.isArray(sceneRoot.frame)
     ? (sceneRoot.frame as Record<string, unknown>)
     : {};
+    const frameSize = (key: 'width' | 'radius' | 'padding' | 'margin') =>
+      atPath(['frame', key], () => asNonNegativeNumber(frameNode[key], fallback.frame[key], variables));
     const frame: FrameDefinition = {
-      width: asNonNegativeNumber(frameNode.width, fallback.frame.width, variables),
-      radius: asNonNegativeNumber(frameNode.radius, fallback.frame.radius, variables),
-      color: typeof frameNode.color === 'string' ? frameNode.color : fallback.frame.color,
+      width: frameSize('width'),
+      radius: frameSize('radius'),
+      color: typeof frameNode.colour === 'string' ? frameNode.colour : fallback.frame.color,
       wall: typeof frameNode.wall === 'string' ? frameNode.wall : fallback.frame.wall,
       background: typeof frameNode.background === 'string' ? frameNode.background : fallback.frame.background,
-      padding: asNonNegativeNumber(frameNode.padding, fallback.frame.padding, variables),
-      margin: asNonNegativeNumber(frameNode.margin, fallback.frame.margin, variables),
+      padding: frameSize('padding'),
+      margin: frameSize('margin'),
     };
     const coordinates = { x: xRange(), y: yRange() };
 
-    const shading = parseShading(sceneRoot.shading);
+    const shading = atPath(['shading'], () => parseShading(sceneRoot.shading));
     const density = shading.mode === 'density';
     if (density && sceneRoot.seed !== undefined) {
-      throw new Error('seed is not used with density shading');
+      throw new PathError('seed is not used with density shading', ['seed']);
     }
     if (!Array.isArray(sceneRoot.scene)) {
-      throw new Error('scene must be a list of typed items');
+      throw new PathError('scene must be a list of typed items', ['scene']);
     }
     if (
       sceneRoot.seed !== undefined
       && typeof sceneRoot.seed !== 'string'
       && (!sceneRoot.seed || typeof sceneRoot.seed !== 'object' || Array.isArray(sceneRoot.seed))
     ) {
-      throw new Error('seed must be a colour string or an object');
+      throw new PathError('seed must be a colour string or an object', ['seed']);
     }
     const seedNode = sceneRoot.seed && typeof sceneRoot.seed === 'object' && !Array.isArray(sceneRoot.seed)
       ? (sceneRoot.seed as Record<string, unknown>)
@@ -1099,8 +1389,8 @@ export function parseScene(text: string): SceneDefinition {
       seed: {
         color: typeof sceneRoot.seed === 'string'
           ? sceneRoot.seed
-          : typeof seedNode.color === 'string' ? seedNode.color : fallback.seed.color,
-        opacity: clamp(asNumber(seedNode.opacity, fallback.seed.opacity, variables), 0, 1),
+          : typeof seedNode.colour === 'string' ? seedNode.colour : fallback.seed.color,
+        opacity: clamp(atPath(['seed', 'opacity'], () => asNumber(seedNode.opacity, fallback.seed.opacity, variables)), 0, 1),
       },
       view: {
         ...resolvedView(),

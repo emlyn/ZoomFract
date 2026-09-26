@@ -4,7 +4,8 @@
 
 ZoomFract is a dependency-light browser application for defining recursive
 graphics in YAML and rendering them on an HTML canvas. It uses Vite,
-TypeScript, plain DOM APIs, CSS, and the `yaml` package. There is no framework,
+TypeScript, plain DOM APIs, CSS, the `yaml` package, and CodeMirror 6 for the
+definition editor. There is no framework,
 backend, test runner, linter, or formatter configured yet.
 
 Keep the implementation simple and functional. Reuse small pure helpers for
@@ -34,7 +35,9 @@ Do not commit generated or local artifacts:
 
 - `src/main.ts`: UI creation, definition loading, render-worker orchestration,
   progress, and edit-mode outlines on the display canvas.
-- `src/scene.ts`: scene types, YAML parsing, and geometry resolution.
+- `src/scene.ts`: scene types, YAML parsing, error locations, and geometry
+  resolution.
+- `src/editor.ts`: CodeMirror definition editor with inline diagnostics.
 - `src/expression.ts`: arithmetic expression parser and evaluator.
 - `src/guide.html`: user guide for the definition language, shown from the
   panel. Keep it in simple English and update it whenever the scene language
@@ -61,7 +64,7 @@ files unless extracting a module clearly reduces complexity.
 - The top-level model contains `variables`, `frame`, `view`, `seed`,
   `shading`, and `scene`.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
-  border `color`, outer `wall`, inner `background`, canvas `padding`, and
+  border `colour`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
 - `view.aspect` is width divided by height.
 - Resolution may specify `width`, `height`, or both. Infer the missing
@@ -86,6 +89,15 @@ files unless extracting a module clearly reduces complexity.
 - Do not add or preserve legacy configuration aliases unless explicitly
   requested. This is a lightweight prototype, so prefer one clear current
   syntax over migration machinery.
+- British and American spellings are both accepted for `colour`/`color`,
+  `colours`/`colors`, and `centre`/`center` (`SPELLINGS` in `scene.ts`,
+  applied before parsing). The parser reads the British names, which are
+  also the ones suggested for misspellings. Using both in one place is an
+  error.
+- Every setting name is checked against the `DEFINITION` shape in `scene.ts`;
+  unknown keys are errors with a closest-name suggestion. Add new settings
+  there as well as in the parser.
+- Line endings are LF everywhere (enforced by `.gitattributes`).
 - Built-in examples use stable IDs and ordinary YAML files. Keep the registry
   metadata in `src/examples.ts`.
 - `?example=<id>` loads a built-in definition. `?source=<http-url>` loads a
@@ -119,7 +131,7 @@ files unless extracting a module clearly reduces complexity.
 
 ### Rectangles
 
-- `rect` is borderless by default and uses `color` (default black) plus
+- `rect` is borderless by default and uses `colour` (default black) plus
   optional `opacity`.
 - Geometry may be determined from a sufficient combination of `centre`,
   width, height, named corners, and rotation.
@@ -150,8 +162,8 @@ files unless extracting a module clearly reduces complexity.
 
 - Optional top-level `shading` has `mode: paint` (default, normal
   compositing) or `mode: density`. Density also accepts `scale` (`log`
-  default, `sqrt`, `linear`) and `colors` (2 to 8 stops, few hits to many);
-  these are errors in paint mode. `colors` is a list (spread evenly) or a
+  default, `sqrt`, `linear`) and `colours` (2 to 8 stops, few hits to many);
+  these are errors in paint mode. `colours` is a list (spread evenly) or a
   mapping from positions to colours, where a number is an absolute hit count
   and `N%` is a fraction of the scaled range up to the normalising count.
   Count positions are converted after normalisation and all stops are
@@ -161,7 +173,7 @@ files unless extracting a module clearly reduces complexity.
   covered pixels, onto the gradient. Zero-hit pixels stay transparent;
   counts below one fade out.
 - In density mode rects use `weight` (positive, default 1) instead of
-  `color`/`opacity`; zoom `opacity` and `seed` are errors. `weight` in
+  `colour`/`opacity`; zoom `opacity` and `seed` are errors. `weight` in
   paint mode is an error.
 - Density is WebGL2 only and needs `EXT_color_buffer_float`. It draws
   straight into R32F (or R16F without float blending/filtering) textures
@@ -255,6 +267,13 @@ files unless extracting a module clearly reduces complexity.
 - The right panel edge is draggable. The corner control must track resizing
   immediately, without its normal horizontal animation.
 - Keep the YAML editor monospace and tall enough to show useful context.
+- The editor (`src/editor.ts`) is CodeMirror 6 with YAML highlighting,
+  space-only Tab indenting, indent markers, hanging indents for wrapped
+  lines (so continuation rows stay right of the guides), and a linter that runs
+  `parseSceneWithDiagnostics` as you type. Scene errors are tagged with the
+  definition path being parsed (`atPath`, innermost wins) and mapped to text
+  ranges with the `yaml` document, so new checks should throw inside the
+  right `atPath` or throw a `PathError` for the offending key.
 - The Guide link beside the scene definition label opens the definition guide
   in a floating panel beside the sidebar. Escape or its close button hides it.
   It hides with the sidebar and reappears with it if it was open.

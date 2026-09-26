@@ -36,7 +36,18 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     <code>red</code> or <code>"#336699"</code> (put quotes around colours that start with
     <code>#</code>, or YAML treats them as comments).
   </p>
-  <p>Any mistake is shown in red under the buttons, and nothing is drawn until it is fixed.</p>
+  <p>
+    This guide uses British spellings, but American ones also work:
+    <code>color</code> for <code>colour</code>, <code>colors</code> for
+    <code>colours</code>, and <code>center</code> for <code>centre</code> (including in
+    references like <code>base.center</code> and <code>view.center.x</code>). A misspelt
+    or unknown setting is a mistake, and the message suggests the closest known name.
+  </p>
+  <p>
+    Mistakes are underlined in the editor as you type; hover over one to see what is
+    wrong. When you apply a definition with a mistake, the message is also shown in red
+    under the buttons, and nothing is drawn until it is fixed. Press Tab to indent.
+  </p>
 </section>
 
 <section id="guide-view">
@@ -71,7 +82,7 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   <pre><code>frame:
   width: 12            # border thickness
   radius: 6            # rounded corners
-  color: "#444"        # border colour
+  colour: "#444"        # border colour
   wall: "#ddd"         # colour of the page around the frame
   background: "#fff"   # colour behind the picture
   padding: 12          # space between border and picture
@@ -103,10 +114,10 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   width: 2
   height: 1
   rotation: 30         # degrees, clockwise
-  color: "#d97757"
+  colour: "#d97757"
   opacity: 0.8         # 0 is invisible, 1 is solid</code></pre>
   <p>
-    Rectangles are filled with <code>color</code> (black by default) and have no outline.
+    Rectangles are filled with <code>colour</code> (black by default) and have no outline.
     <code>opacity</code> defaults to 1. With
     <a href="#guide-shading">density shading</a>, use <code>weight</code> instead.
   </p>
@@ -221,7 +232,7 @@ centre: view.centre       # a point of the whole view</code></pre>
   <pre><code>seed: "#111827"
 
 seed:
-  color: "#111827"
+  colour: "#111827"
   opacity: 0.9</code></pre>
 </section>
 
@@ -235,14 +246,14 @@ seed:
   <pre><code>shading:
   mode: density              # paint (default) or density
   scale: log                 # log (default), sqrt or linear
-  colors: [white, orange, "#1e1b4b"]</code></pre>
+  colours: [white, orange, "#1e1b4b"]</code></pre>
   <ul>
     <li>
-      <code>colors</code> has 2 to 8 colours, from few hits to many hits. A list spreads
+      <code>colours</code> has 2 to 8 colours, from few hits to many hits. A list spreads
       them evenly. To choose where each colour goes, map positions to colours instead.
       A plain number is a hit count, and a percentage is how far along the scale it is,
       where 100% is the busiest pixels:
-      <pre><code>colors:
+      <pre><code>colours:
   1: "#fef3c7"     # covered once
   3: orange        # covered three times
   60%: "#b91c1c"
@@ -261,7 +272,7 @@ seed:
     </li>
   </ul>
   <p>
-    Rectangles do not have <code>color</code> or <code>opacity</code> in this mode. Instead,
+    Rectangles do not have <code>colour</code> or <code>opacity</code> in this mode. Instead,
     <code>weight</code> (1 by default) says how much each rectangle counts. Zoom
     <code>opacity</code> and <code>seed</code> are not used. Density shading needs the
     WebGL2 renderer.

@@ -1,7 +1,7 @@
 frame:
   width: 12
   radius: 6
-  color: "#444"
+  colour: "#444"
   wall: "#ddd"
   background: "#fff"
   padding: 12
@@ -10,7 +10,7 @@ frame:
 shading:
   mode: density
   scale: log
-  colors:  # hit count or % of busiest
+  colours:  # hit count or % of busiest
     0%: "#fef3c7"
     33.333%: "#f59e0b"
     66.667%: "#b91c1c"

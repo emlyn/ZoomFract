@@ -1,7 +1,7 @@
 frame:
   width: 10
   radius: 18
-  color: "#553c2d"
+  colour: "#553c2d"
   wall: "#d8c9b8"
   background: "#fffaf2"
   padding: 18
@@ -16,7 +16,7 @@ view:
     y: [-1, 1]
 
 seed:
-  color: "#d1495b"
+  colour: "#d1495b"
 
 scene:
   - type: rect
@@ -25,7 +25,7 @@ scene:
     width: 0.16
     height: 0.16
     rotation: -18deg
-    color: "#edae49"
+    colour: "#edae49"
   - type: zoom
     name: spiral
     centre: [0, 0]

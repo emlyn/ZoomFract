@@ -1,7 +1,7 @@
 frame:
   width: 12
   radius: 6
-  color: "#444"
+  colour: "#444"
   wall: "#ddd"
   background: "#fff"
   padding: 12
@@ -16,7 +16,7 @@ view:
     y: [0, 3]
 
 seed:
-  color: "#000"
+  colour: "#000"
 
 scene:
   - type: zoom

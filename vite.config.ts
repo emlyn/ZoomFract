@@ -10,6 +10,10 @@ export default defineConfig({
     port: 4173,
   },
   base: './',
+  build: {
+    // The CodeMirror editor makes the single app bundle about 540 kB.
+    chunkSizeWarningLimit: 800,
+  },
   worker: {
     format: 'es',
   },
