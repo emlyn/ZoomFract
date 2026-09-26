@@ -18,6 +18,8 @@ export type RectElement = SceneElement & {
   rotation: number;
   color: string;
   opacity: number;
+  // Hits added per covered pixel in density shading.
+  weight: number;
 };
 
 export type ZoomElement = SceneElement & {
@@ -47,7 +49,72 @@ export type FrameDefinition = {
   margin: number;
 };
 
+export type DensityScale = 'log' | 'sqrt' | 'linear';
+
+// A gradient stop is placed either at an absolute hit count or at a fraction
+// of the way along the scaled range, up to the normalising count.
+export type ColorStop = {
+  at: { kind: 'count'; value: number } | { kind: 'fraction'; value: number };
+  color: string;
+};
+
+// Paint draws coloured shapes. Density counts how many copies of the shapes
+// cover each pixel and colours pixels by that count.
+export type Shading =
+  | { mode: 'paint' }
+  | { mode: 'density'; scale: DensityScale; colors: ColorStop[] };
+
+export const MAXIMUM_DENSITY_COLORS = 8;
+const DEFAULT_DENSITY_COLORS = ['#fef3c7', '#c2410c', '#1c1917'];
+
+const evenStops = (colors: string[]): ColorStop[] => colors.map((color, index) => ({
+  at: { kind: 'fraction', value: index / (colors.length - 1) },
+  color,
+}));
+
+function parseStopPosition(key: string): ColorStop['at'] {
+  const percent = /^\s*(\d+(?:\.\d+)?)\s*%\s*$/.exec(key);
+  if (percent) {
+    const value = Number(percent[1]);
+    if (value > 100) {
+      throw new Error(`shading colors position "${key}" must be at most 100%`);
+    }
+    return { kind: 'fraction', value: value / 100 };
+  }
+  const count = Number(key);
+  if (key.trim() === '' || !Number.isFinite(count) || count < 0) {
+    throw new Error(`shading colors position "${key}" must be a hit count or a percentage such as 50%`);
+  }
+  return { kind: 'count', value: count };
+}
+
+// Colours are a list spread evenly, or a mapping from hit counts or
+// percentages to colours.
+function parseColorStops(colors: unknown): ColorStop[] {
+  const range = `2 to ${MAXIMUM_DENSITY_COLORS}`;
+  if (Array.isArray(colors)) {
+    if (colors.length < 2 || colors.length > MAXIMUM_DENSITY_COLORS || !colors.every((color) => typeof color === 'string')) {
+      throw new Error(`shading colors must be a list of ${range} colours`);
+    }
+    return evenStops(colors);
+  }
+  if (!colors || typeof colors !== 'object') {
+    throw new Error(`shading colors must be a list or mapping of ${range} colours`);
+  }
+  const entries = Object.entries(colors);
+  if (entries.length < 2 || entries.length > MAXIMUM_DENSITY_COLORS) {
+    throw new Error(`shading colors must map ${range} positions to colours`);
+  }
+  return entries.map(([key, color]) => {
+    if (typeof color !== 'string') {
+      throw new Error(`shading colors position "${key}" must have a colour`);
+    }
+    return { at: parseStopPosition(key), color };
+  });
+}
+
 export type SceneDefinition = {
+  shading: Shading;
   frame: FrameDefinition;
   seed: {
     color: string;
@@ -633,9 +700,20 @@ function parseRectElement(
   elementName: string,
   resolvePoint: PointResolver,
   variables: Variables,
+  density: boolean,
 ): RectElement {
   if (rect.scale !== undefined || rect.align !== undefined) {
     throw new Error(`${elementName}: scale and align are only supported on zooms`);
+  }
+  if (density && (rect.color !== undefined || rect.opacity !== undefined)) {
+    throw new Error(`${elementName}: color and opacity are not used with density shading; use weight instead`);
+  }
+  if (!density && rect.weight !== undefined) {
+    throw new Error(`${elementName}: weight is only used with density shading`);
+  }
+  const weight = rect.weight === undefined ? 1 : asPositiveNumber(rect.weight, variables);
+  if (!weight) {
+    throw new Error(`${elementName} weight must be a positive number`);
   }
   const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables);
   const opacity = clamp(asNumber(rect.opacity, 1, variables), 0, 1);
@@ -646,6 +724,7 @@ function parseRectElement(
     ...geometry,
     color: typeof rect.color === 'string' ? rect.color : '#000',
     opacity,
+    weight,
   };
 }
 
@@ -657,7 +736,11 @@ function parseZoomElement(
   aspect: number,
   view: ViewFrame,
   variables: Variables,
+  density: boolean,
 ): ZoomElement {
+  if (density && zoom.opacity !== undefined) {
+    throw new Error(`${elementName}: opacity is not used with density shading`);
+  }
   const align = zoom.align === undefined ? [] : parseAlignPairs(zoom.align, resolvePoint, elementName, variables);
   return {
     kind: 'zoom',
@@ -724,6 +807,7 @@ function resolveSceneElements(
   aspect: number,
   view: ViewFrame,
   variables: Variables,
+  density: boolean,
 ): DrawableElement[] {
   const indexByName = new Map(items.flatMap((item, index) => item.name ? [[item.name, index] as const] : []));
   const resolved: (DrawableElement | undefined)[] = [];
@@ -775,8 +859,8 @@ function resolveSceneElements(
     resolving.add(index);
     const resolvePoint = pointResolverFor(index);
     const element = item.type === 'rect'
-      ? parseRectElement(item.record, item.name, item.label, resolvePoint, variables)
-      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables);
+      ? parseRectElement(item.record, item.name, item.label, resolvePoint, variables, density)
+      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density);
     resolving.delete(index);
     resolved[index] = element;
     return element;
@@ -841,6 +925,37 @@ function parseVariableDefinitions(node: unknown): Map<string, number | string> {
   return definitions;
 }
 
+function parseShading(node: unknown): Shading {
+  if (node === undefined) {
+    return { mode: 'paint' };
+  }
+  if (!node || typeof node !== 'object' || Array.isArray(node)) {
+    throw new Error('shading must be an object');
+  }
+  const { mode = 'paint', scale, colors, ...rest } = node as Record<string, unknown>;
+  const unknown = Object.keys(rest);
+  if (unknown.length > 0) {
+    throw new Error(`shading has unknown setting "${unknown[0]}"`);
+  }
+  if (mode === 'paint') {
+    if (scale !== undefined || colors !== undefined) {
+      throw new Error('shading scale and colors are only used with density mode');
+    }
+    return { mode };
+  }
+  if (mode !== 'density') {
+    throw new Error('shading mode must be paint or density');
+  }
+  if (scale !== undefined && scale !== 'log' && scale !== 'sqrt' && scale !== 'linear') {
+    throw new Error('shading scale must be log, sqrt, or linear');
+  }
+  return {
+    mode,
+    scale: scale ?? 'log',
+    colors: colors === undefined ? evenStops(DEFAULT_DENSITY_COLORS) : parseColorStops(colors),
+  };
+}
+
 function variableCell(name: string, value: number | string, lookup: Variables): () => number {
   return lazy(`Variable "${name}"`, () => {
     try {
@@ -880,7 +995,7 @@ export function parseScene(text: string): SceneDefinition {
 
   const rawText = text.trim();
   if (!rawText) {
-    return fallback;
+    return { ...fallback, shading: { mode: 'paint' } };
   }
 
   let parsed: unknown;
@@ -944,6 +1059,11 @@ export function parseScene(text: string): SceneDefinition {
     };
     const coordinates = { x: xRange(), y: yRange() };
 
+    const shading = parseShading(sceneRoot.shading);
+    const density = shading.mode === 'density';
+    if (density && sceneRoot.seed !== undefined) {
+      throw new Error('seed is not used with density shading');
+    }
     if (!Array.isArray(sceneRoot.scene)) {
       throw new Error('scene must be a list of typed items');
     }
@@ -970,9 +1090,11 @@ export function parseScene(text: string): SceneDefinition {
       resolvedView().aspect,
       viewFrame,
       variables,
+      density,
     );
 
     return {
+      shading,
       frame,
       seed: {
         color: typeof sceneRoot.seed === 'string'

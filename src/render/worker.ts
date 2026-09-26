@@ -118,9 +118,16 @@ function render(request: RenderRequest) {
 
   const startedAt = performance.now();
   const { width, height } = request.scene.view.resolution;
-  const candidates: RendererName[] = request.options.renderer === 'webgl'
-    ? ['webgl', 'canvas2d']
-    : ['canvas2d'];
+  const density = request.scene.shading.mode === 'density';
+  if (density && request.options.renderer !== 'webgl') {
+    post({ type: 'error', message: 'Density shading needs the WebGL2 renderer' });
+    return;
+  }
+  const candidates: RendererName[] = density
+    ? ['webgl']
+    : request.options.renderer === 'webgl'
+      ? ['webgl', 'canvas2d']
+      : ['canvas2d'];
   let fallbackReason: string | undefined;
 
   for (const renderer of candidates) {

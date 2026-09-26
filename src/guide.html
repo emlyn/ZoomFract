@@ -9,6 +9,7 @@
   <a href="#guide-zoom">Zooms</a>
   <a href="#guide-align">Alignment</a>
   <a href="#guide-seed">Seed</a>
+  <a href="#guide-shading">Density shading</a>
   <a href="#guide-expressions">Expressions</a>
   <a href="#guide-variables">Variables</a>
   <a href="#guide-values">View values</a>
@@ -27,6 +28,7 @@
 frame:      # the border drawn around the picture
 view:       # picture size and coordinates
 seed:       # colour of the smallest copies
+shading:    # colour by paint (normal) or by density
 scene:      # the shapes and zooms, in drawing order</code></pre>
   <p>
     Indentation matters in YAML. Lists use <code>-</code> at the start of each item.
@@ -105,7 +107,8 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   opacity: 0.8         # 0 is invisible, 1 is solid</code></pre>
   <p>
     Rectangles are filled with <code>color</code> (black by default) and have no outline.
-    <code>opacity</code> defaults to 1.
+    <code>opacity</code> defaults to 1. With
+    <a href="#guide-shading">density shading</a>, use <code>weight</code> instead.
   </p>
 </section>
 
@@ -177,7 +180,7 @@ centre: view.centre       # a point of the whole view</code></pre>
       together with <code>width</code> or <code>height</code>.
     </li>
     <li>If only <code>width</code> or <code>height</code> is given, the other comes from the view's aspect, so the copy is not stretched.</li>
-    <li><code>opacity</code> fades the copy.</li>
+    <li><code>opacity</code> fades the copy (not with density shading).</li>
   </ul>
 </section>
 
@@ -220,6 +223,49 @@ centre: view.centre       # a point of the whole view</code></pre>
 seed:
   color: "#111827"
   opacity: 0.9</code></pre>
+</section>
+
+<section id="guide-shading">
+  <h3>Density shading</h3>
+  <p>
+    Normally, shapes are painted on top of each other, so busy areas can turn solid.
+    Density shading instead counts how many shapes and copies cover each pixel, and
+    colours the pixel by that count. This keeps detail where many copies overlap.
+  </p>
+  <pre><code>shading:
+  mode: density              # paint (default) or density
+  scale: log                 # log (default), sqrt or linear
+  colors: [white, orange, "#1e1b4b"]</code></pre>
+  <ul>
+    <li>
+      <code>colors</code> has 2 to 8 colours, from few hits to many hits. A list spreads
+      them evenly. To choose where each colour goes, map positions to colours instead.
+      A plain number is a hit count, and a percentage is how far along the scale it is,
+      where 100% is the busiest pixels:
+      <pre><code>colors:
+  1: "#fef3c7"     # covered once
+  3: orange        # covered three times
+  60%: "#b91c1c"
+  100%: "#1e1b4b"</code></pre>
+      Below the first position the first colour is used, and above the last position
+      the last colour is used.
+    </li>
+    <li>
+      <code>scale</code> controls how counts become colours. <code>log</code> shows the
+      most detail in busy areas, <code>linear</code> the least.
+    </li>
+    <li>Pixels that nothing covers stay transparent.</li>
+    <li>
+      Counts are compared with the busiest pixels in the picture, so the colours adjust
+      to the scene automatically.
+    </li>
+  </ul>
+  <p>
+    Rectangles do not have <code>color</code> or <code>opacity</code> in this mode. Instead,
+    <code>weight</code> (1 by default) says how much each rectangle counts. Zoom
+    <code>opacity</code> and <code>seed</code> are not used. Density shading needs the
+    WebGL2 renderer.
+  </p>
 </section>
 
 <section id="guide-expressions">

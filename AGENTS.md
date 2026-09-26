@@ -58,8 +58,8 @@ files unless extracting a module clearly reduces complexity.
 
 ## Scene language invariants
 
-- The top-level model contains `variables`, `frame`, `view`, `seed`, and
-  `scene`.
+- The top-level model contains `variables`, `frame`, `view`, `seed`,
+  `shading`, and `scene`.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
   border `color`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
@@ -145,6 +145,29 @@ files unless extracting a module clearly reduces complexity.
   leaves are transparent.
 - Keep quality controls out of the scene definition. Renderer, max
   recursion, levels, and supersampling are application quality settings.
+
+### Density shading
+
+- Optional top-level `shading` has `mode: paint` (default, normal
+  compositing) or `mode: density`. Density also accepts `scale` (`log`
+  default, `sqrt`, `linear`) and `colors` (2 to 8 stops, few hits to many);
+  these are errors in paint mode. `colors` is a list (spread evenly) or a
+  mapping from positions to colours, where a number is an absolute hit count
+  and `N%` is a fraction of the scaled range up to the normalising count.
+  Count positions are converted after normalisation and all stops are
+  sorted by position; colours clamp beyond the first and last stops.
+- Density counts how many rects and copies cover each working pixel, maps
+  the count through the scale, normalised by the 99.9th percentile of
+  covered pixels, onto the gradient. Zero-hit pixels stay transparent;
+  counts below one fade out.
+- In density mode rects use `weight` (positive, default 1) instead of
+  `color`/`opacity`; zoom `opacity` and `seed` are errors. `weight` in
+  paint mode is an error.
+- Density is WebGL2 only and needs `EXT_color_buffer_float`. It draws
+  straight into R32F (or R16F without float blending/filtering) textures
+  with additive blending, uses plain-average mips, and has no Canvas 2D
+  fallback; selecting Canvas 2D is an error. Edit mode keeps outlines but
+  does not fade copies.
 
 ## Rendering invariants
 

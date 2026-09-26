@@ -1,4 +1,4 @@
-import type { SceneDefinition, Vec2 } from '../scene';
+import { MAXIMUM_DENSITY_COLORS, type SceneDefinition, type Vec2 } from '../scene';
 import {
   EDIT_MODE_ZOOM_OPACITY,
   type FrameCallbacks,
@@ -104,6 +104,53 @@ void main() {
   outColor = total / float(factor * factor);
 }`;
 
+// Counts are normalised by this percentile of covered pixels, measured on a
+// mip level no larger than this, so a few extreme pixels do not dim the rest.
+const DENSITY_PERCENTILE = 0.999;
+const DENSITY_SAMPLE_SIZE = 512;
+const DENSITY_SCALES = { log: 0, sqrt: 1, linear: 2 } as const;
+
+const shapeCount = (scale: keyof typeof DENSITY_SCALES, count: number) =>
+  scale === 'log' ? Math.log1p(count) : scale === 'sqrt' ? Math.sqrt(count) : count;
+
+// Maps hit counts to colours per working pixel, then averages them to the
+// output. Counts below one fade out, so partly covered edges stay smooth.
+const DENSITY_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D source;
+uniform int factor;
+uniform int scale;
+uniform float normaliser;
+uniform vec4 stops[${MAXIMUM_DENSITY_COLORS}];
+uniform float positions[${MAXIMUM_DENSITY_COLORS}];
+uniform int stopCount;
+out vec4 outColor;
+float shape(float count) {
+  return scale == 0 ? log(1.0 + count) : scale == 1 ? sqrt(count) : count;
+}
+vec4 gradient(float t) {
+  vec4 color = stops[0];
+  for (int i = 1; i < stopCount; i++) {
+    float start = positions[i - 1];
+    float span = positions[i] - start;
+    color = t <= start ? color : span <= 0.0 ? stops[i] : mix(stops[i - 1], stops[i], min((t - start) / span, 1.0));
+  }
+  return color;
+}
+void main() {
+  ivec2 origin = ivec2(gl_FragCoord.xy) * factor;
+  vec4 total = vec4(0.0);
+  for (int y = 0; y < factor; y++) {
+    for (int x = 0; x < factor; x++) {
+      float count = texelFetch(source, origin + ivec2(x, y), 0).r;
+      if (count > 0.0) {
+        total += gradient(shape(count) / shape(normaliser)) * min(count, 1.0);
+      }
+    }
+  }
+  outColor = total / float(factor * factor);
+}`;
+
 function createColorParser(): (color: string) => Rgba {
   const context = new OffscreenCanvas(1, 1).getContext('2d', { willReadFrequently: true })!;
   const cache = new Map<string, Rgba>();
@@ -144,11 +191,16 @@ function compileProgram(gl: WebGL2RenderingContext, vertexSource: string, fragme
   return program;
 }
 
-function createLevelTexture(gl: WebGL2RenderingContext, width: number, height: number): LevelTexture {
+function createLevelTexture(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  format: number,
+): LevelTexture {
   const levels = Math.floor(Math.log2(Math.max(width, height))) + 1;
   const texture = gl.createTexture()!;
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texStorage2D(gl.TEXTURE_2D, levels, gl.RGBA8, width, height);
+  gl.texStorage2D(gl.TEXTURE_2D, levels, format, width, height);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -162,6 +214,21 @@ function createLevelTexture(gl: WebGL2RenderingContext, width: number, height: n
     );
   }
   return { texture, levels };
+}
+
+// Density counts need float textures that can be drawn to, blended, and
+// filtered. Full floats avoid rounding large counts when they are supported.
+function densityFormat(gl: WebGL2RenderingContext): number {
+  if (!gl.getExtension('EXT_color_buffer_float')) {
+    throw new Error('Density shading needs WebGL2 floating-point render targets, which are not available');
+  }
+  return gl.getExtension('EXT_float_blend') && gl.getExtension('OES_texture_float_linear') ? gl.R32F : gl.R16F;
+}
+
+// The hit count below which the given fraction of covered pixels fall.
+function countPercentile(values: Float32Array, fraction: number): number {
+  const counts = values.filter((_, index) => index % 4 === 0).filter((count) => count > 0).sort();
+  return counts.length === 0 ? 1 : Math.max(counts[Math.min(counts.length - 1, Math.floor(counts.length * fraction))], 1e-6);
 }
 
 export function isWebglAvailable(): boolean {
@@ -200,22 +267,31 @@ export function renderWebgl(
     throw new Error(`WebGL2 is limited to ${maximumSize}px textures; this render needs ${Math.max(width, height)}px`);
   }
 
+  const shading = scene.shading;
+  const density = shading.mode === 'density';
+  const format = density ? densityFormat(gl) : gl.RGBA8;
   const parseColor = createColorParser();
   const sceneProgram = compileProgram(gl, SCENE_VERTEX_SHADER, SCENE_FRAGMENT_SHADER);
   const mipProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, MIP_FRAGMENT_SHADER);
-  const resolveProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, RESOLVE_FRAGMENT_SHADER);
-  const textures = [createLevelTexture(gl, width, height), createLevelTexture(gl, width, height)];
+  const resolveProgram = density
+    ? compileProgram(gl, FULLSCREEN_VERTEX_SHADER, DENSITY_FRAGMENT_SHADER)
+    : compileProgram(gl, FULLSCREEN_VERTEX_SHADER, RESOLVE_FRAGMENT_SHADER);
+  const textures = [createLevelTexture(gl, width, height, format), createLevelTexture(gl, width, height, format)];
   const levelFramebuffer = gl.createFramebuffer()!;
 
-  const samples = factor <= MSAA_MAXIMUM_SUPERSAMPLING
-    ? Math.min(MSAA_SAMPLES, gl.getParameter(gl.MAX_SAMPLES))
-    : 0;
-  const drawRenderbuffer = gl.createRenderbuffer()!;
-  gl.bindRenderbuffer(gl.RENDERBUFFER, drawRenderbuffer);
-  gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
-  const drawFramebuffer = gl.createFramebuffer()!;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
-  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, drawRenderbuffer);
+  // Painted levels are drawn with multisampling and copied into textures.
+  // Density levels are drawn straight into their float textures.
+  const drawFramebuffer = density ? null : gl.createFramebuffer()!;
+  if (drawFramebuffer) {
+    const samples = factor <= MSAA_MAXIMUM_SUPERSAMPLING
+      ? Math.min(MSAA_SAMPLES, gl.getParameter(gl.MAX_SAMPLES))
+      : 0;
+    const drawRenderbuffer = gl.createRenderbuffer()!;
+    gl.bindRenderbuffer(gl.RENDERBUFFER, drawRenderbuffer);
+    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, drawRenderbuffer);
+  }
 
   const vertexBuffer = gl.createBuffer()!;
   const vertexArray = gl.createVertexArray()!;
@@ -254,7 +330,26 @@ export function renderWebgl(
     }
   };
 
+  // Density vertices carry a hit weight in every channel: rectangles add their
+  // weight, leaves add the counts they sample, and terminal leaves add nothing.
+  const densityVertices = (items: UnrolledItem[], sampleSource: boolean) => {
+    const vertices: number[] = [];
+    for (const item of items) {
+      if (item.kind === 'rect') {
+        const element = scene.elements[item.elementIndex];
+        const weight = element.kind === 'rect' ? element.weight * item.alpha : 0;
+        pushPolygon(vertices, item.polygon, null, [weight, weight, weight, weight]);
+      } else if (sampleSource) {
+        pushPolygon(vertices, item.polygon, item.texCoords, [item.alpha, item.alpha, item.alpha, item.alpha]);
+      }
+    }
+    return new Float32Array(vertices);
+  };
+
   const sceneVertices = (items: UnrolledItem[], sampleSource: boolean) => {
+    if (density) {
+      return densityVertices(items, sampleSource);
+    }
     const vertices: number[] = [];
     for (const item of items) {
       if (item.kind === 'rect') {
@@ -290,13 +385,20 @@ export function renderWebgl(
     uniform: !settings.autoLevels,
     budget: UNROLL_BUDGET,
     minimumZoomPixels: settings.autoLevels ? UNROLL_MINIMUM_ZOOM_PIXELS : 0,
-    topLevelZoomOpacity: editMode ? EDIT_MODE_ZOOM_OPACITY : 1,
+    // Fading copies would change density counts; edit mode outlines are enough.
+    topLevelZoomOpacity: editMode && !density ? EDIT_MODE_ZOOM_OPACITY : 1,
   });
   // A leaf at generation g sampling the texture after F feedback levels ends
   // with seed zooms at generation g + F, so the shallowest leaf sets F.
   const feedbackLevelsFor = (levels: number) => Math.max(0, levels - finalUnroll.shallowestLeaf);
 
   const generateMips = ({ texture, levels }: LevelTexture) => {
+    if (density) {
+      // Plain averages keep the mean count over each texel.
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      return;
+    }
     gl.useProgram(mipProgram);
     gl.bindVertexArray(emptyVertexArray);
     gl.disable(gl.BLEND);
@@ -315,7 +417,12 @@ export function renderWebgl(
   };
 
   const drawLevel = (target: LevelTexture, source: LevelTexture | null, items: UnrolledItem[]) => {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
+    if (drawFramebuffer) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, levelFramebuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
+    }
     gl.viewport(0, 0, width, height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -323,12 +430,16 @@ export function renderWebgl(
     gl.uniform2f(gl.getUniformLocation(sceneProgram, 'resolution'), width, height);
     gl.bindTexture(gl.TEXTURE_2D, source?.texture ?? null);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    // Painting composites over what is below; density adds up hits.
+    gl.blendFunc(gl.ONE, density ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
     const vertices = cachedVertices(items, source !== null);
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
     gl.drawArrays(gl.TRIANGLES, 0, vertices.length / FLOATS_PER_VERTEX);
+    if (!drawFramebuffer) {
+      return;
+    }
 
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, drawFramebuffer);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, levelFramebuffer);
@@ -353,10 +464,49 @@ export function renderWebgl(
     completedFeedbackLevels += 1;
   };
 
+  const densityColors = density
+    ? shading.colors.map((stop) => premultiplied(parseColor(stop.color), 1))
+    : [];
+  // Positions along the gradient, where 1 is the normalising count.
+  const densityPositions = (scale: keyof typeof DENSITY_SCALES, normaliser: number) => shading.mode === 'density'
+    ? shading.colors
+      .map(({ at }, index) => ({
+        index,
+        position: at.kind === 'fraction' ? at.value : shapeCount(scale, at.value) / shapeCount(scale, normaliser),
+      }))
+      .sort((a, b) => a.position - b.position)
+    : [];
+  // Reads a small mip level of the counts to find the normalising count.
+  const densityNormaliser = (texture: LevelTexture) => {
+    generateMips(texture);
+    const level = Math.max(0, Math.ceil(Math.log2(Math.max(width, height) / DENSITY_SAMPLE_SIZE)));
+    const levelWidth = Math.max(1, width >> level);
+    const levelHeight = Math.max(1, height >> level);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, levelFramebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture.texture, level);
+    const values = new Float32Array(levelWidth * levelHeight * 4);
+    gl.readPixels(0, 0, levelWidth, levelHeight, gl.RGBA, gl.FLOAT, values);
+    return countPercentile(values, DENSITY_PERCENTILE);
+  };
+  const useDensityProgram = (texture: LevelTexture) => {
+    if (shading.mode !== 'density') {
+      return;
+    }
+    const normaliser = densityNormaliser(texture);
+    gl.useProgram(resolveProgram);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'scale'), DENSITY_SCALES[shading.scale]);
+    gl.uniform1f(gl.getUniformLocation(resolveProgram, 'normaliser'), normaliser);
+    const stops = densityPositions(shading.scale, normaliser);
+    gl.uniform4fv(gl.getUniformLocation(resolveProgram, 'stops'), stops.flatMap(({ index }) => densityColors[index]));
+    gl.uniform1fv(gl.getUniformLocation(resolveProgram, 'positions'), stops.map(({ position }) => position));
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'stopCount'), shading.colors.length);
+  };
+
   // Draws the exact geometry over the latest feedback texture into the output.
   const drawOutput = () => {
     const finalTexture = unusedTexture();
     drawLevel(finalTexture, lastFeedback, finalUnroll.items);
+    useDensityProgram(finalTexture);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, outputWidth, outputHeight);
     gl.disable(gl.BLEND);

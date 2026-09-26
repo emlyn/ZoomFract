@@ -1,5 +1,6 @@
 import fernText from './examples/fern.yaml?raw';
 import frameAndRectanglesText from './examples/frame-and-rectangles.yaml?raw';
+import pythagorasTreeDensityText from './examples/pythagoras-tree-density.yaml?raw';
 import pythagorasTreeText from './examples/pythagoras-tree.yaml?raw';
 import rotatedSpiralText from './examples/rotated-spiral.yaml?raw';
 import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
@@ -37,6 +38,12 @@ export const EXAMPLES: ExampleDefinition[] = [
     label: 'Pythagoras Tree',
     description: 'Two zooms aligned to a 3-4-5 triangle on top of a square, using variables.',
     text: pythagorasTreeText,
+  },
+  {
+    id: 'pythagoras-tree-density',
+    label: 'Pythagoras Tree (density)',
+    description: 'The Pythagoras tree shaded by how many copies cover each pixel.',
+    text: pythagorasTreeDensityText,
   },
   {
     id: 'rotated-spiral',
