@@ -66,10 +66,17 @@ files unless extracting a module clearly reduces complexity.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
   border `colour`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
-- `view.aspect` is width divided by height.
-- Resolution may specify `width`, `height`, or both. Infer the missing
-  dimension from `aspect`; infer `aspect` when both dimensions are present.
+- `view.aspect` is width divided by height of the view, excluding overflow.
+- Resolution may specify `width`, `height`, or both. It is the whole image,
+  including overflow. Infer the missing dimension from `aspect`; infer
+  `aspect` when both dimensions are present.
 - If resolution is omitted, default to height `1200` and infer width.
+- Optional `view.overflow` (scene units, default 0, non-negative) adds a
+  border on every side that catches anything drawn past the view edge, such
+  as glows. After all geometry and references resolve, `sceneFromValue`
+  grows the output coordinates by it and every zoom by the same fraction of
+  the view, so renderers need no special handling. Edit mode outlines the
+  declared view and zooms.
 - `view.coordinates.x` runs left to right.
 - `view.coordinates.y` runs bottom to top, following mathematical convention.
 - Axis ranges accept `[from, to]` and object forms such as
@@ -121,7 +128,8 @@ files unless extracting a module clearly reduces complexity.
 - Expressions may also use dotted view values: `view.left`, `view.right`
   (x), `view.bottom`, `view.top` (y), `view.width`, `view.height`,
   `view.centre.x`, `view.centre.y` (coordinate units), `view.aspect`,
-  `view.pixels.width`, `view.pixels.height` (resolved resolution), and
+  `view.overflow`, `view.pixels.width`, `view.pixels.height` (resolved
+  whole-image resolution), and
   `view.pixel.width`, `view.pixel.height` (size of one pixel in coordinate
   units; they differ when the axes are scaled differently). Variables and
   view values
@@ -180,6 +188,24 @@ files unless extracting a module clearly reduces complexity.
   with additive blending, uses plain-average mips, and has no Canvas 2D
   fallback; selecting Canvas 2D is an error. Edit mode keeps outlines but
   does not fade copies.
+
+### Glow
+
+- Rects and zooms accept `glow: { colour, opacity, size, softness }`.
+  `colour` and `size` (a positive scene-unit distance) are required;
+  `opacity` defaults to 1; `softness` is 0 to 1 and defaults to 1. Glows
+  are errors in density mode and with Canvas 2D.
+- Grow the shape by size * (1 - softness/2), then Gaussian blur with
+  sigma = size * softness / 6, so the glow always reaches about `size`.
+  Softness 1 matches LibreOffice's glow. The glow draws just before (under)
+  its item and is copied into zooms like any other item.
+- Rect glows are analytic in the scene shader. Zoom glows sample glow fields
+  built once per render from a coverage mask of the fully recursed image
+  (shapes only, no glows, maximum-alpha mips so any visible detail glows),
+  dilated at the coarsest mip where the blur still spans a texel (bounded
+  by the dilation radius) then separably blurred, deduplicated by margin and
+  softness (at most 8 fields). A shallower mask shows seeds as blocks that
+  the glow would outline as steps.
 
 ## Rendering invariants
 

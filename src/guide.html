@@ -9,6 +9,7 @@
   <a href="#guide-zoom">Zooms</a>
   <a href="#guide-align">Alignment</a>
   <a href="#guide-seed">Seed</a>
+  <a href="#guide-glow">Glow</a>
   <a href="#guide-shading">Density shading</a>
   <a href="#guide-expressions">Expressions</a>
   <a href="#guide-variables">Variables</a>
@@ -66,12 +67,19 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
       <code>resolution</code> may give <code>width</code>, <code>height</code>, or both.
       A missing one is worked out from the aspect. If both are given, they set the aspect.
       Without a resolution the picture is 1200 pixels high.
+      The resolution is the whole picture, including any overflow.
     </li>
     <li>
       <code>coordinates</code> sets the numbers used to place things. <code>x</code> goes
       from left to right, and <code>y</code> goes from bottom to top, as in maths.
       Ranges can also be written <code>{ from: -4, to: 4 }</code>.
       The default is -100 to 100 on both axes.
+    </li>
+    <li>
+      <code>overflow</code> adds a border, in coordinates, around every side of the view.
+      Nothing is placed by it, but it shows anything that spills past the edges, such as
+      glows. Each zoom's copy includes the border too, so zooms draw slightly bigger than
+      their size. The default is 0. In edit mode the view edge is shown as a grey dashed line.
     </li>
   </ul>
 </section>
@@ -88,8 +96,9 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   padding: 12          # space between border and picture
   margin: 24           # space between frame and window edge</code></pre>
   <p>
-    The background is not part of the picture. Downloaded images are transparent
-    wherever nothing is drawn.
+    The border, wall and margin are not part of the picture. Downloaded images are
+    drawn on the background colour, unless you tick <strong>Transparent PNG</strong>,
+    which leaves them transparent wherever nothing is drawn.
   </p>
 </section>
 
@@ -236,6 +245,30 @@ seed:
   opacity: 0.9</code></pre>
 </section>
 
+<section id="guide-glow">
+  <h3>Glow</h3>
+  <p>
+    Rectangles and zooms can have a soft glow around them, like PowerPoint's glow
+    effect. The glow is drawn just underneath the item, on top of anything earlier.
+  </p>
+  <pre><code>- type: rect
+  centre: [0, 0]
+  width: 1
+  colour: "#3b82f6"
+  glow:
+    colour: "#fde047"  # required
+    opacity: 0.6       # defaults to 1
+    size: 0.1          # how far it spreads, in coordinates; required
+    softness: 0.3      # 0 is a solid band, 1 (the default) fades over the whole size</code></pre>
+  <ul>
+    <li>A zoom's glow follows the shapes in its copy.</li>
+    <li>Use <code>size: 8 * view.pixel.width</code> for a glow about 8 pixels wide.</li>
+    <li>Glows are copied into zooms along with everything else.</li>
+    <li>Glows are cut off at the edge of the picture; add a view <code>overflow</code> to make room.</li>
+    <li>Glows need the WebGL2 renderer and cannot be used with density shading.</li>
+  </ul>
+</section>
+
 <section id="guide-shading">
   <h3>Density shading</h3>
   <p>
@@ -331,7 +364,8 @@ scene:
     <tr><th><code>view.width</code>, <code>view.height</code></th><td>size of the view in coordinates</td></tr>
     <tr><th><code>view.centre.x</code>, <code>view.centre.y</code></th><td>middle of the view</td></tr>
     <tr><th><code>view.aspect</code></th><td>width divided by height</td></tr>
-    <tr><th><code>view.pixels.width</code>, <code>view.pixels.height</code></th><td>size of the picture in pixels</td></tr>
+    <tr><th><code>view.overflow</code></th><td>border around the view in coordinates</td></tr>
+    <tr><th><code>view.pixels.width</code>, <code>view.pixels.height</code></th><td>size of the whole picture in pixels</td></tr>
     <tr><th><code>view.pixel.width</code>, <code>view.pixel.height</code></th><td>size of one pixel in coordinates</td></tr>
   </table>
   <pre><code>view:

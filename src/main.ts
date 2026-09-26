@@ -506,11 +506,36 @@ downloadButton.className = 'apply-scene download-image';
 downloadButton.textContent = 'Download PNG';
 downloadButton.disabled = true;
 
-// Saves the canvas at its full declared resolution, exactly as displayed.
+const transparentRow = document.createElement('label');
+transparentRow.className = 'edit-mode-row';
+transparentRow.innerHTML = '<span>Transparent PNG</span>';
+
+const transparentToggle = document.createElement('input');
+transparentToggle.type = 'checkbox';
+transparentRow.append(transparentToggle);
+
+// The canvas drawn over the frame background, at the same resolution.
+function withBackground(source: HTMLCanvasElement, background: string): HTMLCanvasElement {
+  const output = document.createElement('canvas');
+  output.width = source.width;
+  output.height = source.height;
+  const context = output.getContext('2d');
+  if (!context) {
+    throw new Error('Could not create a canvas to add the background');
+  }
+  context.fillStyle = background;
+  context.fillRect(0, 0, output.width, output.height);
+  context.drawImage(source, 0, 0);
+  return output;
+}
+
+// Saves the canvas at its full declared resolution, on the frame background
+// unless a transparent image is requested.
 downloadButton.addEventListener('click', () => {
   const location = state.definitionLocation;
   const name = location.kind === 'example' ? location.id : 'custom';
-  canvas.toBlob((blob) => {
+  const image = transparentToggle.checked ? canvas : withBackground(canvas, state.scene.frame.background);
+  image.toBlob((blob) => {
     if (!blob) {
       showSceneStatus('Could not create PNG', true);
       return;
@@ -542,6 +567,7 @@ controls.append(
   sceneEditor.element,
   editModeRow,
   applySceneButton,
+  transparentRow,
   downloadButton,
   sceneStatus,
 );
@@ -687,11 +713,30 @@ function drawZoomOutlines(scene: SceneDefinition) {
   const cssWidth = canvas.getBoundingClientRect().width;
   const pixelsPerCssPixel = cssWidth > 0 ? canvas.width / cssWidth : 1;
   const lineWidth = EDIT_MODE_OUTLINE_CSS_PIXELS * pixelsPerCssPixel;
-  const zooms = scene.elements.filter((element): element is ZoomElement => element.kind === 'zoom');
+  // Zooms and coordinates include the overflow; outline them as declared.
+  const { x, y } = scene.view.coordinates;
+  const overflow = scene.view.overflow;
+  const shrink = {
+    x: 1 - 2 * overflow / Math.abs(x.to - x.from),
+    y: 1 - 2 * overflow / Math.abs(y.to - y.from),
+  };
+  const zooms = scene.elements
+    .filter((element): element is ZoomElement => element.kind === 'zoom')
+    .map((zoom) => ({ ...zoom, width: zoom.width * shrink.x, height: zoom.height * shrink.y }));
 
   displayContext.save();
   displayContext.setTransform(1, 0, 0, 1, 0, 0);
   displayContext.lineJoin = 'miter';
+  if (overflow > 0) {
+    const inset = {
+      x: overflow / Math.abs(x.to - x.from) * canvas.width,
+      y: overflow / Math.abs(y.to - y.from) * canvas.height,
+    };
+    displayContext.setLineDash([lineWidth * 2, lineWidth * 2]);
+    displayContext.strokeStyle = 'rgba(128, 128, 128, 0.9)';
+    displayContext.lineWidth = lineWidth;
+    displayContext.strokeRect(inset.x, inset.y, canvas.width - 2 * inset.x, canvas.height - 2 * inset.y);
+  }
   for (const zoom of zooms) {
     const corners = elementCorners(zoom, scene);
     tracePolygon(corners);

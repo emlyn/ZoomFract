@@ -13,9 +13,14 @@ type ZoomNode = {
   children: (ZoomNode | null)[] | null;
 };
 
+// Glows are drawn just before their item. A rectangle glow carries positions
+// in the rectangle's own frame, in scene units from its centre. A zoom glow
+// carries source view coordinates, which extend beyond 0 to 1 by the glow.
 export type UnrolledItem =
   | { kind: 'rect'; polygon: Vec2[]; elementIndex: number; alpha: number }
-  | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; alpha: number };
+  | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; alpha: number }
+  | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
+  | { kind: 'zoomGlow'; polygon: Vec2[]; texCoords: Vec2[]; elementIndex: number; alpha: number };
 
 export type UnrollOptions = {
   maximumDepth: number;
@@ -174,6 +179,33 @@ export function unrollScene(
     ];
   });
 
+  // Maps unit square coordinates onto an element, from its top-left corner.
+  const elementFrames = elementPolygons.map(([topLeft, topRight, , bottomLeft]): Affine => [
+    topRight.x - topLeft.x,
+    topRight.y - topLeft.y,
+    bottomLeft.x - topLeft.x,
+    bottomLeft.y - topLeft.y,
+    topLeft.x,
+    topLeft.y,
+  ]);
+  // The element's outline grown outwards by its glow size.
+  const glowQuads = scene.elements.map((element, index) => {
+    if (!element.glow) {
+      return null;
+    }
+    const grow = { x: element.glow.size / element.width, y: element.glow.size / element.height };
+    return [
+      { x: -grow.x, y: -grow.y },
+      { x: 1 + grow.x, y: -grow.y },
+      { x: 1 + grow.x, y: 1 + grow.y },
+      { x: -grow.x, y: 1 + grow.y },
+    ].map((point) => applyAffine(elementFrames[index], point));
+  });
+  const toViewCoordinates = (inverse: Affine) => (point: Vec2) => {
+    const viewPoint = applyAffine(inverse, point);
+    return { x: viewPoint.x / width, y: 1 - viewPoint.y / height };
+  };
+
   const expand = (node: ZoomNode, isRoot: boolean) => {
     node.children = scene.elements.map((element, index) => {
       const zoomTransform = zoomTransforms[index];
@@ -239,9 +271,44 @@ export function unrollScene(
 
   const items: UnrolledItem[] = [];
   let shallowestLeaf = Infinity;
+  const emitGlow = (node: ZoomNode, index: number, alpha: number, child: ZoomNode | null) => {
+    const quad = glowQuads[index];
+    if (!quad) {
+      return;
+    }
+    // Glows may spill outside the zoom holding them; cutting them at every
+    // zoom edge would leave hard steps along edges built from many copies.
+    const polygon = clipPolygon(quad.map((point) => applyAffine(node.transform, point)), root.clip);
+    if (polygon.length === 0) {
+      return;
+    }
+    if (child) {
+      items.push({
+        kind: 'zoomGlow',
+        polygon,
+        texCoords: polygon.map(toViewCoordinates(invertAffine(child.transform))),
+        elementIndex: index,
+        alpha,
+      });
+      return;
+    }
+    const element = scene.elements[index];
+    const toUnit = invertAffine(composeAffine(node.transform, elementFrames[index]));
+    items.push({
+      kind: 'rectGlow',
+      polygon,
+      local: polygon.map((point) => {
+        const unit = applyAffine(toUnit, point);
+        return { x: (unit.x - 0.5) * element.width, y: (unit.y - 0.5) * element.height };
+      }),
+      elementIndex: index,
+      alpha,
+    });
+  };
   const emit = (node: ZoomNode) => {
     scene.elements.forEach((element, index) => {
       if (element.kind === 'rect') {
+        emitGlow(node, index, node.alpha, null);
         const polygon = clipPolygon(
           elementPolygons[index].map((point) => applyAffine(node.transform, point)),
           node.clip,
@@ -255,19 +322,17 @@ export function unrollScene(
       if (!child) {
         return;
       }
+      // A glow is independent of its item's opacity, but fades with edit mode.
+      emitGlow(node, index, node.alpha * (node === root ? options.topLevelZoomOpacity : 1), child);
       if (child.children) {
         emit(child);
         return;
       }
-      const inverse = invertAffine(child.transform);
       shallowestLeaf = Math.min(shallowestLeaf, child.generation);
       items.push({
         kind: 'leaf',
         polygon: child.clip,
-        texCoords: child.clip.map((point) => {
-          const viewPoint = applyAffine(inverse, point);
-          return { x: viewPoint.x / width, y: 1 - viewPoint.y / height };
-        }),
+        texCoords: child.clip.map(toViewCoordinates(invertAffine(child.transform))),
         alpha: child.alpha,
       });
     });

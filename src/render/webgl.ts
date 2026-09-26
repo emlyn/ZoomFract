@@ -15,12 +15,41 @@ type LevelTexture = {
   levels: number;
 };
 
+type GlowField = {
+  index: number;
+  // Fraction of the source added on each side, where the glow spreads.
+  margin: Vec2;
+  // Source mip level sampled, its size, and the field size in texels.
+  lod: number;
+  levelSize: Vec2;
+  size: Vec2;
+  softness: number;
+  // How far the shape grows, and the blur's sigma, in texels of the sampled level.
+  radius: Vec2;
+  sigma: Vec2;
+  textures: [WebGLTexture, WebGLTexture];
+};
+
 // Higher supersampling already antialiases edges, and multisample storage at
 // those sizes would use too much GPU memory.
 const MSAA_MAXIMUM_SUPERSAMPLING = 2;
 const MSAA_SAMPLES = 4;
 const MAXIMUM_ANISOTROPY = 16;
-const FLOATS_PER_VERTEX = 9;
+const FLOATS_PER_VERTEX = 13;
+// Vertex modes: flat colour, sampled source, rectangle glow, zoom glow.
+const MODE_FLAT = 0;
+const MODE_SOURCE = 1;
+const MODE_RECT_GLOW = 2;
+const MODE_ZOOM_GLOW = 3;
+// Zoom glows sample precomputed glow fields; each distinct glow shape needs
+// its own field and texture unit.
+const MAXIMUM_ZOOM_GLOW_FIELDS = 8;
+// Glow fields are computed at the coarsest resolution where the blur still
+// spans a texel, but fine enough that the grown edge is at most this many
+// texels, which bounds the cost of dilation.
+const GLOW_MAXIMUM_DILATE_TEXELS = 16;
+// Reaches four sigma of the blurs, which stay under two texels.
+const GLOW_BLUR_TEXELS = 8;
 // Zooms smaller than this in working pixels sample the feedback texture, where
 // resampling error is no longer visible.
 const UNROLL_MINIMUM_ZOOM_PIXELS = 12;
@@ -31,15 +60,18 @@ const SCENE_VERTEX_SHADER = `#version 300 es
 in vec2 position;
 in vec2 texCoord;
 in vec4 color;
-in float textureMix;
+in float mode;
+in vec4 shape;
 uniform vec2 resolution;
 out vec2 uv;
 out vec4 tint;
-out float mixAmount;
+out float drawMode;
+out vec4 shapeData;
 void main() {
   uv = texCoord;
   tint = color;
-  mixAmount = textureMix;
+  drawMode = mode;
+  shapeData = shape;
   gl_Position = vec4(
     position.x / resolution.x * 2.0 - 1.0,
     1.0 - position.y / resolution.y * 2.0,
@@ -48,15 +80,98 @@ void main() {
   );
 }`;
 
+const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, index) => index);
+
+// Rectangle glows are worked out from the distance to the rectangle: the
+// shape is grown, then blurred over the rest of the glow size. Full softness
+// grows by half and blurs over the other half, like LibreOffice; lower
+// softness grows further and blurs less. The logistic curve is a close fit
+// to the Gaussian blur of an edge. Zoom glows sample a glow field.
 const SCENE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
+${glowFieldIndexes.map((index) => `uniform sampler2D glow${index};`).join('\n')}
 in vec2 uv;
 in vec4 tint;
-in float mixAmount;
+in float drawMode;
+in vec4 shapeData;
+out vec4 outColor;
+float rectGlow(vec2 local, vec2 halfSize, float size, float softness) {
+  float distance = length(max(abs(local) - halfSize, 0.0));
+  // At least half a pixel keeps hard glows antialiased.
+  float sigma = max(size * softness / 6.0, 0.5 * fwidth(distance));
+  return 1.0 / (1.0 + exp(1.702 * (distance - size * (1.0 - 0.5 * softness)) / sigma));
+}
+float zoomGlow(int field, vec2 coords) {
+  return ${glowFieldIndexes.map((index) => `field == ${index} ? textureLod(glow${index}, coords, 0.0).r : `).join('')}0.0;
+}
+void main() {
+  vec4 sampled = texture(source, uv);
+  outColor = drawMode < 1.5
+    ? tint * mix(vec4(1.0), sampled, drawMode)
+    : drawMode < 2.5
+      ? tint * rectGlow(uv, shapeData.xy, shapeData.z, shapeData.w)
+      : tint * zoomGlow(int(shapeData.x + 0.5), uv);
+}`;
+
+// Grows the source's visible parts by an ellipse, measured in texels of the
+// sampled mip level. Field texels cover the source plus a margin on each side.
+const GLOW_DILATE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D source;
+uniform bool hasSource;
+uniform float constantAlpha;
+uniform float lod;
+uniform vec2 levelSize;
+uniform vec2 fieldSize;
+uniform vec2 margin;
+uniform vec2 radius;
+out vec4 outColor;
+float alphaAt(vec2 coords) {
+  if (any(lessThan(coords, vec2(0.0))) || any(greaterThan(coords, vec2(1.0)))) {
+    return 0.0;
+  }
+  return hasSource ? textureLod(source, coords, lod).a : constantAlpha;
+}
+void main() {
+  vec2 coords = gl_FragCoord.xy / fieldSize * (1.0 + 2.0 * margin) - margin;
+  vec2 reach = max(radius, vec2(1e-3));
+  float edge = max(min(reach.x, reach.y), 1.0);
+  ivec2 extent = ivec2(ceil(reach));
+  float grown = 0.0;
+  for (int y = -extent.y; y <= extent.y; y++) {
+    for (int x = -extent.x; x <= extent.x; x++) {
+      vec2 offset = vec2(x, y);
+      // Texels straddling the ellipse edge count partly, so the grown shape
+      // steps smoothly rather than a whole texel at a time.
+      float inside = clamp((1.0 - length(offset / reach)) * edge + 0.5, 0.0, 1.0);
+      if (inside > 0.0) {
+        grown = max(grown, inside * alphaAt(coords + offset / levelSize));
+      }
+    }
+  }
+  outColor = vec4(grown);
+}`;
+
+// One direction of a Gaussian blur, with sigma in field texels.
+const GLOW_BLUR_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D field;
+uniform vec2 fieldSize;
+uniform vec2 direction;
+uniform float sigma;
 out vec4 outColor;
 void main() {
-  outColor = tint * mix(vec4(1.0), texture(source, uv), mixAmount);
+  vec2 coords = gl_FragCoord.xy / fieldSize;
+  float spread = max(sigma, 1e-3);
+  float total = 0.0;
+  float weights = 0.0;
+  for (int i = -${GLOW_BLUR_TEXELS}; i <= ${GLOW_BLUR_TEXELS}; i++) {
+    float weight = exp(-0.5 * float(i * i) / (spread * spread));
+    total += weight * textureLod(field, coords + float(i) * direction / fieldSize, 0.0).r;
+    weights += weight;
+  }
+  outColor = vec4(total / weights);
 }`;
 
 const FULLSCREEN_VERTEX_SHADER = `#version 300 es
@@ -216,6 +331,17 @@ function createLevelTexture(
   return { texture, levels };
 }
 
+function createFieldTexture(gl: WebGL2RenderingContext, width: number, height: number): WebGLTexture {
+  const texture = gl.createTexture()!;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return texture;
+}
+
 // Density counts need float textures that can be drawn to, blended, and
 // filtered. Full floats avoid rounding large counts when they are supported.
 function densityFormat(gl: WebGL2RenderingContext): number {
@@ -276,7 +402,18 @@ export function renderWebgl(
   const resolveProgram = density
     ? compileProgram(gl, FULLSCREEN_VERTEX_SHADER, DENSITY_FRAGMENT_SHADER)
     : compileProgram(gl, FULLSCREEN_VERTEX_SHADER, RESOLVE_FRAGMENT_SHADER);
+  const glowDilateProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, GLOW_DILATE_FRAGMENT_SHADER);
+  const glowBlurProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, GLOW_BLUR_FRAGMENT_SHADER);
+  gl.useProgram(sceneProgram);
+  gl.uniform1i(gl.getUniformLocation(sceneProgram, 'source'), 0);
+  glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   const textures = [createLevelTexture(gl, width, height, format), createLevelTexture(gl, width, height, format)];
+  // Zoom glows spread from what a copy shows, not from its glows, so scenes
+  // with zoom glows also build a mask of the shapes' coverage.
+  const zoomGlows = !density && scene.elements.some((element) => element.kind === 'zoom' && element.glow);
+  const masks = zoomGlows
+    ? [createLevelTexture(gl, width, height, gl.RGBA8), createLevelTexture(gl, width, height, gl.RGBA8)]
+    : [];
   const levelFramebuffer = gl.createFramebuffer()!;
 
   // Painted levels are drawn with multisampling and copied into textures.
@@ -297,7 +434,7 @@ export function renderWebgl(
   const vertexArray = gl.createVertexArray()!;
   gl.bindVertexArray(vertexArray);
   gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-  const attributes: [string, number][] = [['position', 2], ['texCoord', 2], ['color', 4], ['textureMix', 1]];
+  const attributes: [string, number][] = [['position', 2], ['texCoord', 2], ['color', 4], ['mode', 1], ['shape', 4]];
   let attributeOffset = 0;
   for (const [name, size] of attributes) {
     const location = gl.getAttribLocation(sceneProgram, name);
@@ -311,17 +448,126 @@ export function renderWebgl(
     const alpha = color[3] * opacity;
     return [color[0] * alpha, color[1] * alpha, color[2] * alpha, alpha];
   };
+  // Zoom glows are drawn from glow fields: the source image's visible parts,
+  // grown and blurred to match each zoom's glow.
+  const createGlowFields = () => {
+    const fields: GlowField[] = [];
+    const byElement = new Map<number, GlowField>();
+    const sourceLevels = Math.floor(Math.log2(Math.max(width, height))) + 1;
+    // Supersampled detail is not needed in a soft glow.
+    const minimumLevel = Math.floor(Math.log2(factor));
+    scene.elements.forEach((element, elementIndex) => {
+      if (element.kind !== 'zoom' || !element.glow) {
+        return;
+      }
+      const margin = { x: element.glow.size / element.width, y: element.glow.size / element.height };
+      const { softness } = element.glow;
+      const existing = fields.find((field) => field.softness === softness
+        && Math.abs(field.margin.x - margin.x) < 1e-9 && Math.abs(field.margin.y - margin.y) < 1e-9);
+      if (existing) {
+        byElement.set(elementIndex, existing);
+        return;
+      }
+      if (fields.length === MAXIMUM_ZOOM_GLOW_FIELDS) {
+        throw new Error(`At most ${MAXIMUM_ZOOM_GLOW_FIELDS} zoom glow sizes and softnesses are supported`);
+      }
+      // How far the edge grows, and the blur's sigma, in working pixels of the source.
+      const glowPixels = { x: margin.x * width, y: margin.y * height };
+      const reach = { x: glowPixels.x * (1 - softness / 2), y: glowPixels.y * (1 - softness / 2) };
+      const sigma = { x: glowPixels.x * softness / 6, y: glowPixels.y * softness / 6 };
+      const lod = Math.min(sourceLevels - 1, Math.max(
+        minimumLevel,
+        Math.floor(Math.log2(Math.min(sigma.x, sigma.y))),
+        Math.ceil(Math.log2(Math.max(reach.x, reach.y) / GLOW_MAXIMUM_DILATE_TEXELS)),
+      ));
+      const levelSize = { x: Math.max(1, width >> lod), y: Math.max(1, height >> lod) };
+      const size = {
+        x: Math.min(maximumSize, Math.ceil(levelSize.x * (1 + 2 * margin.x))),
+        y: Math.min(maximumSize, Math.ceil(levelSize.y * (1 + 2 * margin.y))),
+      };
+      const field: GlowField = {
+        index: fields.length,
+        margin,
+        softness,
+        lod,
+        levelSize,
+        size,
+        radius: { x: reach.x / 2 ** lod, y: reach.y / 2 ** lod },
+        // Half a texel of blur keeps hard glows from showing the texel grid.
+        sigma: { x: Math.max(0.5, sigma.x / 2 ** lod), y: Math.max(0.5, sigma.y / 2 ** lod) },
+        textures: [createFieldTexture(gl, size.x, size.y), createFieldTexture(gl, size.x, size.y)],
+      };
+      fields.push(field);
+      byElement.set(elementIndex, field);
+    });
+
+    const seedAlpha = parseColor(scene.seed.color)[3] * scene.seed.opacity;
+    const pass = (program: WebGLProgram, target: WebGLTexture, input: WebGLTexture | null, field: GlowField) => {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+      gl.useProgram(program);
+      gl.uniform2f(gl.getUniformLocation(program, 'fieldSize'), field.size.x, field.size.y);
+      gl.bindTexture(gl.TEXTURE_2D, input);
+    };
+    const compute = (source: LevelTexture | null) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, levelFramebuffer);
+      gl.bindVertexArray(emptyVertexArray);
+      gl.disable(gl.BLEND);
+      gl.activeTexture(gl.TEXTURE0);
+      for (const field of fields) {
+        const [grown, blurred] = field.textures;
+        gl.viewport(0, 0, field.size.x, field.size.y);
+        pass(glowDilateProgram, grown, source?.texture ?? null, field);
+        const uniform = (name: string) => gl.getUniformLocation(glowDilateProgram, name);
+        gl.uniform1i(uniform('hasSource'), source ? 1 : 0);
+        gl.uniform1f(uniform('constantAlpha'), seedAlpha);
+        gl.uniform1f(uniform('lod'), field.lod);
+        gl.uniform2f(uniform('levelSize'), field.levelSize.x, field.levelSize.y);
+        gl.uniform2f(uniform('margin'), field.margin.x, field.margin.y);
+        gl.uniform2f(uniform('radius'), field.radius.x, field.radius.y);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const blur = (target: WebGLTexture, input: WebGLTexture, direction: Vec2, sigma: number) => {
+          pass(glowBlurProgram, target, input, field);
+          gl.uniform2f(gl.getUniformLocation(glowBlurProgram, 'direction'), direction.x, direction.y);
+          gl.uniform1f(gl.getUniformLocation(glowBlurProgram, 'sigma'), sigma);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        };
+        blur(blurred, grown, { x: 1, y: 0 }, field.sigma.x);
+        blur(grown, blurred, { x: 0, y: 1 }, field.sigma.y);
+      }
+    };
+    const bind = () => {
+      fields.forEach((field) => {
+        gl.activeTexture(gl.TEXTURE1 + field.index);
+        gl.bindTexture(gl.TEXTURE_2D, field.textures[0]);
+      });
+      gl.activeTexture(gl.TEXTURE0);
+    };
+    return { forElement: (index: number) => byElement.get(index), compute, bind, used: fields.length > 0 };
+  };
+
   const seedColor = parseColor(scene.seed.color);
   const rectColors = scene.elements.map((element) => element.kind === 'rect' ? parseColor(element.color) : null);
+  const glowColors = scene.elements.map((element) => element.glow
+    ? premultiplied(parseColor(element.glow.color), element.glow.opacity)
+    : null);
+  const glowFields = createGlowFields();
 
-  const pushPolygon = (vertices: number[], polygon: Vec2[], texCoords: Vec2[] | null, color: Rgba) => {
+  const pushPolygon = (
+    vertices: number[],
+    polygon: Vec2[],
+    texCoords: Vec2[] | null,
+    color: Rgba,
+    mode = texCoords ? MODE_SOURCE : MODE_FLAT,
+    shape: [number, number, number, number] = [0, 0, 0, 0],
+  ) => {
     const pushVertex = (index: number) => vertices.push(
       polygon[index].x,
       polygon[index].y,
       texCoords?.[index].x ?? 0,
       texCoords?.[index].y ?? 0,
       ...color,
-      texCoords ? 1 : 0,
+      mode,
+      ...shape,
     );
     for (let index = 1; index < polygon.length - 1; index += 1) {
       pushVertex(0);
@@ -339,8 +585,25 @@ export function renderWebgl(
         const element = scene.elements[item.elementIndex];
         const weight = element.kind === 'rect' ? element.weight * item.alpha : 0;
         pushPolygon(vertices, item.polygon, null, [weight, weight, weight, weight]);
-      } else if (sampleSource) {
+      } else if (item.kind === 'leaf' && sampleSource) {
         pushPolygon(vertices, item.polygon, item.texCoords, [item.alpha, item.alpha, item.alpha, item.alpha]);
+      }
+    }
+    return new Float32Array(vertices);
+  };
+
+  // Mask vertices draw the coverage of shapes and copies, leaving out glows.
+  const maskVertices = (items: UnrolledItem[], sampleSource: boolean) => {
+    const vertices: number[] = [];
+    const seedAlpha = seedColor[3] * scene.seed.opacity;
+    for (const item of items) {
+      if (item.kind === 'rect') {
+        const coverage = rectColors[item.elementIndex]![3] * item.alpha;
+        pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
+      } else if (item.kind === 'leaf') {
+        pushPolygon(vertices, item.polygon, sampleSource ? item.texCoords : null, sampleSource
+          ? [item.alpha, item.alpha, item.alpha, item.alpha]
+          : [seedAlpha * item.alpha, seedAlpha * item.alpha, seedAlpha * item.alpha, seedAlpha * item.alpha]);
       }
     }
     return new Float32Array(vertices);
@@ -354,6 +617,23 @@ export function renderWebgl(
     for (const item of items) {
       if (item.kind === 'rect') {
         pushPolygon(vertices, item.polygon, null, premultiplied(rectColors[item.elementIndex]!, item.alpha));
+      } else if (item.kind === 'rectGlow') {
+        const element = scene.elements[item.elementIndex];
+        const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
+        pushPolygon(vertices, item.polygon, item.local, color, MODE_RECT_GLOW, [
+          element.width / 2,
+          element.height / 2,
+          element.glow!.size,
+          element.glow!.softness,
+        ]);
+      } else if (item.kind === 'zoomGlow') {
+        const field = glowFields.forElement(item.elementIndex)!;
+        const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
+        const coords = item.texCoords.map((point) => ({
+          x: (point.x + field.margin.x) / (1 + 2 * field.margin.x),
+          y: (point.y + field.margin.y) / (1 + 2 * field.margin.y),
+        }));
+        pushPolygon(vertices, item.polygon, coords, color, MODE_ZOOM_GLOW, [field.index, 0, 0, 0]);
       } else if (sampleSource) {
         pushPolygon(vertices, item.polygon, item.texCoords, premultiplied([1, 1, 1, 1], item.alpha));
       } else {
@@ -364,12 +644,13 @@ export function renderWebgl(
   };
 
   // Continuations redraw the same items, so their vertices are built once.
-  const vertexCache = new Map<UnrolledItem[], Map<boolean, Float32Array>>();
-  const cachedVertices = (items: UnrolledItem[], sampleSource: boolean) => {
-    const byMode = vertexCache.get(items) ?? new Map<boolean, Float32Array>();
+  const vertexCache = new Map<UnrolledItem[], Map<string, Float32Array>>();
+  const cachedVertices = (items: UnrolledItem[], sampleSource: boolean, mask: boolean) => {
+    const byMode = vertexCache.get(items) ?? new Map<string, Float32Array>();
     vertexCache.set(items, byMode);
-    const vertices = byMode.get(sampleSource) ?? sceneVertices(items, sampleSource);
-    byMode.set(sampleSource, vertices);
+    const key = `${sampleSource} ${mask}`;
+    const vertices = byMode.get(key) ?? (mask ? maskVertices : sceneVertices)(items, sampleSource);
+    byMode.set(key, vertices);
     return vertices;
   };
 
@@ -416,7 +697,12 @@ export function renderWebgl(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, levels - 1);
   };
 
-  const drawLevel = (target: LevelTexture, source: LevelTexture | null, items: UnrolledItem[]) => {
+  const drawLevel = (
+    target: LevelTexture,
+    source: LevelTexture | null,
+    items: UnrolledItem[],
+    mask = false,
+  ) => {
     if (drawFramebuffer) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
     } else {
@@ -428,11 +714,12 @@ export function renderWebgl(
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(sceneProgram);
     gl.uniform2f(gl.getUniformLocation(sceneProgram, 'resolution'), width, height);
+    glowFields.bind();
     gl.bindTexture(gl.TEXTURE_2D, source?.texture ?? null);
     gl.enable(gl.BLEND);
     // Painting composites over what is below; density adds up hits.
     gl.blendFunc(gl.ONE, density ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
-    const vertices = cachedVertices(items, source !== null);
+    const vertices = cachedVertices(items, source !== null, mask);
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
@@ -462,6 +749,25 @@ export function renderWebgl(
     generateMips(target);
     lastFeedback = target;
     completedFeedbackLevels += 1;
+  };
+
+  // Every copy's glow spreads from the mask of the fully recursed image. A
+  // shallower mask would show its seeds as blocks that the glow outlines.
+  let lastMask: LevelTexture | null = null;
+  let maskLevels = 0;
+  let fieldsReady = false;
+  const prepareGlowFields = (levels: number) => {
+    if (!glowFields.used || (fieldsReady && maskLevels >= levels)) {
+      return;
+    }
+    for (; maskLevels < levels; maskLevels += 1) {
+      const target = lastMask === masks[0] ? masks[1] : masks[0];
+      drawLevel(target, lastMask, levelItems, true);
+      generateMips(target);
+      lastMask = target;
+    }
+    glowFields.compute(lastMask);
+    fieldsReady = true;
   };
 
   const densityColors = density
@@ -532,6 +838,7 @@ export function renderWebgl(
   };
 
   const renderLevels = (levels: number, frameCallbacks: FrameCallbacks): RenderOutcome => {
+    prepareGlowFields(levels);
     const feedbackLevels = feedbackLevelsFor(levels);
     const steps = feedbackLevels - completedFeedbackLevels + 1;
     let step = 0;

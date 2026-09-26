@@ -87,6 +87,7 @@ const ROTATION: Shape = { keys: leaves('degrees', 'deg', 'radians', 'rad') };
 const AXIS: Shape = { keys: leaves('from', 'to', 'min', 'max') };
 const GEOMETRY: Record<string, Shape> = {
   ...leaves('type', 'name', 'width', 'height', 'opacity'),
+  glow: { keys: leaves('colour', 'opacity', 'size', 'softness') },
   centre: POINT,
   topLeft: POINT,
   topRight: POINT,
@@ -104,6 +105,7 @@ const DEFINITION: Shape = {
     view: {
       keys: {
         aspect: LEAF,
+        overflow: LEAF,
         resolution: { keys: leaves('width', 'height') },
         coordinates: { keys: { x: AXIS, y: AXIS } },
       },
@@ -185,8 +187,19 @@ export type Vec2 = {
   y: number;
 };
 
+// A soft halo in one colour around the visible parts of an item, reaching
+// `size` scene units beyond its edges. Softness runs from 0, a solid band
+// with a crisp edge, to 1, which fades out over the whole size.
+export type Glow = {
+  color: string;
+  opacity: number;
+  size: number;
+  softness: number;
+};
+
 type SceneElement = {
   name?: string;
+  glow?: Glow;
 };
 
 export type RectElement = SceneElement & {
@@ -302,6 +315,9 @@ export type SceneDefinition = {
   };
   view: {
     aspect: number;
+    // Scene units added around the view on every side. The coordinates and
+    // resolution below include it; zooms are grown to match.
+    overflow: number;
     resolution: {
       width: number;
       height: number;
@@ -360,7 +376,10 @@ function asNonNegativeNumber(value: unknown, fallback: number, variables: Variab
   return number >= 0 ? number : fallback;
 }
 
-function resolveView(view: Record<string, unknown>, variables: Variables) {
+// The resolution covers the whole image, including any overflow. `growth`
+// is the whole image size divided by the view size along each axis, so the
+// aspect always describes the view itself.
+function resolveView(view: Record<string, unknown>, variables: Variables, growth: Vec2) {
   const resolutionNode = view.resolution && typeof view.resolution === 'object' && !Array.isArray(view.resolution)
     ? (view.resolution as Record<string, unknown>)
     : {};
@@ -370,7 +389,7 @@ function resolveView(view: Record<string, unknown>, variables: Variables) {
 
   if (requestedWidth && requestedHeight) {
     return {
-      aspect: requestedWidth / requestedHeight,
+      aspect: (requestedWidth / growth.x) / (requestedHeight / growth.y),
       resolution: {
         width: Math.round(requestedWidth),
         height: Math.round(requestedHeight),
@@ -378,35 +397,31 @@ function resolveView(view: Record<string, unknown>, variables: Variables) {
     };
   }
 
-  if (requestedHeight) {
+  if (requestedWidth) {
     return {
       aspect: requestedAspect,
       resolution: {
-        width: Math.max(1, Math.round(requestedHeight * requestedAspect)),
-        height: Math.round(requestedHeight),
+        width: Math.round(requestedWidth),
+        height: Math.max(1, Math.round(requestedWidth / growth.x / requestedAspect * growth.y)),
       },
     };
   }
 
-  if (!requestedWidth) {
-    return {
-      aspect: requestedAspect,
-      resolution: {
-        width: Math.max(1, Math.round(1200 * requestedAspect)),
-        height: 1200,
-      },
-    };
-  }
-
-  const width = Math.round(requestedWidth);
+  const height = requestedHeight ?? 1200;
   return {
     aspect: requestedAspect,
     resolution: {
-      width,
-      height: Math.max(1, Math.round(width / requestedAspect)),
+      width: Math.max(1, Math.round(height / growth.y * requestedAspect * growth.x)),
+      height: Math.round(height),
     },
   };
 }
+
+// Grows an axis by the overflow on both sides, keeping its direction.
+const growAxis = (range: AxisRange, overflow: number): AxisRange => {
+  const outwards = Math.sign(range.to - range.from) * overflow;
+  return { from: range.from - outwards, to: range.to + outwards };
+};
 
 function parseAxisRange(value: unknown, fallback: AxisRange, variables: Variables, path: ScenePath): AxisRange {
   let from: number;
@@ -878,6 +893,45 @@ function resolveRectGeometry(
   return unique[0];
 }
 
+const DEFAULT_GLOW_OPACITY = 1;
+const DEFAULT_GLOW_SOFTNESS = 1;
+
+function parseGlow(
+  value: unknown,
+  elementName: string,
+  variables: Variables,
+  density: boolean,
+  path: ScenePath,
+): Glow | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (density) {
+    throw new Error(`${elementName}: glow is not used with density shading`);
+  }
+  if (!isRecord(value)) {
+    throw new Error(`${elementName} glow must be an object with a colour and size`);
+  }
+  const size = atPath([...path, 'size'], () => asPositiveNumber(value.size, variables));
+  if (!size) {
+    throw new PathError(`${elementName} glow size must be a positive number`, value.size === undefined ? path : [...path, 'size']);
+  }
+  const colour = value.colour;
+  if (typeof colour !== 'string') {
+    throw new PathError(`${elementName} glow needs a colour`, value.colour === undefined ? path : [...path, 'colour']);
+  }
+  const softness = atPath([...path, 'softness'], () => asNumber(value.softness, DEFAULT_GLOW_SOFTNESS, variables));
+  if (softness < 0 || softness > 1) {
+    throw new PathError(`${elementName} glow softness must be from 0 to 1`, [...path, 'softness']);
+  }
+  return {
+    color: colour,
+    opacity: clamp(atPath([...path, 'opacity'], () => asNumber(value.opacity, DEFAULT_GLOW_OPACITY, variables)), 0, 1),
+    size,
+    softness,
+  };
+}
+
 function parseRectElement(
   rect: Record<string, unknown>,
   name: string | undefined,
@@ -906,12 +960,14 @@ function parseRectElement(
   }
   const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables, path);
   const opacity = clamp(at('opacity', () => asNumber(rect.opacity, 1, variables)), 0, 1);
+  const color = typeof rect.colour === 'string' ? rect.colour : '#000';
 
   return {
     kind: 'rect',
     name,
+    glow: at('glow', () => parseGlow(rect.glow, elementName, variables, density, [...path, 'glow'])),
     ...geometry,
-    color: typeof rect.colour === 'string' ? rect.colour : '#000',
+    color,
     opacity,
     weight,
   };
@@ -938,6 +994,7 @@ function parseZoomElement(
   return {
     kind: 'zoom',
     name,
+    glow: atPath([...path, 'glow'], () => parseGlow(zoom.glow, elementName, variables, density, [...path, 'glow'])),
     ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, path, { aspect, view, align }),
     opacity: clamp(atPath([...path, 'opacity'], () => asNumber(zoom.opacity, 1, variables)), 0, 1),
     alignTargets: align.map((pair) => pair.to),
@@ -1186,6 +1243,7 @@ const fallback = {
     },
     view: {
       aspect: 1,
+      overflow: 0,
       resolution: { width: 1200, height: 1200 },
       coordinates: {
         x: { from: -100, to: 100 },
@@ -1302,7 +1360,7 @@ function sceneFromValue(value: unknown): SceneDefinition {
   // may refer to the others as long as there is no loop.
   const cells = new Map<string, () => number>();
   const variables: Variables = (name) => cells.get(name)?.();
-  const resolvedView = lazy('view.resolution', () => atPath(['view'], () => resolveView(viewNode, variables)));
+  const resolvedView = lazy('view.resolution', () => atPath(['view'], () => resolveView(viewNode, variables, growth())));
   const axis = (key: 'x' | 'y') => {
     const path = ['view', 'coordinates', key];
     return lazy(`view.coordinates.${key}`, () => atPath(path, () =>
@@ -1310,6 +1368,17 @@ function sceneFromValue(value: unknown): SceneDefinition {
   };
   const xRange = axis('x');
   const yRange = axis('y');
+  const overflow = lazy('view.overflow', () => atPath(['view', 'overflow'], () => {
+    const value = asNumber(viewNode.overflow, 0, variables);
+    if (value < 0) {
+      throw new Error('view overflow must not be negative');
+    }
+    return value;
+  }));
+  const growth = (): Vec2 => ({
+    x: 1 + 2 * overflow() / Math.abs(xRange().to - xRange().from),
+    y: 1 + 2 * overflow() / Math.abs(yRange().to - yRange().from),
+  });
   const viewValues: Record<string, () => number> = {
     'view.left': () => xRange().from,
     'view.right': () => xRange().to,
@@ -1322,10 +1391,11 @@ function sceneFromValue(value: unknown): SceneDefinition {
     'view.center.x': () => (xRange().from + xRange().to) / 2,
     'view.center.y': () => (yRange().from + yRange().to) / 2,
     'view.aspect': () => resolvedView().aspect,
+    'view.overflow': overflow,
     'view.pixels.width': () => resolvedView().resolution.width,
     'view.pixels.height': () => resolvedView().resolution.height,
-    'view.pixel.width': () => (xRange().to - xRange().from) / resolvedView().resolution.width,
-    'view.pixel.height': () => (yRange().to - yRange().from) / resolvedView().resolution.height,
+    'view.pixel.width': () => (xRange().to - xRange().from) * growth().x / resolvedView().resolution.width,
+    'view.pixel.height': () => (yRange().to - yRange().from) * growth().y / resolvedView().resolution.height,
   };
   Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
   atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))
@@ -1381,7 +1451,9 @@ function sceneFromValue(value: unknown): SceneDefinition {
       viewFrame,
       variables,
       density,
-    );
+    ).map((element) => element.kind === 'zoom'
+      ? { ...element, width: element.width * growth().x, height: element.height * growth().y }
+      : element);
 
     return {
       shading,
@@ -1394,7 +1466,8 @@ function sceneFromValue(value: unknown): SceneDefinition {
       },
       view: {
         ...resolvedView(),
-        coordinates,
+        overflow: overflow(),
+        coordinates: { x: growAxis(coordinates.x, overflow()), y: growAxis(coordinates.y, overflow()) },
       },
       elements,
     };

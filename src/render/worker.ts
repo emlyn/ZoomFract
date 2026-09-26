@@ -119,11 +119,16 @@ function render(request: RenderRequest) {
   const startedAt = performance.now();
   const { width, height } = request.scene.view.resolution;
   const density = request.scene.shading.mode === 'density';
+  const glow = request.scene.elements.some((element) => element.glow);
   if (density && request.options.renderer !== 'webgl') {
     post({ type: 'error', message: 'Density shading needs the WebGL2 renderer' });
     return;
   }
-  const candidates: RendererName[] = density
+  if (glow && request.options.renderer !== 'webgl') {
+    post({ type: 'error', message: 'Glows need the WebGL2 renderer' });
+    return;
+  }
+  const candidates: RendererName[] = density || glow
     ? ['webgl']
     : request.options.renderer === 'webgl'
       ? ['webgl', 'canvas2d']
