@@ -40,6 +40,7 @@ const DEFAULT_SCENE_TEXT = DEFAULT_EXAMPLE.text;
 const REMOTE_DEFINITION_TIMEOUT_MS = 10_000;
 const REMOTE_DEFINITION_MAX_BYTES = 512 * 1024;
 const EDIT_MODE_OUTLINE_CSS_PIXELS = 1.5;
+const WALL_LABEL_GAP_PX = 24;
 
 function selectRow<T extends string | number>(
   className: string,
@@ -194,8 +195,16 @@ canvasFrame.className = 'canvas-frame';
 const canvas = document.createElement('canvas');
 const displayContext = canvas.getContext('2d')!;
 
+// A gallery-style label beside the framed picture, centred with it as a group.
+const wallLabel = document.createElement('aside');
+wallLabel.className = 'wall-label';
+const artwork = document.createElement('div');
+artwork.className = 'artwork';
+artwork.style.gap = `${WALL_LABEL_GAP_PX}px`;
+
 canvasFrame.append(canvas);
-canvasHost.append(canvasFrame);
+artwork.append(canvasFrame, wallLabel);
+canvasHost.append(artwork);
 
 let panelIsOpen = true;
 let panelIsResizing = false;
@@ -223,7 +232,7 @@ panelResizeHandle.addEventListener('pointermove', (event) => {
     return;
   }
 
-  const width = clamp(event.clientX, 240, Math.min(560, window.innerWidth * 0.6));
+  const width = clamp(window.innerWidth - event.clientX, 240, Math.min(560, window.innerWidth * 0.6));
   shell.style.setProperty('--panel-width', `${width}px`);
   panelResizeHandle.setAttribute('aria-valuenow', String(Math.round(width)));
 });
@@ -240,8 +249,8 @@ window.addEventListener('pointermove', (event) => {
     return;
   }
 
-  const nearTopLeft = event.clientX < 48 && event.clientY < 72;
-  shell.classList.toggle('panel-handle-visible', nearTopLeft);
+  const nearTopRight = event.clientX > window.innerWidth - 72 && event.clientY < 72;
+  shell.classList.toggle('panel-handle-visible', nearTopRight);
 });
 
 const panelHeader = document.createElement('div');
@@ -477,13 +486,29 @@ guideBody.addEventListener('click', (event) => {
   const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
   if (link) {
     event.preventDefault();
-    guideBody.querySelector(link.getAttribute('href')!)?.scrollIntoView({ behavior: 'smooth' });
+    const target = guideBody.querySelector(link.getAttribute('href')!);
+    if (target) {
+      const top = target.getBoundingClientRect().top - guideBody.getBoundingClientRect().top + guideBody.scrollTop;
+      guideBody.scrollTo({ top, behavior: 'smooth' });
+    }
   }
 });
 
 const sceneEditor = createSceneEditor(DEFAULT_SCENE_TEXT, () => {
   exampleSelect.value = '';
   exampleDetails.textContent = 'Custom definition';
+});
+
+const wrapRow = document.createElement('label');
+wrapRow.className = 'edit-mode-row';
+wrapRow.innerHTML = '<span>Wrap lines</span>';
+
+const wrapToggle = document.createElement('input');
+wrapToggle.type = 'checkbox';
+wrapToggle.checked = true;
+wrapRow.append(wrapToggle);
+wrapToggle.addEventListener('change', () => {
+  sceneEditor.setWrap(wrapToggle.checked);
 });
 
 const applySceneButton = document.createElement('button');
@@ -513,6 +538,18 @@ transparentRow.innerHTML = '<span>Transparent PNG</span>';
 const transparentToggle = document.createElement('input');
 transparentToggle.type = 'checkbox';
 transparentRow.append(transparentToggle);
+
+const labelRow = document.createElement('label');
+labelRow.className = 'edit-mode-row';
+labelRow.innerHTML = '<span>Show label</span>';
+
+const labelToggle = document.createElement('input');
+labelToggle.type = 'checkbox';
+labelToggle.checked = true;
+labelRow.append(labelToggle);
+labelToggle.addEventListener('change', () => {
+  updateWallLabel();
+});
 
 // The canvas drawn over the frame background, at the same resolution.
 function withBackground(source: HTMLCanvasElement, background: string): HTMLCanvasElement {
@@ -565,7 +602,9 @@ controls.append(
   exampleDetails,
   sceneLabelRow,
   sceneEditor.element,
+  wrapRow,
   editModeRow,
+  labelRow,
   applySceneButton,
   transparentRow,
   downloadButton,
@@ -584,6 +623,7 @@ const state = {
   offsetX: 0,
   offsetY: -10,
   scene: baseScene,
+  rendered: null as { renderer: RendererName; levels: number } | null,
   definitionLocation: { kind: 'example', id: DEFAULT_EXAMPLE.id } as DefinitionLocation,
 };
 let definitionLoadRevision = 0;
@@ -601,6 +641,8 @@ function applyDefinition(
 ): boolean {
   try {
     const nextScene = parseScene(text);
+    // Info only changes the label, so the current picture can stay.
+    const pictureChanged = JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
     state.scene = nextScene;
     state.definitionLocation = location;
     sceneEditor.setText(text.trim());
@@ -621,8 +663,10 @@ function applyDefinition(
     if (updateUrl) {
       updateDefinitionUrl(location);
     }
-    resizeCanvas();
-    render();
+    updateWallLabel();
+    if (pictureChanged) {
+      render();
+    }
     return true;
   } catch (error) {
     showSceneStatus(error instanceof Error ? error.message : 'Invalid scene definition', true);
@@ -674,18 +718,87 @@ async function loadDefinitionFromAddressBar() {
   }
 }
 
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+// The "medium" lines of the label: what the picture is made of and how it was
+// rendered, like the materials line on a gallery label.
+function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered): string[] {
+  const count = (kind: string) => scene.elements.filter((element) => element.kind === kind).length;
+  const parts = [
+    ...(count('rect') > 0 ? [plural(count('rect'), 'rectangle')] : []),
+    ...(count('zoom') > 0 ? [plural(count('zoom'), 'zoom')] : []),
+    ...(scene.elements.some((element) => element.glow) ? ['glow'] : []),
+    ...(scene.shading.mode === 'density' ? ['density shading'] : []),
+  ];
+  const { width, height } = scene.view.resolution;
+  return [
+    ...(parts.length > 0 ? [parts.join(', ')] : []),
+    `${width} × ${height} px`,
+    ...(rendered ? [`${RENDERER_LABELS[rendered.renderer]}, ${plural(rendered.levels, 'level')}`] : []),
+  ];
+}
+
+function labelElement(tag: string, className: string, text: string) {
+  const element = document.createElement(tag);
+  element.className = className;
+  element.textContent = text;
+  return element;
+}
+
+// Untitled Wikipedia links show the article name; others show the address.
+function linkText(address: string) {
+  const url = new URL(address);
+  const article = url.hostname.endsWith('.wikipedia.org') && url.pathname.startsWith('/wiki/')
+    ? decodeURIComponent(url.pathname.slice('/wiki/'.length)).replaceAll('_', ' ')
+    : '';
+  return article ? `Wikipedia \u203a ${article}` : address.replace(/^https?:\/\//, '');
+}
+
+function updateWallLabel() {
+  const { info } = state.scene;
+  const byline = [info.author, info.date].filter((text) => text !== undefined).join(', ');
+  const links = document.createElement('ul');
+  links.className = 'wall-label-links';
+  links.append(...info.links.map((link) => {
+    const item = document.createElement('li');
+    const anchor = document.createElement('a');
+    anchor.href = link.url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    anchor.textContent = link.title ?? linkText(link.url);
+    item.append(anchor);
+    return item;
+  }));
+  wallLabel.replaceChildren(
+    ...(info.title ? [labelElement('h2', 'wall-label-title', info.title)] : []),
+    ...(byline ? [labelElement('p', 'wall-label-byline', byline)] : []),
+    labelElement('p', 'wall-label-medium', describeMedium(state.scene, state.rendered).join('\n')),
+    ...(info.description ? [labelElement('p', 'wall-label-description', info.description)] : []),
+    ...(info.links.length > 0 ? [links] : []),
+  );
+  const hasInfo = Boolean(info.title || info.author || info.date || info.description || info.links.length > 0);
+  wallLabel.hidden = !labelToggle.checked || !hasInfo;
+  resizeCanvas();
+}
+
+// The picture takes the largest size that leaves room for the label, which
+// goes beside it or, when that leaves a bigger picture, underneath.
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
   const frame = state.scene.frame;
   const resolution = state.scene.view.resolution;
-  const horizontalSpace = 2 * (frame.margin + frame.width + frame.padding);
-  const verticalSpace = 2 * (frame.margin + frame.width + frame.padding);
-  const availableWidth = Math.max(1, host.width - horizontalSpace);
-  const availableHeight = Math.max(1, host.height - verticalSpace);
-  const displayScale = Math.min(
-    availableWidth / resolution.width,
-    availableHeight / resolution.height,
-  );
+  const frameSpace = 2 * (frame.width + frame.padding);
+  const availableWidth = Math.max(1, host.width - 2 * frame.margin - frameSpace);
+  const availableHeight = Math.max(1, host.height - 2 * frame.margin - frameSpace);
+  const scaleWithin = (width: number, height: number) =>
+    Math.max(0, Math.min(width / resolution.width, height / resolution.height));
+  const labelWidth = wallLabel.hidden ? 0 : wallLabel.offsetWidth + WALL_LABEL_GAP_PX;
+  const labelHeight = wallLabel.hidden ? 0 : wallLabel.offsetHeight + WALL_LABEL_GAP_PX;
+  const besideScale = scaleWithin(availableWidth - labelWidth, availableHeight);
+  const belowScale = scaleWithin(availableWidth, availableHeight - labelHeight);
+  const labelBelow = belowScale > besideScale;
+  const displayScale = Math.max(Number.EPSILON, labelBelow ? belowScale : besideScale);
+  artwork.classList.toggle('label-below', labelBelow);
 
   canvasHost.style.backgroundColor = frame.wall;
   canvasHost.style.padding = `${frame.margin}px`;
@@ -951,6 +1064,10 @@ function startRender(request: RenderRequest) {
           setSettingsTitle(`${describeSettings(started.renderer, settings)} · ${time}${step}`);
         }
         state.resolvedLevels = message.levels;
+        if (started) {
+          state.rendered = { renderer: started.renderer, levels: message.levels };
+          updateWallLabel();
+        }
         syncQualityControls();
         qualityDetails.textContent = [
           ...details,
@@ -987,5 +1104,6 @@ window.addEventListener('popstate', () => {
 });
 
 resizeCanvas();
+updateWallLabel();
 render();
 void loadDefinitionFromAddressBar();

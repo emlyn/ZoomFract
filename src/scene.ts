@@ -101,6 +101,12 @@ const ALIGN: Shape = { keys: { from: POINT, to: POINT }, items: ALIGN_ITEM };
 
 const DEFINITION: Shape = {
   keys: {
+    info: {
+      keys: {
+        ...leaves('title', 'author', 'date', 'description'),
+        links: { items: { keys: leaves('title', 'url') } },
+      },
+    },
     frame: { keys: leaves('width', 'radius', 'colour', 'wall', 'background', 'padding', 'margin') },
     view: {
       keys: {
@@ -306,7 +312,22 @@ function parseColorStops(colors: unknown): ColorStop[] {
   }));
 }
 
+export type SceneLink = {
+  title?: string;
+  url: string;
+};
+
+// Descriptive details shown on the wall label; none affect the picture.
+export type SceneInfo = {
+  title?: string;
+  author?: string;
+  date?: string;
+  description?: string;
+  links: SceneLink[];
+};
+
 export type SceneDefinition = {
+  info: SceneInfo;
   shading: Shading;
   frame: FrameDefinition;
   seed: {
@@ -422,6 +443,55 @@ const growAxis = (range: AxisRange, overflow: number): AxisRange => {
   const outwards = Math.sign(range.to - range.from) * overflow;
   return { from: range.from - outwards, to: range.to + outwards };
 };
+
+// Text fields accept any scalar, so `date: 2026` is fine; blanks are omitted.
+function infoText(value: unknown, path: ScenePath): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+    throw new PathError(`${path.join(' ')} must be text`, path);
+  }
+  const text = String(value).trim();
+  return text === '' ? undefined : text;
+}
+
+function parseLink(value: unknown, path: ScenePath): SceneLink {
+  const link = isRecord(value)
+    ? { title: infoText(value.title, [...path, 'title']), url: infoText(value.url, [...path, 'url']) }
+    : { url: infoText(value, path) };
+  if (!link.url) {
+    throw new PathError('Link needs a url', path);
+  }
+  const urlPath = isRecord(value) ? [...path, 'url'] : path;
+  let url: URL;
+  try {
+    url = new URL(link.url);
+  } catch {
+    throw new PathError(`"${link.url}" is not a valid url`, urlPath);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new PathError('Links must start with http:// or https://', urlPath);
+  }
+  return link.title ? { title: link.title, url: link.url } : { url: link.url };
+}
+
+function parseInfo(value: unknown): SceneInfo {
+  if (value === undefined) {
+    return { links: [] };
+  }
+  if (!isRecord(value)) {
+    throw new PathError('info must be an object', ['info']);
+  }
+  const links = value.links ?? [];
+  if (!Array.isArray(links)) {
+    throw new PathError('info links must be a list', ['info', 'links']);
+  }
+  const text = Object.fromEntries((['title', 'author', 'date', 'description'] as const)
+    .map((key) => [key, infoText(value[key], ['info', key])])
+    .filter(([, item]) => item !== undefined));
+  return { ...text, links: links.map((link, index) => parseLink(link, ['info', 'links', index])) };
+}
 
 function parseAxisRange(value: unknown, fallback: AxisRange, variables: Variables, path: ScenePath): AxisRange {
   let from: number;
@@ -1228,6 +1298,7 @@ function variableCell(name: string, { value, index }: VariableDefinition, lookup
 }
 
 const fallback = {
+    info: { links: [] } as SceneInfo,
     frame: {
       width: 12,
       radius: 6,
@@ -1456,6 +1527,7 @@ function sceneFromValue(value: unknown): SceneDefinition {
       : element);
 
     return {
+      info: atPath(['info'], () => parseInfo(sceneRoot.info)),
       shading,
       frame,
       seed: {

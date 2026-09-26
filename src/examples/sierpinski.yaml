@@ -1,3 +1,11 @@
+info:
+  title: Sierpiński triangle
+  author: Emlyn Corrin
+  date: 2026
+  description: Three ordered axis-aligned zooms with a black terminal seed.
+  links:
+    - https://en.wikipedia.org/wiki/Sierpi%C5%84ski_triangle
+
 frame:
   width: 12
   radius: 6

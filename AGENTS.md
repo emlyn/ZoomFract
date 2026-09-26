@@ -52,7 +52,7 @@ Do not commit generated or local artifacts:
 - `src/render/webgl.ts`: WebGL2 feedback renderer.
 - `src/render/unroll.ts`: exact clipped geometry for unrolled WebGL2 zooms.
 - `src/render/canvas2d.ts`: reference Canvas 2D renderer.
-- `src/examples.ts`: built-in example registry and metadata.
+- `src/examples.ts`: built-in example registry (IDs and file imports).
 - `src/examples/*.yaml`: loadable example scene definitions.
 - `src/style.css`: full-window layout, overlay panel, controls, animations,
   and canvas presentation.
@@ -64,8 +64,13 @@ files unless extracting a module clearly reduces complexity.
 
 ## Scene language invariants
 
-- The top-level model contains `variables`, `frame`, `view`, `seed`,
+- The top-level model contains `info`, `variables`, `frame`, `view`, `seed`,
   `shading`, and `scene`.
+- Optional `info` holds text-only `title`, `author`, `date`, `description`,
+  and `links` (http(s) URL strings or `{ title, url }`). It never affects
+  rendering. It is shown on a gallery-style wall label beside the frame,
+  together with a generated medium line (contents, resolution, renderer and
+  levels). The label is hidden when `info` is empty or "Show label" is off.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
   border `colour`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
@@ -108,8 +113,9 @@ files unless extracting a module clearly reduces complexity.
   unknown keys are errors with a closest-name suggestion. Add new settings
   there as well as in the parser.
 - Line endings are LF everywhere (enforced by `.gitattributes`).
-- Built-in examples use stable IDs and ordinary YAML files. Keep the registry
-  metadata in `src/examples.ts`.
+- Built-in examples use stable IDs and ordinary YAML files. Their dropdown
+  label and description come from each file's `info` (a title is required);
+  `src/examples.ts` only lists IDs and imports.
 - `?example=<id>` loads a built-in definition. `?source=<http-url>` loads a
   remote YAML definition; never add credentials or a server-side proxy.
 - Invalid, ambiguous, conflicting, or underdetermined definitions must produce
@@ -214,7 +220,9 @@ files unless extracting a module clearly reduces complexity.
 
 - The visible canvas backing resolution must exactly match `view.resolution`.
   Scale it with CSS to fit the window without changing intrinsic pixel size.
-- The canvas remains centred and independent of the overlay panel width.
+- The framed canvas and wall label are centred together as one group,
+  independent of the overlay panel width. The label sits beside the frame,
+  bottom-aligned, or below it, right-aligned, when that gives a larger picture.
 - Rendering runs in a Web Worker on `OffscreenCanvas`, so the UI thread only
   displays finished frames. Each render uses a fresh worker; starting a new
   render terminates the old one, which cancels obsolete work immediately.
@@ -288,14 +296,17 @@ files unless extracting a module clearly reduces complexity.
 
 ## Panel behaviour
 
-- The panel overlays the canvas from the left; it must never shift the image.
+- The panel overlays the canvas from the right, covering the wall label
+  before the picture; it must never shift the image.
 - Hiding it must leave no gutter or visible residue.
-- The single corner control is an X while open. It moves left and morphs into
-  three lines before fading. Hovering near the top-left reveals it; reopening
-  reverses the transition.
-- The right panel edge is draggable. The corner control must track resizing
-  immediately, without its normal horizontal animation.
+- The single corner control sits in the window's top-right corner. It is an
+  X while open and morphs into three lines before fading. Hovering near the
+  top-right reveals it; reopening reverses the transition.
+- The left panel edge is draggable.
 - Keep the YAML editor monospace and tall enough to show useful context.
+- Editor wrapping is on by default with a "Wrap lines" toggle. Long unbroken
+  runs such as URLs may break at any character; prose wraps between words.
+- Blocks and list items can be folded from the gutter or with Ctrl+Shift+[ / ].
 - The editor (`src/editor.ts`) is CodeMirror 6 with YAML highlighting,
   space-only Tab indenting, indent markers, hanging indents for wrapped
   lines (so continuation rows stay right of the guides), and a linter that runs

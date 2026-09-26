@@ -1,3 +1,11 @@
+info:
+  title: Pythagoras Tree (density)
+  author: Emlyn Corrin
+  date: 2026
+  description: The Pythagoras tree shaded by how many copies cover each pixel.
+  links:
+    - https://en.wikipedia.org/wiki/Pythagoras_tree_(fractal)
+
 frame:
   width: 12
   radius: 6

@@ -1,3 +1,11 @@
+info:
+  title: Vicsek Red Blue
+  author: Emlyn Corrin
+  date: 2026
+  description: A Vicsek cross with sharper red and blue glows on alternate arms.
+  links:
+    - https://en.wikipedia.org/wiki/Vicsek_fractal
+
 frame:
   width: 12
   radius: 6

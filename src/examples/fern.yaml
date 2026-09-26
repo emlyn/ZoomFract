@@ -1,3 +1,11 @@
+info:
+  title: Fern
+  author: Emlyn Corrin
+  date: 2026
+  description: Three scaled, rotated zooms aligned to the top of a stem.
+  links:
+    - https://en.wikipedia.org/wiki/Barnsley_fern
+
 frame:
   width: 12
   radius: 6

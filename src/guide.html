@@ -1,5 +1,7 @@
 <nav class="guide-contents">
   <a href="#guide-overview">Overview</a>
+  <a href="#guide-editor">Editor</a>
+  <a href="#guide-info">Info</a>
   <a href="#guide-view">View</a>
   <a href="#guide-frame">Frame</a>
   <a href="#guide-scene">Scene</a>
@@ -25,7 +27,8 @@
     which makes a fractal.
   </p>
   <p>A definition has these parts. Only <code>scene</code> is required.</p>
-  <pre><code>variables:  # named numbers to use in expressions
+  <pre><code>info:       # title, author and other details for the label
+variables:  # named numbers to use in expressions
 frame:      # the border drawn around the picture
 view:       # picture size and coordinates
 seed:       # colour of the smallest copies
@@ -47,8 +50,57 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   <p>
     Mistakes are underlined in the editor as you type; hover over one to see what is
     wrong. When you apply a definition with a mistake, the message is also shown in red
-    under the buttons, and nothing is drawn until it is fixed. Press Tab to indent.
+    under the buttons, and nothing is drawn until it is fixed.
   </p>
+</section>
+
+<section id="guide-editor">
+  <h3>Editor</h3>
+  <p>
+    Click the arrow beside a line number to fold a block, such as <code>info</code> or
+    one scene item, and focus on the rest. Untick <em>Wrap lines</em> to scroll long
+    lines sideways instead of wrapping them.
+  </p>
+  <table>
+    <tr><th>Tab, Shift+Tab</th><td>indent or unindent (YAML indents with spaces)</td></tr>
+    <tr><th>Ctrl+/</th><td>comment or uncomment the selected lines</td></tr>
+    <tr><th>Ctrl+Z, Ctrl+Y</th><td>undo and redo</td></tr>
+    <tr><th>Alt+Up, Alt+Down</th><td>move the selected lines up or down</td></tr>
+    <tr><th>Shift+Alt+Up, Shift+Alt+Down</th><td>copy the selected lines above or below</td></tr>
+    <tr><th>Ctrl+Shift+K</th><td>delete the selected lines</td></tr>
+    <tr><th>Ctrl+Shift+[, Ctrl+Shift+]</th><td>fold or unfold the block at the cursor</td></tr>
+    <tr><th>Ctrl+Alt+[, Ctrl+Alt+]</th><td>fold or unfold everything</td></tr>
+  </table>
+  <p>
+    On a Mac, use Cmd instead of Ctrl, except: redo is Cmd+Shift+Z, folding the block
+    at the cursor is Cmd+Alt+[ and Cmd+Alt+], and folding everything is still
+    Ctrl+Alt+[ and Ctrl+Alt+].
+  </p>
+</section>
+
+<section id="guide-info">
+  <h3>Info</h3>
+  <p>
+    Details about the picture, shown on a label beside it like in a gallery. Every
+    setting is optional, and none of them change the picture.
+  </p>
+  <pre><code>info:
+  title: Vicsek Red Blue
+  author: Emlyn Corrin
+  date: 2026-09-26        # any text, such as "Spring 2026"
+  description: >
+    A Vicsek cross with red and blue
+    glows on alternate arms.
+  links:
+    - https://en.wikipedia.org/wiki/Vicsek_fractal
+    - title: PowerPoint Fractals
+      url: https://github.com/emlyn/PowerPointFractals</code></pre>
+  <ul>
+    <li>Links are web addresses starting with <code>http://</code> or <code>https://</code>, with an optional <code>title</code> to show instead.</li>
+    <li>The label also lists what the picture is made of, its size in pixels, and how it was rendered.</li>
+    <li>The label goes beside the picture, or underneath when that leaves more room. Turn it off with <em>Show label</em>.</li>
+    <li>For built-in examples, the title and description also appear in the example list.</li>
+  </ul>
 </section>
 
 <section id="guide-view">

@@ -1,3 +1,11 @@
+info:
+  title: Sierpiński Carpet
+  author: Emlyn Corrin
+  date: 2026
+  description: Eight zooms around an empty centre form a recursive square carpet.
+  links:
+    - https://en.wikipedia.org/wiki/Sierpi%C5%84ski_carpet
+
 frame:
   width: 12
   radius: 6

@@ -1,3 +1,4 @@
+import { parseScene } from './scene';
 import fernText from './examples/fern.yaml?raw';
 import pythagorasTreeDensityText from './examples/pythagoras-tree-density.yaml?raw';
 import pythagorasTreeText from './examples/pythagoras-tree.yaml?raw';
@@ -12,43 +13,23 @@ export type ExampleDefinition = {
   text: string;
 };
 
+// Names and descriptions come from each definition's `info`, so they are
+// written in one place. Built-in examples must have a title.
+function example(id: string, text: string): ExampleDefinition {
+  const { title, description } = parseScene(text).info;
+  if (!title) {
+    throw new Error(`Example "${id}" needs an info title`);
+  }
+  return { id, label: title, description: description ?? '', text };
+}
+
 export const EXAMPLES: ExampleDefinition[] = [
-  {
-    id: 'sierpinski',
-    label: 'Sierpiński triangle',
-    description: 'Three ordered axis-aligned zooms with a black terminal seed.',
-    text: sierpinskiText,
-  },
-  {
-    id: 'sierpinski-carpet',
-    label: 'Sierpiński Carpet',
-    description: 'Eight zooms around an empty centre form a recursive square carpet.',
-    text: sierpinskiCarpetText,
-  },
-  {
-    id: 'vicsek-red-blue',
-    label: 'Vicsek Red Blue',
-    description: 'A Vicsek cross with sharper red and blue glows on alternate arms.',
-    text: vicsekRedBlueText,
-  },
-  {
-    id: 'fern',
-    label: 'Fern',
-    description: 'Three scaled, rotated zooms aligned to the top of a stem.',
-    text: fernText,
-  },
-  {
-    id: 'pythagoras-tree',
-    label: 'Pythagoras Tree',
-    description: 'Two zooms aligned to a 3-4-5 triangle on top of a square, using variables.',
-    text: pythagorasTreeText,
-  },
-  {
-    id: 'pythagoras-tree-density',
-    label: 'Pythagoras Tree (density)',
-    description: 'The Pythagoras tree shaded by how many copies cover each pixel.',
-    text: pythagorasTreeDensityText,
-  },
+  example('sierpinski', sierpinskiText),
+  example('sierpinski-carpet', sierpinskiCarpetText),
+  example('vicsek-red-blue', vicsekRedBlueText),
+  example('fern', fernText),
+  example('pythagoras-tree', pythagorasTreeText),
+  example('pythagoras-tree-density', pythagorasTreeDensityText),
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0];

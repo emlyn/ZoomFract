@@ -1,8 +1,8 @@
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from '@codemirror/commands';
 import { yaml } from '@codemirror/lang-yaml';
-import { bracketMatching, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
+import { bracketMatching, codeFolding, foldGutter, foldKeymap, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
 import { lintGutter, linter, type Diagnostic } from '@codemirror/lint';
-import { EditorSelection, EditorState, RangeSetBuilder } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, RangeSetBuilder } from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
@@ -13,6 +13,7 @@ import {
   highlightSpecialChars,
   keymap,
   lineNumbers,
+  MatchDecorator,
   type Command,
   ViewPlugin,
   type ViewUpdate,
@@ -42,9 +43,17 @@ const theme = EditorView.theme({
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
     backgroundColor: 'rgba(147, 197, 253, 0.25)',
   },
+  '.cm-long-word': { wordBreak: 'break-all' },
   '.cm-activeLine': { backgroundColor: 'rgba(255, 255, 255, 0.04)' },
   '.cm-gutters': { backgroundColor: 'transparent', color: '#71717a', border: 'none' },
   '.cm-activeLineGutter': { backgroundColor: 'transparent', color: '#d4d4d8' },
+  '.cm-foldGutter .cm-gutterElement': { cursor: 'pointer', padding: '0 0.2rem' },
+  '.cm-foldPlaceholder': {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    border: 'none',
+    color: '#a1a1aa',
+    padding: '0 0.3rem',
+  },
   '.cm-tooltip': {
     backgroundColor: '#27272a',
     color: '#f4f4f5',
@@ -104,6 +113,26 @@ const hangingIndentPlugin = ViewPlugin.fromClass(class {
   }
 }, { decorations: (plugin) => plugin.decorations });
 
+// Long unbroken runs such as URLs may wrap at any character, so they fill the
+// rest of their line instead of jumping to the next one. Prose still wraps
+// between words.
+const longWordDecorator = new MatchDecorator({
+  regexp: /\S{20,}/g,
+  decoration: Decoration.mark({ class: 'cm-long-word' }),
+});
+
+const longWordPlugin = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+  constructor(view: EditorView) {
+    this.decorations = longWordDecorator.createDeco(view);
+  }
+  update(update: ViewUpdate) {
+    this.decorations = longWordDecorator.updateDeco(update, this.decorations);
+  }
+}, { decorations: (plugin) => plugin.decorations });
+
+const wrapping = (wrap: boolean) => (wrap ? [EditorView.lineWrapping, longWordPlugin] : []);
+
 // Marks stay on the line where the mistake starts, so they remain readable.
 const toLintDiagnostic = (text: string) => (diagnostic: SceneDiagnostic): Diagnostic => {
   const from = Math.min(diagnostic.from, text.length);
@@ -130,14 +159,18 @@ export type SceneEditor = {
   element: HTMLElement;
   text: () => string;
   setText: (text: string) => void;
+  setWrap: (wrap: boolean) => void;
 };
 
 export function createSceneEditor(text: string, onEdit: () => void): SceneEditor {
+  const wrapCompartment = new Compartment();
   const view = new EditorView({
     state: EditorState.create({
       doc: text,
       extensions: [
         lineNumbers(),
+        codeFolding({ placeholderText: '...' }),
+        foldGutter({ openText: '\u25be', closedText: '\u25b8' }),
         highlightActiveLineGutter(),
         highlightSpecialChars(),
         history(),
@@ -145,13 +178,14 @@ export function createSceneEditor(text: string, onEdit: () => void): SceneEditor
         indentOnInput(),
         bracketMatching(),
         highlightActiveLine(),
-        EditorView.lineWrapping,
+        wrapCompartment.of(wrapping(true)),
         hangingIndentPlugin,
         indentUnit.of(INDENT),
         EditorState.tabSize.of(INDENT.length),
         keymap.of([
           { key: 'Tab', run: insertIndent, shift: indentLess },
           ...defaultKeymap,
+          ...foldKeymap,
           ...historyKeymap,
         ]),
         yaml(),
@@ -180,6 +214,9 @@ export function createSceneEditor(text: string, onEdit: () => void): SceneEditor
       if (next !== view.state.doc.toString()) {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next }, userEvent: LOAD_EVENT });
       }
+    },
+    setWrap: (wrap) => {
+      view.dispatch({ effects: wrapCompartment.reconfigure(wrapping(wrap)) });
     },
   };
 }
