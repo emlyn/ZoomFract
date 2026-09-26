@@ -323,7 +323,7 @@ canvas {
   border-left: 2px solid rgba(212, 212, 216, 0.14);
 }
 
-.render-settings-body.read-only > * {
+.render-settings-body.read-only > :not(.quality-details) {
   opacity: 0.55;
 }
 
@@ -336,7 +336,6 @@ canvas {
 
 .quality-details {
   min-height: 1.25rem;
-  margin-top: 0.75rem;
   color: #a1a1aa;
   font-size: 0.78rem;
 }
@@ -390,11 +389,14 @@ canvas {
   color: #f4f4f5;
   padding: 0.6rem 0.8rem;
   cursor: pointer;
+  transition: opacity 120ms ease;
 }
 
+/* Dimming waits briefly so fast renders do not flash the button. */
 .apply-scene:disabled {
   cursor: default;
   opacity: 0.45;
+  transition-delay: 150ms;
 }
 
 .scene-label {

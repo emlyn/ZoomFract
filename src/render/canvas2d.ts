@@ -8,9 +8,12 @@ import {
   type ZoomElement,
 } from '../scene';
 import {
+  changedFraction,
+  CONVERGED_FRACTION,
   EDIT_MODE_ZOOM_OPACITY,
   elementCorners,
   type FrameCallbacks,
+  type RenderOutcome,
   type RenderResult,
   type RenderSettings,
 } from './common';
@@ -18,6 +21,7 @@ import {
 type CapturedScene = {
   width: number;
   height: number;
+  pixels: Uint8ClampedArray;
   levels: OffscreenCanvas[];
   leafRasters: Map<string, OffscreenCanvas>;
 };
@@ -271,6 +275,7 @@ function captureCanvas(source: OffscreenCanvas, onLevel: () => void): CapturedSc
   return {
     width: source.width,
     height: source.height,
+    pixels: pixelLevels[0].data,
     levels: pixelLevels.map(canvasFromPixels),
     leafRasters: new Map(),
   };
@@ -317,7 +322,12 @@ export function renderCanvas2d(
   let lastDepth = 0;
   let workingIsCurrent = true;
 
-  const renderLevels = (levels: number, depthLimit: number, frameCallbacks: FrameCallbacks): string[] => {
+  const renderLevels = (
+    levels: number,
+    depthLimit: number,
+    stopWhenConverged: boolean,
+    frameCallbacks: FrameCallbacks,
+  ): RenderOutcome => {
     const count = levels - completedLevels;
     const passes = Math.max(1, Math.ceil(count / (depthLimit + 1)));
     const captures = completedLevels > 0 ? passes : passes - 1;
@@ -333,7 +343,15 @@ export function renderCanvas2d(
         if (!workingIsCurrent) {
           renderPass(workingCanvas, scene, settings, lastDepth, capturedScene);
         }
+        const previousPixels = capturedScene?.pixels;
         capturedScene = captureCanvas(workingCanvas, advance);
+        // Captures are already read back, so automatic levels can stop as
+        // soon as a whole pass barely changes anything.
+        const fraction = previousPixels ? changedFraction(previousPixels, capturedScene.pixels) : 1;
+        if (stopWhenConverged && fraction < CONVERGED_FRACTION) {
+          frameCallbacks.progress(1);
+          return { details: [], levels: completedLevels, renderPasses: pass, stepChange: { fraction, levels: lastDepth + 1 } };
+        }
       }
       // Each pass adds depth + 1 generations; the first pass absorbs any
       // remainder so the seed lands exactly at the requested level.
@@ -345,17 +363,17 @@ export function renderCanvas2d(
       if (editCanvas) {
         renderPass(editCanvas, scene, settings, depth, capturedScene, true);
       }
-      frameCallbacks.frame(editCanvas ?? workingCanvas);
-      advance();
       lastDepth = depth;
       completedLevels += depth + 1;
+      frameCallbacks.frame(editCanvas ?? workingCanvas, completedLevels);
+      advance();
     }
-    return [];
+    return { details: [], levels: completedLevels };
   };
 
   return {
-    details: renderLevels(settings.levels, settings.recursionDepth, callbacks),
-    continueTo: (next, frameCallbacks) => renderLevels(next.levels, next.recursionDepth, frameCallbacks),
+    outcome: renderLevels(settings.levels, settings.recursionDepth, settings.autoLevels, callbacks),
+    continueTo: (next, frameCallbacks) => renderLevels(next.levels, next.recursionDepth, false, frameCallbacks),
     dispose: () => {},
   };
 }

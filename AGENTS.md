@@ -133,9 +133,13 @@ files unless extracting a module clearly reduces complexity.
   from, then remembered.
   WebGL2 falls back to Canvas 2D only if it is unavailable or fails.
 - Levels count generations of zooms, with the seed at the last generation.
-  Automatic levels continue until the largest zoom is below half a working
-  pixel, i.e. the fixed point. Max recursion bounds how many generations are
-  exact geometry; the rest come from feedback or earlier Canvas 2D passes.
+  Automatic levels are estimated as where the largest zoom falls below half a
+  working pixel, i.e. the fixed point. Canvas 2D treats that as an upper bound
+  and stops early once a pass changes under 0.01% of its captured pixels;
+  WebGL2 always renders the estimate, because per-level readbacks stall the
+  GPU and feedback resampling keeps nudging pixels. Max recursion bounds how
+  many generations are exact geometry; the rest come from feedback or earlier
+  Canvas 2D passes.
 - WebGL2 renders recursion by texture feedback: each level draws the scene
   once, with zooms as quads sampling the previous level's texture. Cost is
   linear in depth. Rect edges use MSAA at low supersampling.
@@ -160,9 +164,16 @@ files unless extracting a module clearly reduces complexity.
   level increase that arrives while busy waits and replaces any earlier
   waiting increase; any other change terminates the busy worker. The Custom
   Levels row has a +1 button that uses this path.
+- Every render reports the fraction of display pixels that changed, compared
+  premultiplied by more than rounding noise, between the final image and one
+  step before it: the previous level for WebGL2 (an extra output draw before
+  the last feedback level) and the previous pass for Canvas 2D, including
+  continuations.
 - The progress bar is a thin overlay along the bottom of the window, outside
   the panel, so it stays visible when the panel is hidden and never moves
-  controls. Render details live inside the Render settings section.
+  controls. Render details live inside the Render settings section and list
+  only what the inputs do not show; the resolved renderer, supersampling,
+  recursion and levels are hover text on the Quality row and settings header.
 - Captures must exclude the host background and preserve transparency.
 - Downsampling must weight colours by alpha and prioritise non-transparent
   coverage so fine recursive details do not disappear prematurely. Both

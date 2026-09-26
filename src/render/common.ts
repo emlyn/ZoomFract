@@ -34,25 +34,79 @@ export type RenderRequest = {
   editMode: boolean;
 };
 
+// Fraction of pixels that changed between two images, and how many levels
+// apart they were.
+export type StepChange = { fraction: number; levels: number };
+
 export type RenderMessage =
   | { type: 'start'; renderer: RendererName; settings: RenderSettings; fallbackReason?: string }
   | { type: 'progress'; progress: number }
   | { type: 'frame'; bitmap: ImageBitmap }
-  | { type: 'done'; milliseconds: number; details: string[] }
+  | {
+    type: 'done';
+    levels: number;
+    // Set when fewer passes were needed than announced at the start.
+    renderPasses?: number;
+    milliseconds: number;
+    stepMilliseconds?: number;
+    stepChange?: StepChange;
+    details: string[];
+  }
   | { type: 'error'; message: string };
 
 export type FrameCallbacks = {
-  frame: (canvas: OffscreenCanvas) => void;
+  // `levels` is the total recursion shown by the image.
+  frame: (canvas: OffscreenCanvas, levels: number) => void;
+  // An image one step before the final one, used only for comparison.
+  reference: (canvas: OffscreenCanvas, levels: number) => void;
   progress: (progress: number) => void;
+};
+
+// Automatic levels may stop before the estimate, so renders report the
+// levels and passes they reached. Renderers that detect convergence report its
+// change.
+export type RenderOutcome = {
+  details: string[];
+  levels: number;
+  renderPasses?: number;
+  stepChange?: StepChange;
 };
 
 // A finished render keeps its working state so fixed levels can be extended
 // without starting again.
 export type RenderResult = {
-  details: string[];
-  continueTo: (settings: RenderSettings, callbacks: FrameCallbacks) => string[];
+  outcome: RenderOutcome;
+  continueTo: (settings: RenderSettings, callbacks: FrameCallbacks) => RenderOutcome;
   dispose: () => void;
 };
+
+// Channel differences up to this are rounding noise between equivalent renders.
+const CHANGE_THRESHOLD = 2;
+// Automatic levels stop once fewer than one pixel in 10,000 changes; exact
+// zero is rarely reached because resampling keeps nudging a few pixels.
+export const CONVERGED_FRACTION = 0.0001;
+
+// Inputs are unpremultiplied ImageData pixels. Colours are compared
+// premultiplied so rounding in nearly transparent pixels is not counted.
+export function changedFraction(before: ArrayLike<number>, after: ArrayLike<number>): number {
+  let changed = 0;
+  for (let index = 0; index < before.length; index += 4) {
+    const beforeAlpha = before[index + 3];
+    const afterAlpha = after[index + 3];
+    const channelChanged = (offset: number) => Math.abs(
+      before[index + offset] * beforeAlpha - after[index + offset] * afterAlpha,
+    ) > CHANGE_THRESHOLD * 255;
+    if (
+      Math.abs(beforeAlpha - afterAlpha) > CHANGE_THRESHOLD
+      || channelChanged(0)
+      || channelChanged(1)
+      || channelChanged(2)
+    ) {
+      changed += 1;
+    }
+  }
+  return changed / (before.length / 4);
+}
 
 // Requests with equal keys differ only in levels, so a render can continue
 // from an earlier one with fewer fixed levels.
@@ -111,8 +165,9 @@ export function elementCorners(element: RectGeometry, scene: SceneDefinition): V
 
 // Levels count generations of zooms: generation `levels` is the terminal seed,
 // and earlier generations are drawn as exact geometry or by sampling an
-// earlier rendering. Automatic levels continue until the largest zoom is
-// below half a working pixel, so the result is at its fixed point.
+// earlier rendering. Automatic levels are estimated as the point where the
+// largest zoom is below half a working pixel. Canvas 2D treats that as an upper
+// bound and stops sooner once a pass barely changes its captured pixels.
 export function resolveRenderSettings(
   scene: SceneDefinition,
   options: RenderOptions,

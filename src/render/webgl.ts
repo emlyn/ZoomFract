@@ -2,6 +2,7 @@ import type { SceneDefinition, Vec2 } from '../scene';
 import {
   EDIT_MODE_ZOOM_OPACITY,
   type FrameCallbacks,
+  type RenderOutcome,
   type RenderResult,
   type RenderSettings,
 } from './common';
@@ -267,6 +268,16 @@ export function renderWebgl(
     return new Float32Array(vertices);
   };
 
+  // Continuations redraw the same items, so their vertices are built once.
+  const vertexCache = new Map<UnrolledItem[], Map<boolean, Float32Array>>();
+  const cachedVertices = (items: UnrolledItem[], sampleSource: boolean) => {
+    const byMode = vertexCache.get(items) ?? new Map<boolean, Float32Array>();
+    vertexCache.set(items, byMode);
+    const vertices = byMode.get(sampleSource) ?? sceneVertices(items, sampleSource);
+    byMode.set(sampleSource, vertices);
+    return vertices;
+  };
+
   const levelItems = unrollScene(scene, factor, {
     maximumDepth: 0,
     uniform: false,
@@ -313,7 +324,7 @@ export function renderWebgl(
     gl.bindTexture(gl.TEXTURE_2D, source?.texture ?? null);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    const vertices = sceneVertices(items, source !== null);
+    const vertices = cachedVertices(items, source !== null);
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
@@ -332,23 +343,20 @@ export function renderWebgl(
   let lastFeedback: LevelTexture | null = null;
   let completedFeedbackLevels = 0;
   const unusedTexture = () => lastFeedback === textures[0] ? textures[1] : textures[0];
+  const levelsShown = () => completedFeedbackLevels + finalUnroll.shallowestLeaf;
 
-  const renderLevels = (levels: number, frameCallbacks: FrameCallbacks): string[] => {
-    const feedbackLevels = feedbackLevelsFor(levels);
-    const steps = feedbackLevels - completedFeedbackLevels + 1;
-    let step = 0;
-    while (completedFeedbackLevels < feedbackLevels) {
-      const target = unusedTexture();
-      drawLevel(target, lastFeedback, levelItems);
-      generateMips(target);
-      lastFeedback = target;
-      completedFeedbackLevels += 1;
-      step += 1;
-      frameCallbacks.progress(step / steps);
-    }
+  const addFeedbackLevel = () => {
+    const target = unusedTexture();
+    drawLevel(target, lastFeedback, levelItems);
+    generateMips(target);
+    lastFeedback = target;
+    completedFeedbackLevels += 1;
+  };
+
+  // Draws the exact geometry over the latest feedback texture into the output.
+  const drawOutput = () => {
     const finalTexture = unusedTexture();
     drawLevel(finalTexture, lastFeedback, finalUnroll.items);
-
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, outputWidth, outputHeight);
     gl.disable(gl.BLEND);
@@ -358,13 +366,13 @@ export function renderWebgl(
     gl.bindTexture(gl.TEXTURE_2D, finalTexture.texture);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.finish();
-
     const error = gl.getError();
     if (error !== gl.NO_ERROR) {
       throw new Error(`WebGL error ${error}`);
     }
-    frameCallbacks.progress(1);
-    frameCallbacks.frame(output);
+  };
+
+  const details = () => {
     const exactGenerations = finalUnroll.shallowestLeaf - 1;
     const budgetLimited = !settings.autoLevels && exactGenerations < settings.recursionDepth;
     return [
@@ -373,8 +381,26 @@ export function renderWebgl(
     ];
   };
 
+  const renderLevels = (levels: number, frameCallbacks: FrameCallbacks): RenderOutcome => {
+    const feedbackLevels = feedbackLevelsFor(levels);
+    const steps = feedbackLevels - completedFeedbackLevels + 1;
+    let step = 0;
+    while (completedFeedbackLevels < feedbackLevels) {
+      if (completedFeedbackLevels === feedbackLevels - 1) {
+        drawOutput();
+        frameCallbacks.reference(output, levelsShown());
+      }
+      addFeedbackLevel();
+      step += 1;
+      frameCallbacks.progress(step / steps);
+    }
+    drawOutput();
+    frameCallbacks.progress(1);
+    frameCallbacks.frame(output, levelsShown());
+    return { details: details(), levels: levelsShown() };
+  };
   return {
-    details: renderLevels(settings.levels, callbacks),
+    outcome: renderLevels(settings.levels, callbacks),
     // Exact geometry is kept from the first render; only feedback levels are added.
     continueTo: (next, frameCallbacks) => renderLevels(next.levels, frameCallbacks),
     dispose: () => gl.getExtension('WEBGL_lose_context')?.loseContext(),

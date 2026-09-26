@@ -1,5 +1,6 @@
 import { renderCanvas2d } from './canvas2d';
 import {
+  changedFraction,
   continuationKey,
   resolveRenderSettings,
   type FrameCallbacks,
@@ -8,6 +9,7 @@ import {
   type RenderRequest,
   type RenderResult,
   type RenderSettings,
+  type StepChange,
 } from './common';
 import { isWebglAvailable, renderWebgl } from './webgl';
 
@@ -17,20 +19,36 @@ const post = (message: RenderMessage, transfer: Transferable[] = []) => {
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-function frameCallbacks(width: number, height: number): FrameCallbacks {
+type Snapshot = { pixels: Uint8ClampedArray; levels: number };
+
+// Frames and comparison references are read back at display resolution, so
+// the final image can be compared with the one before it.
+function frameCallbacks(width: number, height: number, initial: Snapshot | null) {
   const display = new OffscreenCanvas(width, height);
-  const context = display.getContext('2d')!;
+  const context = display.getContext('2d', { willReadFrequently: true })!;
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  return {
-    frame: (source) => {
-      context.clearRect(0, 0, width, height);
-      context.drawImage(source, 0, 0, width, height);
+  let previous: Snapshot | null = null;
+  let current = initial;
+  const snapshot = (source: OffscreenCanvas, levels: number) => {
+    context.clearRect(0, 0, width, height);
+    context.drawImage(source, 0, 0, width, height);
+    previous = current;
+    current = { pixels: context.getImageData(0, 0, width, height).data, levels };
+  };
+  const callbacks: FrameCallbacks = {
+    frame: (source, levels) => {
+      snapshot(source, levels);
       const bitmap = display.transferToImageBitmap();
       post({ type: 'frame', bitmap }, [bitmap]);
     },
+    reference: snapshot,
     progress: (progress) => post({ type: 'progress', progress }),
   };
+  const stepChange = (): StepChange | undefined => previous && current && current.levels > previous.levels
+    ? { fraction: changedFraction(previous.pixels, current.pixels), levels: current.levels - previous.levels }
+    : undefined;
+  return { callbacks, current: () => current, stepChange };
 }
 
 type Session = {
@@ -39,6 +57,9 @@ type Session = {
   settings: RenderSettings;
   fallbackReason?: string;
   result: RenderResult;
+  // Total time spent on this image, including continuations.
+  milliseconds: number;
+  snapshot: Snapshot | null;
 };
 
 // The latest completed render, kept so fixed levels can be extended.
@@ -61,13 +82,20 @@ function continueSession(current: Session, request: RenderRequest): boolean {
     : { ...resolved, renderPasses: Math.ceil(addedLevels / (resolved.recursionDepth + 1)) };
   post({ type: 'start', renderer: current.renderer, settings, fallbackReason: current.fallbackReason });
   const { width, height } = request.scene.view.resolution;
-  const details = current.result.continueTo(settings, frameCallbacks(width, height));
-  const from = current.settings.levels;
+  const frames = frameCallbacks(width, height, current.snapshot);
+  const outcome = current.result.continueTo(settings, frames.callbacks);
+  const stepMilliseconds = performance.now() - startedAt;
   current.settings = settings;
+  current.milliseconds += stepMilliseconds;
+  current.snapshot = frames.current();
   post({
     type: 'done',
-    milliseconds: performance.now() - startedAt,
-    details: [...details, `continued from ${from}`],
+    levels: outcome.levels,
+    renderPasses: outcome.renderPasses,
+    milliseconds: current.milliseconds,
+    stepMilliseconds,
+    stepChange: outcome.stepChange ?? frames.stepChange(),
+    details: outcome.details,
   });
   return true;
 }
@@ -103,9 +131,26 @@ function render(request: RenderRequest) {
       const settings = resolveRenderSettings(request.scene, request.options, renderer);
       post({ type: 'start', renderer, settings, fallbackReason });
       const draw = renderer === 'webgl' ? renderWebgl : renderCanvas2d;
-      const result = draw(request.scene, settings, request.editMode, frameCallbacks(width, height));
-      session = { key: continuationKey(request), renderer, settings, fallbackReason, result };
-      post({ type: 'done', milliseconds: performance.now() - startedAt, details: result.details });
+      const frames = frameCallbacks(width, height, null);
+      const { outcome, ...result } = draw(request.scene, settings, request.editMode, frames.callbacks);
+      const milliseconds = performance.now() - startedAt;
+      session = {
+        key: continuationKey(request),
+        renderer,
+        settings: { ...settings, levels: outcome.levels },
+        fallbackReason,
+        result: { outcome, ...result },
+        milliseconds,
+        snapshot: frames.current(),
+      };
+      post({
+        type: 'done',
+        levels: outcome.levels,
+        renderPasses: outcome.renderPasses,
+        milliseconds,
+        stepChange: outcome.stepChange ?? frames.stepChange(),
+        details: outcome.details,
+      });
       return;
     } catch (error) {
       fallbackReason = errorMessage(error);

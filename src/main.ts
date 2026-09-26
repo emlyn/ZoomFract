@@ -20,6 +20,7 @@ import {
   type RenderRequest,
   type RenderSettings,
   type RendererName,
+  type StepChange,
 } from './render/common';
 import {
   clamp,
@@ -287,6 +288,8 @@ const rendererControl = selectRow<RendererName>(
   Object.entries(RENDERER_LABELS) as [RendererName, string][],
   (renderer) => updateCustomOptions({ renderer }),
 );
+rendererControl.row.title = 'How the image is drawn. WebGL2 uses the graphics card and is much faster; '
+  + 'Canvas 2D is a slower, simpler reference that works everywhere.';
 
 const supersamplingControl = selectRow<number>(
   'supersampling-row',
@@ -294,6 +297,8 @@ const supersamplingControl = selectRow<number>(
   SUPERSAMPLING_CHOICES.map((factor) => [factor, `${factor}×`]),
   (supersampling) => updateCustomOptions({ supersampling }),
 );
+supersamplingControl.row.title = 'Draws the image this many times larger in each direction, then shrinks it '
+  + 'down. Higher values give smoother edges and finer detail, but take longer.';
 
 const recursionControl = selectRow<number>(
   'recursion-row',
@@ -301,9 +306,13 @@ const recursionControl = selectRow<number>(
   Array.from({ length: MAXIMUM_RECURSION_CHOICE + 1 }, (_, depth): [number, string] => [depth, String(depth)]),
   (recursionDepth) => updateCustomOptions({ recursionDepth }),
 );
+recursionControl.row.title = 'How many levels of zooms are drawn precisely as shapes. Deeper levels reuse '
+  + 'an earlier picture, which is faster but slightly blurrier. Higher values are sharper but slower.';
 
 const levelsRow = document.createElement('label');
 levelsRow.className = 'levels-row';
+levelsRow.title = 'How many times the picture repeats inside itself. More levels add finer detail. '
+  + 'Auto (far right) keeps going until extra levels would be too small to see.';
 levelsRow.innerHTML = '<span>Levels</span>';
 const levelsSlider = document.createElement('input');
 levelsSlider.type = 'range';
@@ -336,8 +345,15 @@ const customSettingsBody = document.createElement('div');
 customSettingsBody.className = 'render-settings-body';
 const qualityDetails = document.createElement('div');
 qualityDetails.className = 'quality-details';
-customSettingsBody.append(rendererControl.row, supersamplingControl.row, recursionControl.row, levelsRow);
-customSettings.append(customSettingsSummary, customSettingsBody, qualityDetails);
+customSettingsBody.append(rendererControl.row, supersamplingControl.row, recursionControl.row, levelsRow, qualityDetails);
+customSettings.append(customSettingsSummary, customSettingsBody);
+
+// The quality select and the collapsed settings header both show what the
+// latest render actually used.
+const setSettingsTitle = (text: string) => {
+  qualityControl.row.title = text;
+  customSettingsSummary.title = text;
+};
 
 // Fast and High quality show their fixed settings read-only.
 function syncQualityControls() {
@@ -702,20 +718,38 @@ function setRenderProgress(progress: number | null) {
   renderProgress.setAttribute('aria-valuenow', String(percentage));
 }
 
-function describeRender(renderer: RendererName, settings: RenderSettings, fallbackReason?: string) {
-  const parts = [
+// The resolved settings mirror the inputs, so they are shown as hover text
+// that stays visible while the settings are collapsed.
+function describeSettings(renderer: RendererName, settings: RenderSettings) {
+  return [
     RENDERER_LABELS[renderer],
+    `${settings.supersampling}× supersampling`,
     `Recursion ${settings.recursionDepth}`,
-    `Levels ${settings.levels}`,
+    `Levels ${settings.autoLevels ? `Auto (${settings.levels})` : settings.levels}`,
+  ].join(' · ');
+}
+
+// Details not visible in the inputs above them.
+function describeRender(settings: RenderSettings, fallbackReason?: string) {
+  return [
+    ...(fallbackReason ? [`Canvas 2D fallback: ${fallbackReason}`] : []),
     ...(settings.renderPasses > 1 ? [`${settings.renderPasses} passes`] : []),
-    `${settings.supersampling}×`,
   ];
-  return `${parts.join(' · ')}${fallbackReason ? ` (fallback: ${fallbackReason})` : ''}`;
 }
 
 const formatDuration = (milliseconds: number) => milliseconds < 1000
   ? `${Math.round(milliseconds)} ms`
   : `${(milliseconds / 1000).toFixed(1)} s`;
+
+const formatChange = ({ fraction, levels }: StepChange) => {
+  const span = levels === 1 ? 'in last level' : `over last ${levels} levels`;
+  if (fraction === 0) {
+    return `no pixels changed ${span}`;
+  }
+  const percentage = fraction * 100;
+  const text = percentage >= 10 ? percentage.toFixed(0) : percentage.toPrecision(2);
+  return `${text}% of pixels changed ${span}`;
+};
 
 // An idle worker keeps its last render so fixed levels can be extended.
 // Replacing a busy worker cancels obsolete work immediately, unless the new
@@ -757,12 +791,19 @@ function startRender(request: RenderRequest) {
   const worker = renderWorker ??= new Worker(new URL('./render/worker.ts', import.meta.url), { type: 'module' });
   activeRequest = request;
   downloadButton.disabled = true;
-  let details = '';
+  let details: string[] = [];
+  let started: Extract<RenderMessage, { type: 'start' }> | null = null;
   let latestProgress = 0;
   let progressVisible = false;
+  const showInProgress = () => {
+    qualityDetails.textContent = ['Rendering...', ...details].join(' · ');
+  };
+  // Fast renders swap straight to the final details, so the text does not
+  // briefly shrink and shift the controls below it.
   progressTimer = window.setTimeout(() => {
     progressVisible = true;
     setRenderProgress(latestProgress);
+    showInProgress();
   }, PROGRESS_DELAY_MS);
   setRenderProgress(null);
 
@@ -782,10 +823,12 @@ function startRender(request: RenderRequest) {
     const message = event.data;
     switch (message.type) {
       case 'start':
-        details = describeRender(message.renderer, message.settings, message.fallbackReason);
-        state.resolvedLevels = message.settings.levels;
-        syncQualityControls();
-        qualityDetails.textContent = details;
+        started = message;
+        details = describeRender(message.settings, message.fallbackReason);
+        setSettingsTitle(describeSettings(message.renderer, message.settings));
+        if (progressVisible) {
+          showInProgress();
+        }
         break;
       case 'progress':
         latestProgress = message.progress;
@@ -798,10 +841,30 @@ function startRender(request: RenderRequest) {
         displayedFrame = { bitmap: message.bitmap, scene: request.scene, editMode: request.editMode };
         drawDisplay();
         break;
-      case 'done':
-        qualityDetails.textContent = [details, ...message.details, formatDuration(message.milliseconds)].join(' · ');
+      case 'done': {
+        // Automatic levels may converge before the estimate given at the start.
+        const time = formatDuration(message.milliseconds);
+        const step = message.stepMilliseconds === undefined ? '' : ` (last step ${formatDuration(message.stepMilliseconds)})`;
+        if (started) {
+          const settings = {
+            ...started.settings,
+            levels: message.levels,
+            renderPasses: message.renderPasses ?? started.settings.renderPasses,
+          };
+          details = describeRender(settings, started.fallbackReason);
+          setSettingsTitle(`${describeSettings(started.renderer, settings)} · ${time}${step}`);
+        }
+        state.resolvedLevels = message.levels;
+        syncQualityControls();
+        qualityDetails.textContent = [
+          ...details,
+          ...message.details,
+          ...(message.stepChange === undefined ? [] : [formatChange(message.stepChange)]),
+          `${time}${step}`,
+        ].join(' · ');
         finish(false);
         break;
+      }
       case 'error':
         qualityDetails.textContent = `Render failed: ${message.message}`;
         finish(true);
