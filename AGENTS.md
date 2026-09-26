@@ -153,6 +153,13 @@ files unless extracting a module clearly reduces complexity.
   before preparing the next capture, until the requested levels are reached.
   The first pass absorbs any remainder so the total is exact.
 - Progress appears only after a short delay, so fast renders do not flash it.
+- The render worker is kept while idle and holds the last render's working
+  state. A request that differs only by more fixed levels continues from it:
+  WebGL2 adds feedback levels and redraws the kept exact geometry (identical
+  to a full render); Canvas 2D captures the kept image and adds passes. A
+  level increase that arrives while busy waits and replaces any earlier
+  waiting increase; any other change terminates the busy worker. The Custom
+  Levels row has a +1 button that uses this path.
 - The progress bar is a thin overlay along the bottom of the window, outside
   the panel, so it stays visible when the panel is hidden and never moves
   controls. Render details live inside the Render settings section.

@@ -11,6 +11,7 @@ import {
   EDIT_MODE_ZOOM_OPACITY,
   elementCorners,
   type FrameCallbacks,
+  type RenderResult,
   type RenderSettings,
 } from './common';
 
@@ -303,40 +304,58 @@ export function renderCanvas2d(
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,
-): string[] {
+): RenderResult {
   const width = scene.view.resolution.width * settings.supersampling;
   const height = scene.view.resolution.height * settings.supersampling;
   const workingCanvas = new OffscreenCanvas(width, height);
   // Captures feed deeper recursion, so edit-mode fading uses a separate display-only pass.
   const editCanvas = editMode ? new OffscreenCanvas(width, height) : null;
-  const totalSteps = settings.renderPasses + (settings.renderPasses - 1) * mipLevelCount(width, height);
-  let completedSteps = 0;
-  const advance = () => {
-    completedSteps += 1;
-    callbacks.progress(completedSteps / totalSteps);
+
+  // State after the latest pass, kept so later calls can add more levels.
+  let completedLevels = 0;
+  let capturedScene: CapturedScene | null = null;
+  let lastDepth = 0;
+  let workingIsCurrent = true;
+
+  const renderLevels = (levels: number, depthLimit: number, frameCallbacks: FrameCallbacks): string[] => {
+    const count = levels - completedLevels;
+    const passes = Math.max(1, Math.ceil(count / (depthLimit + 1)));
+    const captures = completedLevels > 0 ? passes : passes - 1;
+    const totalSteps = passes + captures * mipLevelCount(width, height);
+    let completedSteps = 0;
+    const advance = () => {
+      completedSteps += 1;
+      frameCallbacks.progress(completedSteps / totalSteps);
+    };
+
+    for (let pass = 0; pass < passes; pass += 1) {
+      if (completedLevels > 0) {
+        if (!workingIsCurrent) {
+          renderPass(workingCanvas, scene, settings, lastDepth, capturedScene);
+        }
+        capturedScene = captureCanvas(workingCanvas, advance);
+      }
+      // Each pass adds depth + 1 generations; the first pass absorbs any
+      // remainder so the seed lands exactly at the requested level.
+      const depth = pass === 0 ? Math.max(0, count - (passes - 1) * (depthLimit + 1) - 1) : depthLimit;
+      workingIsCurrent = !editCanvas || pass < passes - 1;
+      if (workingIsCurrent) {
+        renderPass(workingCanvas, scene, settings, depth, capturedScene);
+      }
+      if (editCanvas) {
+        renderPass(editCanvas, scene, settings, depth, capturedScene, true);
+      }
+      frameCallbacks.frame(editCanvas ?? workingCanvas);
+      advance();
+      lastDepth = depth;
+      completedLevels += depth + 1;
+    }
+    return [];
   };
 
-  // Each pass adds depth + 1 generations; the first pass absorbs any
-  // remainder so the seed lands exactly at the requested level.
-  const passDepth = (pass: number) => pass === 0
-    ? Math.max(0, settings.levels - (settings.renderPasses - 1) * (settings.recursionDepth + 1) - 1)
-    : settings.recursionDepth;
-
-  let capturedScene: CapturedScene | null = null;
-  for (let pass = 0; pass < settings.renderPasses; pass += 1) {
-    const needsCapture = pass < settings.renderPasses - 1;
-    const depth = passDepth(pass);
-    if (!editCanvas || needsCapture) {
-      renderPass(workingCanvas, scene, settings, depth, capturedScene);
-    }
-    if (editCanvas) {
-      renderPass(editCanvas, scene, settings, depth, capturedScene, true);
-    }
-    callbacks.frame(editCanvas ?? workingCanvas);
-    advance();
-    if (needsCapture) {
-      capturedScene = captureCanvas(workingCanvas, advance);
-    }
-  }
-  return [];
+  return {
+    details: renderLevels(settings.levels, settings.recursionDepth, callbacks),
+    continueTo: (next, frameCallbacks) => renderLevels(next.levels, next.recursionDepth, frameCallbacks),
+    dispose: () => {},
+  };
 }

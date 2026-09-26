@@ -11,6 +11,7 @@ import {
   QUALITY_MODES,
   RENDERER_LABELS,
   SUPERSAMPLING_CHOICES,
+  canContinue,
   elementCorners,
   scenePointToCanvas,
   type QualityMode,
@@ -311,10 +312,21 @@ levelsSlider.max = String(AUTO_LEVELS_POSITION);
 levelsSlider.step = '1';
 const levelsValue = document.createElement('span');
 levelsValue.className = 'value';
-levelsRow.append(levelsSlider, levelsValue);
+const addLevelButton = document.createElement('button');
+addLevelButton.type = 'button';
+addLevelButton.className = 'add-level';
+addLevelButton.textContent = '+1';
+addLevelButton.title = 'Render one more level, continuing from the current image';
+levelsRow.append(levelsSlider, levelsValue, addLevelButton);
 levelsSlider.addEventListener('input', () => updateCustomOptions({
   levels: levelsSlider.valueAsNumber === AUTO_LEVELS_POSITION ? 'auto' : levelsSlider.valueAsNumber,
 }));
+addLevelButton.addEventListener('click', () => {
+  const { levels } = customOptions();
+  if (typeof levels === 'number' && levels < MAXIMUM_LEVELS) {
+    updateCustomOptions({ levels: levels + 1 });
+  }
+});
 
 const customSettings = document.createElement('details');
 customSettings.className = 'render-settings';
@@ -343,6 +355,7 @@ function syncQualityControls() {
   for (const control of [rendererControl.select, supersamplingControl.select, recursionControl.select, levelsSlider]) {
     control.disabled = !isCustom;
   }
+  addLevelButton.disabled = !isCustom || options.levels === 'auto' || options.levels >= MAXIMUM_LEVELS;
   customSettingsBody.classList.toggle('read-only', !isCustom);
 }
 
@@ -420,6 +433,30 @@ applySceneButton.addEventListener('click', () => {
   applyDefinition(sceneInput.value, { kind: 'custom' }, true);
 });
 
+const downloadButton = document.createElement('button');
+downloadButton.type = 'button';
+downloadButton.className = 'apply-scene download-image';
+downloadButton.textContent = 'Download PNG';
+downloadButton.disabled = true;
+
+// Saves the canvas at its full declared resolution, exactly as displayed.
+downloadButton.addEventListener('click', () => {
+  const location = state.definitionLocation;
+  const name = location.kind === 'example' ? location.id : 'custom';
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      showSceneStatus('Could not create PNG', true);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `zoomfract-${name}.png`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }, 'image/png');
+});
+
 exampleSelect.addEventListener('change', () => {
   const example = findExample(exampleSelect.value);
   if (!example) {
@@ -438,6 +475,7 @@ controls.append(
   sceneInput,
   editModeRow,
   applySceneButton,
+  downloadButton,
   sceneStatus,
 );
 panel.append(panelHeader, controls, panelResizeHandle);
@@ -635,7 +673,6 @@ type DisplayedFrame = {
   editMode: boolean;
 };
 
-let cancelActiveRender: (() => void) | null = null;
 let displayedFrame: DisplayedFrame | null = null;
 
 function drawDisplay() {
@@ -680,34 +717,66 @@ const formatDuration = (milliseconds: number) => milliseconds < 1000
   ? `${Math.round(milliseconds)} ms`
   : `${(milliseconds / 1000).toFixed(1)} s`;
 
-// Each render runs in a fresh worker, so replacing it cancels obsolete work immediately.
+// An idle worker keeps its last render so fixed levels can be extended.
+// Replacing a busy worker cancels obsolete work immediately, unless the new
+// request only adds levels, in which case it waits and continues afterwards.
+let renderWorker: Worker | null = null;
+let activeRequest: RenderRequest | null = null;
+let pendingRequest: RenderRequest | null = null;
+let progressTimer = 0;
+
+function stopActiveRender(terminate: boolean) {
+  window.clearTimeout(progressTimer);
+  setRenderProgress(null);
+  activeRequest = null;
+  downloadButton.disabled = displayedFrame === null;
+  if (terminate) {
+    renderWorker?.terminate();
+    renderWorker = null;
+  }
+}
+
 function render() {
-  cancelActiveRender?.();
-  const worker = new Worker(new URL('./render/worker.ts', import.meta.url), { type: 'module' });
   const request: RenderRequest = {
     scene: state.scene,
     options: renderOptions(),
     editMode: state.editMode,
   };
+  if (activeRequest && canContinue(activeRequest, request)) {
+    pendingRequest = request;
+    return;
+  }
+  pendingRequest = null;
+  if (activeRequest) {
+    stopActiveRender(true);
+  }
+  startRender(request);
+}
+
+function startRender(request: RenderRequest) {
+  const worker = renderWorker ??= new Worker(new URL('./render/worker.ts', import.meta.url), { type: 'module' });
+  activeRequest = request;
+  downloadButton.disabled = true;
   let details = '';
   let latestProgress = 0;
   let progressVisible = false;
-  const progressTimer = window.setTimeout(() => {
+  progressTimer = window.setTimeout(() => {
     progressVisible = true;
     setRenderProgress(latestProgress);
   }, PROGRESS_DELAY_MS);
   setRenderProgress(null);
 
-  const finish = () => {
-    window.clearTimeout(progressTimer);
-    setRenderProgress(null);
-    worker.terminate();
-    cancelActiveRender = null;
+  const finish = (failed: boolean) => {
+    stopActiveRender(failed);
+    const next = pendingRequest;
+    pendingRequest = null;
+    if (next) {
+      startRender(next);
+    }
   };
-  cancelActiveRender = finish;
 
-  worker.addEventListener('message', (event: MessageEvent<RenderMessage>) => {
-    if (cancelActiveRender !== finish) {
+  worker.onmessage = (event: MessageEvent<RenderMessage>) => {
+    if (activeRequest !== request) {
       return;
     }
     const message = event.data;
@@ -731,21 +800,21 @@ function render() {
         break;
       case 'done':
         qualityDetails.textContent = [details, ...message.details, formatDuration(message.milliseconds)].join(' · ');
-        finish();
+        finish(false);
         break;
       case 'error':
         qualityDetails.textContent = `Render failed: ${message.message}`;
-        finish();
+        finish(true);
         break;
     }
-  });
-  worker.addEventListener('error', (event) => {
-    if (cancelActiveRender !== finish) {
+  };
+  worker.onerror = (event) => {
+    if (activeRequest !== request) {
       return;
     }
     qualityDetails.textContent = `Render failed: ${event.message}`;
-    finish();
-  });
+    finish(true);
+  };
   worker.postMessage(request);
 }
 

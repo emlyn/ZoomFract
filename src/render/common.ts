@@ -46,6 +46,25 @@ export type FrameCallbacks = {
   progress: (progress: number) => void;
 };
 
+// A finished render keeps its working state so fixed levels can be extended
+// without starting again.
+export type RenderResult = {
+  details: string[];
+  continueTo: (settings: RenderSettings, callbacks: FrameCallbacks) => string[];
+  dispose: () => void;
+};
+
+// Requests with equal keys differ only in levels, so a render can continue
+// from an earlier one with fewer fixed levels.
+export const continuationKey = ({ scene, options, editMode }: RenderRequest) =>
+  JSON.stringify([scene, options.renderer, options.supersampling, options.recursionDepth, editMode]);
+
+export const canContinue = (from: RenderRequest, to: RenderRequest) =>
+  typeof from.options.levels === 'number'
+  && typeof to.options.levels === 'number'
+  && to.options.levels > from.options.levels
+  && continuationKey(from) === continuationKey(to);
+
 export const RENDERER_LABELS: Record<RendererName, string> = {
   webgl: 'WebGL2',
   canvas2d: 'Canvas 2D',

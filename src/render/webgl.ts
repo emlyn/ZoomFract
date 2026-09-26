@@ -2,6 +2,7 @@ import type { SceneDefinition, Vec2 } from '../scene';
 import {
   EDIT_MODE_ZOOM_OPACITY,
   type FrameCallbacks,
+  type RenderResult,
   type RenderSettings,
 } from './common';
 import { unrollScene, type UnrolledItem } from './unroll';
@@ -171,7 +172,7 @@ export function renderWebgl(
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,
-): string[] {
+): RenderResult {
   const outputWidth = scene.view.resolution.width;
   const outputHeight = scene.view.resolution.height;
   const factor = settings.supersampling;
@@ -282,7 +283,7 @@ export function renderWebgl(
   });
   // A leaf at generation g sampling the texture after F feedback levels ends
   // with seed zooms at generation g + F, so the shallowest leaf sets F.
-  const feedbackLevels = Math.max(0, settings.levels - finalUnroll.shallowestLeaf);
+  const feedbackLevelsFor = (levels: number) => Math.max(0, levels - finalUnroll.shallowestLeaf);
 
   const generateMips = ({ texture, levels }: LevelTexture) => {
     gl.useProgram(mipProgram);
@@ -326,37 +327,56 @@ export function renderWebgl(
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
   };
 
-  let source: LevelTexture | null = null;
-  for (let level = 0; level <= feedbackLevels; level += 1) {
-    const target = textures[level % 2];
-    const isFinal = level === feedbackLevels;
-    drawLevel(target, source, isFinal ? finalUnroll.items : levelItems);
-    if (!isFinal) {
+  // The newest feedback texture survives each render, so more levels can be
+  // added later by continuing the feedback loop from it.
+  let lastFeedback: LevelTexture | null = null;
+  let completedFeedbackLevels = 0;
+  const unusedTexture = () => lastFeedback === textures[0] ? textures[1] : textures[0];
+
+  const renderLevels = (levels: number, frameCallbacks: FrameCallbacks): string[] => {
+    const feedbackLevels = feedbackLevelsFor(levels);
+    const steps = feedbackLevels - completedFeedbackLevels + 1;
+    let step = 0;
+    while (completedFeedbackLevels < feedbackLevels) {
+      const target = unusedTexture();
+      drawLevel(target, lastFeedback, levelItems);
       generateMips(target);
+      lastFeedback = target;
+      completedFeedbackLevels += 1;
+      step += 1;
+      frameCallbacks.progress(step / steps);
     }
-    source = target;
-    callbacks.progress((level + 1) / (feedbackLevels + 1));
-  }
+    const finalTexture = unusedTexture();
+    drawLevel(finalTexture, lastFeedback, finalUnroll.items);
 
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.viewport(0, 0, outputWidth, outputHeight);
-  gl.disable(gl.BLEND);
-  gl.useProgram(resolveProgram);
-  gl.uniform1i(gl.getUniformLocation(resolveProgram, 'factor'), factor);
-  gl.bindVertexArray(emptyVertexArray);
-  gl.bindTexture(gl.TEXTURE_2D, source!.texture);
-  gl.drawArrays(gl.TRIANGLES, 0, 3);
-  gl.finish();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, outputWidth, outputHeight);
+    gl.disable(gl.BLEND);
+    gl.useProgram(resolveProgram);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'factor'), factor);
+    gl.bindVertexArray(emptyVertexArray);
+    gl.bindTexture(gl.TEXTURE_2D, finalTexture.texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.finish();
 
-  const error = gl.getError();
-  if (error !== gl.NO_ERROR) {
-    throw new Error(`WebGL error ${error}`);
-  }
-  callbacks.frame(output);
-  const exactGenerations = finalUnroll.shallowestLeaf - 1;
-  const budgetLimited = !settings.autoLevels && exactGenerations < settings.recursionDepth;
-  return [
-    `${finalUnroll.expandedZooms.toLocaleString('en-GB')} exact zooms`,
-    ...(budgetLimited ? [`recursion capped at ${exactGenerations}`] : []),
-  ];
+    const error = gl.getError();
+    if (error !== gl.NO_ERROR) {
+      throw new Error(`WebGL error ${error}`);
+    }
+    frameCallbacks.progress(1);
+    frameCallbacks.frame(output);
+    const exactGenerations = finalUnroll.shallowestLeaf - 1;
+    const budgetLimited = !settings.autoLevels && exactGenerations < settings.recursionDepth;
+    return [
+      `${finalUnroll.expandedZooms.toLocaleString('en-GB')} exact zooms`,
+      ...(budgetLimited ? [`recursion capped at ${exactGenerations}`] : []),
+    ];
+  };
+
+  return {
+    details: renderLevels(settings.levels, callbacks),
+    // Exact geometry is kept from the first render; only feedback levels are added.
+    continueTo: (next, frameCallbacks) => renderLevels(next.levels, frameCallbacks),
+    dispose: () => gl.getExtension('WEBGL_lose_context')?.loseContext(),
+  };
 }
