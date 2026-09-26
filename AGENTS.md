@@ -18,6 +18,9 @@ logic or introducing classes without a clear need.
 - Start development: `npm run dev -- --host 127.0.0.1 --port 5177`
 - Build and type-check: `npm run build`
 - Preview a production build: `npm run preview`
+- Deployment: `.github/workflows/pages.yml` builds and deploys to GitHub
+  Pages (https://emlyn.github.io/ZoomFract/) on every push to `main`. Keep
+  Vite's `base: './'` so the app works under the `/ZoomFract/` subpath.
 
 Prefer leaving one Vite development server running. Vite watches source files
 and reloads the existing page automatically. Reuse an existing browser page
