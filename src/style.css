@@ -82,7 +82,7 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 1rem 1rem 2rem;
+  padding: 1rem;
   background: rgba(38, 39, 42, 0.94);
   backdrop-filter: blur(12px);
   border-right: 1px solid rgba(212, 212, 216, 0.16);
@@ -246,7 +246,8 @@ canvas {
 }
 
 .control-row,
-.quality-row,
+.select-row,
+.levels-row,
 .edit-mode-row,
 .example-row {
   display: flex;
@@ -257,7 +258,7 @@ canvas {
   color: #cbd5e1;
 }
 
-.quality-row select,
+.select-row select,
 .example-row select {
   min-width: 7rem;
   border: 1px solid rgba(212, 212, 216, 0.18);
@@ -265,6 +266,43 @@ canvas {
   background: rgba(63, 63, 66, 0.78);
   color: #f4f4f5;
   padding: 0.4rem 0.55rem;
+}
+
+.levels-row input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #a1a1aa;
+}
+
+.levels-row .value {
+  min-width: 1.5rem;
+  text-align: right;
+}
+
+.render-settings summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #a1a1aa;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.render-settings summary:hover {
+  color: #d4d4d8;
+}
+
+.render-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid rgba(212, 212, 216, 0.14);
+}
+
+.render-settings-body.read-only > * {
+  opacity: 0.55;
 }
 
 .edit-mode-row input {
@@ -276,6 +314,7 @@ canvas {
 
 .quality-details {
   min-height: 1.25rem;
+  margin-top: 0.75rem;
   color: #a1a1aa;
   font-size: 0.78rem;
 }
@@ -294,15 +333,18 @@ canvas {
 
 .render-progress {
   position: absolute;
-  right: 1rem;
-  bottom: 0.75rem;
-  left: 1rem;
-  height: 0.4rem;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 0.45rem;
   overflow: hidden;
-  border-radius: 999px;
-  background: rgba(161, 161, 170, 0.2);
+  background: rgba(24, 24, 27, 0.72);
+  box-shadow: 0 -1px 6px rgba(0, 0, 0, 0.35);
+  border-top: 1px solid rgba(0, 0, 0, 0.55);
   opacity: 1;
+  pointer-events: none;
   transition: opacity 140ms ease;
+  z-index: 6;
 }
 
 .render-progress[hidden] {
@@ -313,8 +355,8 @@ canvas {
 .render-progress-bar {
   width: 0%;
   height: 100%;
-  border-radius: inherit;
-  background: #d4d4d8;
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.7);
   transition: width 100ms linear;
 }
 

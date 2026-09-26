@@ -10,4 +10,7 @@ export default defineConfig({
     port: 4173,
   },
   base: './',
+  worker: {
+    format: 'es',
+  },
 });

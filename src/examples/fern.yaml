@@ -15,27 +15,24 @@ view:
     x: [-0.8, 0.8]
     y: [-1, 1]
 
-seed:
-  color: "#5d5"
-
 scene:
   - type: rect
     name: stem
-    bottomLeft: [-0.21, -1]
-    topRight: [-0.19, -0.7]
+    bottomLeft: [-0.11, -1]
+    topRight: [-0.09, -0.7]
     color: "#4c4"
   - type: zoom
     name: top
-    scale: 0.85
-    align: [stem.bottom, stem.top]
+    scale: 0.86
+    align: [stem.bottomLeft, stem.topLeft]
     rotation: 4deg
   - type: zoom
     name: left
-    scale: 0.3
-    align: [stem.bottom, stem.top]
+    scale: 0.32
+    align: [stem.bottom, stem.left]
     rotation: -80deg
   - type: zoom
     name: right
-    scale: 0.3
+    scale: 0.32
     align: [stem.bottom, stem.top]
     rotation: 80deg

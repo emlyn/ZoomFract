@@ -32,8 +32,16 @@ Do not commit generated or local artifacts:
 
 ## Repository layout
 
-- `src/main.ts`: scene types, YAML parsing, geometry resolution, UI creation,
-  rendering, quality presets, cancellation, and progress.
+- `src/main.ts`: UI creation, definition loading, render-worker orchestration,
+  progress, and edit-mode outlines on the display canvas.
+- `src/scene.ts`: scene types, YAML parsing, and geometry resolution.
+- `src/render/common.ts`: quality modes, render settings, renderer names,
+  worker message types, and scene-to-pixel helpers.
+- `src/render/worker.ts`: render worker entry; picks a renderer, falls back
+  from WebGL2 to Canvas 2D in Auto mode, and posts frames as `ImageBitmap`s.
+- `src/render/webgl.ts`: WebGL2 feedback renderer.
+- `src/render/unroll.ts`: exact clipped geometry for unrolled WebGL2 zooms.
+- `src/render/canvas2d.ts`: reference Canvas 2D renderer.
 - `src/examples.ts`: built-in example registry and metadata.
 - `src/examples/*.yaml`: loadable example scene definitions.
 - `src/style.css`: full-window layout, overlay panel, controls, animations,
@@ -105,36 +113,66 @@ files unless extracting a module clearly reduces complexity.
 - Terminal zoom leaves use top-level `seed`; the seed may be a colour string
   or an object containing colour and opacity. Without a seed colour, terminal
   leaves are transparent.
-- Keep quality controls out of the scene definition. Recursion depth, render
-  passes, supersampling, leaf-size thresholds, and leaf budgets are application
-  quality settings.
+- Keep quality controls out of the scene definition. Renderer, max
+  recursion, levels, and supersampling are application quality settings.
 
 ## Rendering invariants
 
 - The visible canvas backing resolution must exactly match `view.resolution`.
   Scale it with CSS to fit the window without changing intrinsic pixel size.
 - The canvas remains centred and independent of the overlay panel width.
-- Rendering is progressive: display each completed pass before preparing the
-  next capture.
-- Long renders must yield between passes and mip levels so progress can paint.
-- Changing settings invalidates obsolete work. Cancel at safe boundaries and
-  finish only the newest requested render.
-- Keep the progress bar fixed at the panel bottom so showing it never moves
-  controls.
+- Rendering runs in a Web Worker on `OffscreenCanvas`, so the UI thread only
+  displays finished frames. Each render uses a fresh worker; starting a new
+  render terminates the old one, which cancels obsolete work immediately.
+- Quality is an application setting with three modes. Fast (one exact
+  recursion, 2x supersampling) and High quality (up to 14 exact recursions,
+  4x) always use WebGL2 with automatic levels. A collapsible Render settings
+  section shows renderer (WebGL2 or Canvas 2D), supersampling, max recursion
+  and a levels slider whose rightmost position is Auto; they are read-only
+  except in Custom. Custom is initialised from the first mode it is opened
+  from, then remembered.
+  WebGL2 falls back to Canvas 2D only if it is unavailable or fails.
+- Levels count generations of zooms, with the seed at the last generation.
+  Automatic levels continue until the largest zoom is below half a working
+  pixel, i.e. the fixed point. Max recursion bounds how many generations are
+  exact geometry; the rest come from feedback or earlier Canvas 2D passes.
+- WebGL2 renders recursion by texture feedback: each level draws the scene
+  once, with zooms as quads sampling the previous level's texture. Cost is
+  linear in depth. Rect edges use MSAA at low supersampling.
+- The final WebGL2 level is unrolled into exact geometry
+  (`src/render/unroll.ts`), with every item clipped to its ancestor zoom
+  quads, up to max recursion and an internal item budget. With fixed levels,
+  whole generations are unrolled so every leaf sits at the same depth and the
+  seed lands exactly at the requested level on every branch; the details line
+  reports when the budget caps recursion. With Auto levels, zooms are
+  expanded largest first until they fall below a small pixel size. Remaining
+  zooms become leaves sampling the feedback texture; the shallowest leaf
+  determines how many feedback levels are needed.
+- Canvas 2D is the reference renderer. Its geometric recursion is also capped
+  by leaf size and a leaf count, and it adds progressive passes, each posted
+  before preparing the next capture, until the requested levels are reached.
+  The first pass absorbs any remainder so the total is exact.
+- Progress appears only after a short delay, so fast renders do not flash it.
+- The progress bar is a thin overlay along the bottom of the window, outside
+  the panel, so it stays visible when the panel is hidden and never moves
+  controls. Render details live inside the Render settings section.
 - Captures must exclude the host background and preserve transparency.
 - Downsampling must weight colours by alpha and prioritise non-transparent
-  coverage so fine recursive details do not disappear prematurely.
-- Terminal bitmap leaves use projected-size, transform-aware rasterisation and
-  cache equivalent leaf transforms.
+  coverage so fine recursive details do not disappear prematurely. Both
+  renderers build their mip chains this way; WebGL2 stores premultiplied
+  texels.
+- Canvas 2D terminal bitmap leaves use projected-size, transform-aware
+  rasterisation and cache equivalent leaf transforms.
 - Dynamic recursion stops before leaves become smaller than the selected
-  quality threshold or another level would exceed its leaf budget.
+  quality threshold.
 - Be mindful of multiplicative cost: zoom count, recursion depth, passes,
   supersampling, mip generation, and temporary canvas size all compound.
+  WebGL2 working textures are limited by `MAX_TEXTURE_SIZE`.
 - Edit mode is an application setting, not scene syntax. It fades top-level
   zoom contents and outlines each zoom, marking its top-left corner and any
-  `align` target points. Captures
-  used for recursion must stay unfaded, so edit mode renders a separate
-  display-only pass and draws outlines on the display canvas.
+  `align` target points. Levels used for recursion must stay unfaded, so only
+  the final displayed level is faded, and outlines are drawn on the display
+  canvas.
 
 ## Panel behaviour
 
@@ -170,9 +208,12 @@ For rendering changes, also check as applicable:
 
 - Canvas intrinsic dimensions match the resolved view resolution.
 - Transparent areas still have zero alpha.
-- Progressive passes visibly differ and the final pass remains displayed.
+- Progressive Canvas 2D passes visibly differ and the final pass remains
+  displayed.
 - Progress appears during slow work and disappears after completion.
-- Fast, Balanced, High, and Proof presets resolve sensible dynamic depths.
+- Fast and High quality resolve automatic levels at the fixed point.
+- WebGL2 and Canvas 2D output agree closely with equal Custom settings;
+  compare pixel differences and timings when changing either.
 - Rotated and asymmetric zooms render without clipping or allocation errors.
 - Rapid setting changes leave the latest requested result on screen.
 
