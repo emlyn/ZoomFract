@@ -35,6 +35,10 @@ Do not commit generated or local artifacts:
 - `src/main.ts`: UI creation, definition loading, render-worker orchestration,
   progress, and edit-mode outlines on the display canvas.
 - `src/scene.ts`: scene types, YAML parsing, and geometry resolution.
+- `src/expression.ts`: arithmetic expression parser and evaluator.
+- `src/guide.html`: user guide for the definition language, shown from the
+  panel. Keep it in simple English and update it whenever the scene language
+  changes.
 - `src/render/common.ts`: quality modes, render settings, renderer names,
   worker message types, and scene-to-pixel helpers.
 - `src/render/worker.ts`: render worker entry; picks a renderer, falls back
@@ -54,7 +58,8 @@ files unless extracting a module clearly reduces complexity.
 
 ## Scene language invariants
 
-- The top-level model contains `frame`, `view`, `seed`, and `scene`.
+- The top-level model contains `variables`, `frame`, `view`, `seed`, and
+  `scene`.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
   border `color`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
@@ -87,6 +92,30 @@ files unless extracting a module clearly reduces complexity.
   remote YAML definition; never add credentials or a server-side proxy.
 - Invalid, ambiguous, conflicting, or underdetermined definitions must produce
   a visible error. Do not silently invent missing geometry.
+- Any numeric value may be a number or an expression string such as
+  `1/sqrt(2)`, using the infix syntax of emlyn/PowerPointFractals:
+  `+ - * / ^`, parentheses, `sqrt`, `root(n, x)`, `log`/`ln` (natural),
+  `exp`, `abs`, radian trigonometry including `atan2`, and constants `pi`,
+  `e`, `phi`. There is no implicit multiplication. Expressions parse to a
+  syntax tree (`src/expression.ts`) so they can later be displayed as maths
+  from the same tree; invalid or non-finite expressions are errors.
+  Expressions containing commas need quotes inside YAML flow lists.
+- Optional top-level `variables` is a list of `{ name, value }` items. Names
+  are unique identifiers that must not shadow built-in constants or
+  functions; values are numbers or expressions and may reference other
+  variables in any order. Expressions anywhere in the scene may use them.
+  Unknown names, reference loops, and errors in unused variables are all
+  reported.
+- Expressions may also use dotted view values: `view.left`, `view.right`
+  (x), `view.bottom`, `view.top` (y), `view.width`, `view.height`,
+  `view.centre.x`, `view.centre.y` (coordinate units), `view.aspect`,
+  `view.pixels.width`, `view.pixels.height` (resolved resolution), and
+  `view.pixel.width`, `view.pixel.height` (size of one pixel in coordinate
+  units; they differ when the axes are scaled differently). Variables and
+  view values
+  resolve lazily through one lookup, so the x range can use `view.aspect`
+  but not `view.width`. Dotted names are reserved for scene values; future
+  element references should follow the same `name.property` form.
 
 ### Rectangles
 
@@ -95,7 +124,8 @@ files unless extracting a module clearly reduces complexity.
 - Geometry may be determined from a sufficient combination of `centre`,
   width, height, named corners, and rotation.
 - Numeric rotations are degrees, and positive rotations are clockwise.
-  Explicit `deg`, `rad`, and unit-object forms are supported. Internal
+  Rotation expressions are degrees unless suffixed with `deg` or `rad`, and
+  unit-object forms are supported. Internal
   geometry uses anticlockwise radians; only `parseRotation` flips the sign.
 
 ### Zooms and seeds
@@ -202,6 +232,9 @@ files unless extracting a module clearly reduces complexity.
 - The right panel edge is draggable. The corner control must track resizing
   immediately, without its normal horizontal animation.
 - Keep the YAML editor monospace and tall enough to show useful context.
+- The Guide link beside the scene definition label opens the definition guide
+  in a floating panel beside the sidebar. Escape or its close button hides it.
+  It hides with the sidebar and reappears with it if it was open.
 
 ## TypeScript and CSS
 

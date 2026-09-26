@@ -1,0 +1,294 @@
+<nav class="guide-contents">
+  <a href="#guide-overview">Overview</a>
+  <a href="#guide-view">View</a>
+  <a href="#guide-frame">Frame</a>
+  <a href="#guide-scene">Scene</a>
+  <a href="#guide-rect">Rectangles</a>
+  <a href="#guide-position">Position and size</a>
+  <a href="#guide-points">Points</a>
+  <a href="#guide-zoom">Zooms</a>
+  <a href="#guide-align">Alignment</a>
+  <a href="#guide-seed">Seed</a>
+  <a href="#guide-expressions">Expressions</a>
+  <a href="#guide-variables">Variables</a>
+  <a href="#guide-values">View values</a>
+</nav>
+
+<section id="guide-overview">
+  <h3>Overview</h3>
+  <p>
+    A definition is written in <a href="https://yaml.org" target="_blank" rel="noreferrer">YAML</a>.
+    It describes a picture made of shapes, plus <em>zooms</em>: smaller copies of the
+    whole picture placed inside itself. Each copy contains its own copies, and so on,
+    which makes a fractal.
+  </p>
+  <p>A definition has these parts. Only <code>scene</code> is required.</p>
+  <pre><code>variables:  # named numbers to use in expressions
+frame:      # the border drawn around the picture
+view:       # picture size and coordinates
+seed:       # colour of the smallest copies
+scene:      # the shapes and zooms, in drawing order</code></pre>
+  <p>
+    Indentation matters in YAML. Lists use <code>-</code> at the start of each item.
+    Text after <code>#</code> is a comment. Colours are any CSS colour, such as
+    <code>red</code> or <code>"#336699"</code> (put quotes around colours that start with
+    <code>#</code>, or YAML treats them as comments).
+  </p>
+  <p>Any mistake is shown in red under the buttons, and nothing is drawn until it is fixed.</p>
+</section>
+
+<section id="guide-view">
+  <h3>View</h3>
+  <p>The view sets the shape of the picture, how many pixels it has, and its coordinates.</p>
+  <pre><code>view:
+  aspect: 4/3          # width divided by height
+  resolution:
+    height: 1200       # in pixels
+  coordinates:
+    x: [-4, 4]         # left edge, right edge
+    y: [-3, 3]         # bottom edge, top edge</code></pre>
+  <ul>
+    <li><code>aspect</code> is the width divided by the height. The default is 1 (square).</li>
+    <li>
+      <code>resolution</code> may give <code>width</code>, <code>height</code>, or both.
+      A missing one is worked out from the aspect. If both are given, they set the aspect.
+      Without a resolution the picture is 1200 pixels high.
+    </li>
+    <li>
+      <code>coordinates</code> sets the numbers used to place things. <code>x</code> goes
+      from left to right, and <code>y</code> goes from bottom to top, as in maths.
+      Ranges can also be written <code>{ from: -4, to: 4 }</code>.
+      The default is -100 to 100 on both axes.
+    </li>
+  </ul>
+</section>
+
+<section id="guide-frame">
+  <h3>Frame</h3>
+  <p>The frame only changes how the picture is shown on the page, not the picture itself. Sizes are in screen pixels.</p>
+  <pre><code>frame:
+  width: 12            # border thickness
+  radius: 6            # rounded corners
+  color: "#444"        # border colour
+  wall: "#ddd"         # colour of the page around the frame
+  background: "#fff"   # colour behind the picture
+  padding: 12          # space between border and picture
+  margin: 24           # space between frame and window edge</code></pre>
+  <p>
+    The background is not part of the picture. Downloaded images are transparent
+    wherever nothing is drawn.
+  </p>
+</section>
+
+<section id="guide-scene">
+  <h3>Scene</h3>
+  <p>
+    The scene is a list of items. Each item has a <code>type</code>, either
+    <code>rect</code> or <code>zoom</code>. Items are drawn in order, so later items
+    appear on top of earlier ones.
+  </p>
+  <p>
+    Any item may have a <code>name</code>, so other items can refer to its points.
+    Names must be unique, cannot contain dots or spaces, and cannot be <code>view</code>.
+  </p>
+</section>
+
+<section id="guide-rect">
+  <h3>Rectangles</h3>
+  <pre><code>- type: rect
+  name: block
+  centre: [0, 0]
+  width: 2
+  height: 1
+  rotation: 30         # degrees, clockwise
+  color: "#d97757"
+  opacity: 0.8         # 0 is invisible, 1 is solid</code></pre>
+  <p>
+    Rectangles are filled with <code>color</code> (black by default) and have no outline.
+    <code>opacity</code> defaults to 1.
+  </p>
+</section>
+
+<section id="guide-position">
+  <h3>Position and size</h3>
+  <p>
+    Rectangles and zooms are placed the same way. Give enough of these to fix
+    exactly one rectangle:
+  </p>
+  <ul>
+    <li><code>centre</code>: the middle point</li>
+    <li><code>topLeft</code>, <code>topRight</code>, <code>bottomLeft</code>, <code>bottomRight</code>: corners</li>
+    <li><code>width</code> and <code>height</code></li>
+    <li><code>rotation</code>: clockwise turn around the centre</li>
+  </ul>
+  <p>Some combinations that work:</p>
+  <ul>
+    <li><code>centre</code>, <code>width</code> and <code>height</code></li>
+    <li>one corner, <code>width</code> and <code>height</code></li>
+    <li>two opposite corners, such as <code>bottomLeft</code> and <code>topRight</code></li>
+    <li>two corners along one edge, plus the other size (the edge sets the rotation)</li>
+    <li>three corners (they set the size and rotation)</li>
+  </ul>
+  <p>
+    <code>rotation</code> can be added to most of these. Without it, the rectangle is
+    not rotated unless the corners say otherwise. If the values are not enough, or
+    they disagree, an error explains which item is wrong.
+  </p>
+  <p>Rotation can be written in several ways:</p>
+  <pre><code>rotation: 30              # degrees
+rotation: 30deg           # degrees
+rotation: pi/6 rad        # radians
+rotation: { radians: 0.5 }
+rotation: { degrees: 30 }</code></pre>
+</section>
+
+<section id="guide-points">
+  <h3>Points</h3>
+  <p>A point can be written as a pair, an object, or a reference to another item.</p>
+  <pre><code>centre: [1, 2]
+centre: { x: 1, y: 2 }
+centre: block.topRight    # a point of the item named block
+centre: view.centre       # a point of the whole view</code></pre>
+  <p>
+    References use <code>name.part</code>, where the part is <code>centre</code>,
+    <code>top</code>, <code>bottom</code>, <code>left</code>, <code>right</code>
+    (edge middles) or a corner: <code>topLeft</code>, <code>topRight</code>,
+    <code>bottomLeft</code>, <code>bottomRight</code>. Points follow the item's rotation.
+    Items can refer to items defined later, as long as they do not refer to each other
+    in a loop.
+  </p>
+</section>
+
+<section id="guide-zoom">
+  <h3>Zooms</h3>
+  <p>
+    A zoom is a rectangle that holds a copy of the whole view: everything in the scene,
+    including the zooms themselves. The top left of the view lands on the zoom's top
+    left corner, and so on.
+  </p>
+  <pre><code>- type: zoom
+  centre: [0.5, 0.5]
+  scale: 0.5          # half the size of the view
+  rotation: 15</code></pre>
+  <ul>
+    <li>Zooms are placed like rectangles, but have no colour.</li>
+    <li>
+      <code>scale</code> gives the size as a fraction of the view. It cannot be used
+      together with <code>width</code> or <code>height</code>.
+    </li>
+    <li>If only <code>width</code> or <code>height</code> is given, the other comes from the view's aspect, so the copy is not stretched.</li>
+    <li><code>opacity</code> fades the copy.</li>
+  </ul>
+</section>
+
+<section id="guide-align">
+  <h3>Alignment</h3>
+  <p>
+    <code>align</code> places a zoom by saying where a point of the full picture should
+    end up in the copy. Each pair is <code>[from, to]</code>: <code>from</code> is a
+    point in the full picture, and <code>to</code> is where that point's copy should go.
+  </p>
+  <pre><code>- type: rect
+  name: stem
+  bottomLeft: [-0.11, -1]
+  topRight: [-0.09, -0.7]
+- type: zoom
+  scale: 0.86
+  rotation: -2
+  align: [stem.bottomLeft, stem.topLeft]</code></pre>
+  <p>
+    Here, the copy's version of the stem starts where the real stem ends, so the stem
+    grows upwards. With one pair, also give <code>scale</code>, <code>width</code> or
+    <code>height</code> (and optionally <code>rotation</code>).
+  </p>
+  <p>With two pairs, the zoom's size and rotation are worked out too:</p>
+  <pre><code>align:
+  - [view.bottomLeft, stem.topLeft]
+  - [view.bottomRight, stem.topRight]</code></pre>
+  <p>Pairs can also be written <code>{ from: ..., to: ... }</code>.</p>
+</section>
+
+<section id="guide-seed">
+  <h3>Seed</h3>
+  <p>
+    Copies inside copies get smaller and smaller. When they become too small to see,
+    they are drawn as a plain rectangle in the seed colour instead. The seed is
+    transparent by default.
+  </p>
+  <pre><code>seed: "#111827"
+
+seed:
+  color: "#111827"
+  opacity: 0.9</code></pre>
+</section>
+
+<section id="guide-expressions">
+  <h3>Expressions</h3>
+  <p>Anywhere a number is expected, you can write a calculation instead.</p>
+  <pre><code>aspect: 2/sqrt(3)
+width: 1/phi
+x: [-4/3, 4/3]
+rotation: 360/5
+centre: [0, "root(3, 2)"]   # quote it if it contains a comma inside [ ]</code></pre>
+  <table>
+    <tr><th>Operators</th><td><code>+ - * / ^</code> and brackets <code>( )</code>. <code>^</code> is power. There is no hidden multiplication: write <code>2*pi</code>, not <code>2pi</code>.</td></tr>
+    <tr><th>Constants</th><td><code>pi</code>, <code>e</code>, <code>phi</code> (the golden ratio, about 1.618)</td></tr>
+    <tr><th>Roots</th><td><code>sqrt(x)</code>, <code>root(n, x)</code> (the nth root of x)</td></tr>
+    <tr><th>Logs</th><td><code>log(x)</code> and <code>ln(x)</code> (both natural log), <code>exp(x)</code></td></tr>
+    <tr><th>Trigonometry</th><td><code>sin</code>, <code>cos</code>, <code>tan</code>, <code>asin</code>, <code>acos</code>, <code>atan</code>, <code>atan2(y, x)</code>, all in radians</td></tr>
+    <tr><th>Other</th><td><code>abs(x)</code></td></tr>
+  </table>
+  <p>
+    <code>-2^2</code> is -4, because the power is worked out first. Use brackets to
+    make things clear, such as <code>(-2)^2</code>.
+  </p>
+</section>
+
+<section id="guide-variables">
+  <h3>Variables</h3>
+  <p>Variables give a name to a number, so it can be used in expressions.</p>
+  <pre><code>variables:
+  - name: s
+    value: 1/sqrt(2)
+  - name: gap
+    value: s/10
+
+scene:
+  - type: zoom
+    centre: [0, gap]
+    scale: s</code></pre>
+  <p>
+    Names start with a letter or <code>_</code>, and may contain letters, digits and
+    <code>_</code>. They cannot be the same as a constant or function, such as
+    <code>pi</code> or <code>sin</code>. Variables can use each other in any order,
+    as long as they do not depend on each other in a loop.
+  </p>
+</section>
+
+<section id="guide-values">
+  <h3>View values</h3>
+  <p>Expressions can also use these values from the view:</p>
+  <table>
+    <tr><th><code>view.left</code>, <code>view.right</code></th><td>x of the left and right edges</td></tr>
+    <tr><th><code>view.bottom</code>, <code>view.top</code></th><td>y of the bottom and top edges</td></tr>
+    <tr><th><code>view.width</code>, <code>view.height</code></th><td>size of the view in coordinates</td></tr>
+    <tr><th><code>view.centre.x</code>, <code>view.centre.y</code></th><td>middle of the view</td></tr>
+    <tr><th><code>view.aspect</code></th><td>width divided by height</td></tr>
+    <tr><th><code>view.pixels.width</code>, <code>view.pixels.height</code></th><td>size of the picture in pixels</td></tr>
+    <tr><th><code>view.pixel.width</code>, <code>view.pixel.height</code></th><td>size of one pixel in coordinates</td></tr>
+  </table>
+  <pre><code>view:
+  aspect: 3/2
+  coordinates:
+    x: [-view.aspect, view.aspect]
+    y: [-1, 1]</code></pre>
+  <p>
+    A view value cannot be used to define itself. For example, the x range can use
+    <code>view.aspect</code> but not <code>view.width</code>.
+  </p>
+  <p>
+    Note the difference between <code>view.centre</code>, which is a point (used as
+    <code>centre: view.centre</code>), and <code>view.centre.x</code>, which is a number
+    (used in expressions).
+  </p>
+</section>

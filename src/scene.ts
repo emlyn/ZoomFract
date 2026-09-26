@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import { evaluateExpression, isIdentifier, isReservedName, type Variables } from './expression';
 
 export type Vec2 = {
   x: number;
@@ -68,53 +69,57 @@ export type SceneDefinition = {
 
 export const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
-function asNumber(value: unknown, fallback: number): number {
+// Numeric values may be written as expressions such as `1/sqrt(2)`. Missing
+// values use the fallback, but an invalid expression is always an error.
+function asNumber(value: unknown, fallback: number, variables: Variables): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
   }
 
   if (typeof value === 'string') {
-    const text = value.trim().replace(/,/g, '');
-    if (text.includes('/')) {
-      const [left, right] = text.split('/');
-      const numerator = Number(left.trim());
-      const denominator = Number(right.trim());
-      if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0) {
-        return numerator / denominator;
-      }
-    }
-
-    const parsed = Number(text);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return evaluateExpression(value, variables);
   }
 
   return fallback;
 }
 
-function parseAspectRatio(value: unknown): number {
-  const ratio = asNumber(value, 1);
+const isNumeric = (value: unknown, variables: Variables) => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  if (typeof value !== 'string') {
+    return false;
+  }
+  try {
+    evaluateExpression(value, variables);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+function parseAspectRatio(value: unknown, variables: Variables): number {
+  const ratio = asNumber(value, 1, variables);
   return ratio > 0 ? ratio : 1;
 }
 
-function asPositiveNumber(value: unknown): number | undefined {
-  const number = asNumber(value, Number.NaN);
+function asPositiveNumber(value: unknown, variables: Variables): number | undefined {
+  const number = asNumber(value, Number.NaN, variables);
   return number > 0 ? number : undefined;
 }
 
-function asNonNegativeNumber(value: unknown, fallback: number): number {
-  const number = asNumber(value, fallback);
+function asNonNegativeNumber(value: unknown, fallback: number, variables: Variables): number {
+  const number = asNumber(value, fallback, variables);
   return number >= 0 ? number : fallback;
 }
 
-function resolveView(view: Record<string, unknown>) {
+function resolveView(view: Record<string, unknown>, variables: Variables) {
   const resolutionNode = view.resolution && typeof view.resolution === 'object' && !Array.isArray(view.resolution)
     ? (view.resolution as Record<string, unknown>)
     : {};
-  const requestedWidth = asPositiveNumber(resolutionNode.width);
-  const requestedHeight = asPositiveNumber(resolutionNode.height);
-  const requestedAspect = parseAspectRatio(view.aspect);
+  const requestedWidth = asPositiveNumber(resolutionNode.width, variables);
+  const requestedHeight = asPositiveNumber(resolutionNode.height, variables);
+  const requestedAspect = parseAspectRatio(view.aspect, variables);
 
   if (requestedWidth && requestedHeight) {
     return {
@@ -156,17 +161,17 @@ function resolveView(view: Record<string, unknown>) {
   };
 }
 
-function parseAxisRange(value: unknown, fallback: AxisRange): AxisRange {
+function parseAxisRange(value: unknown, fallback: AxisRange, variables: Variables): AxisRange {
   let from: number;
   let to: number;
 
   if (Array.isArray(value)) {
-    from = asNumber(value[0], fallback.from);
-    to = asNumber(value[1], fallback.to);
+    from = asNumber(value[0], fallback.from, variables);
+    to = asNumber(value[1], fallback.to, variables);
   } else if (value && typeof value === 'object') {
     const range = value as Record<string, unknown>;
-    from = asNumber(range.from ?? range.min, fallback.from);
-    to = asNumber(range.to ?? range.max, fallback.to);
+    from = asNumber(range.from ?? range.min, fallback.from, variables);
+    to = asNumber(range.to ?? range.max, fallback.to, variables);
   } else {
     return fallback;
   }
@@ -230,17 +235,17 @@ const rotateVector = (vector: Vec2, angle: number): Vec2 => ({
   y: vector.x * Math.sin(angle) + vector.y * Math.cos(angle),
 });
 
-function parsePoint(value: unknown): Vec2 | undefined {
+function parsePoint(value: unknown, variables: Variables): Vec2 | undefined {
   if (Array.isArray(value) && value.length >= 2) {
-    const x = asNumber(value[0], Number.NaN);
-    const y = asNumber(value[1], Number.NaN);
+    const x = asNumber(value[0], Number.NaN, variables);
+    const y = asNumber(value[1], Number.NaN, variables);
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
   }
 
   if (value && typeof value === 'object') {
     const point = value as Record<string, unknown>;
-    const x = asNumber(point.x, Number.NaN);
-    const y = asNumber(point.y, Number.NaN);
+    const x = asNumber(point.x, Number.NaN, variables);
+    const y = asNumber(point.y, Number.NaN, variables);
     return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : undefined;
   }
 
@@ -248,23 +253,23 @@ function parsePoint(value: unknown): Vec2 | undefined {
 }
 
 // Scene rotations are clockwise; internal geometry uses anticlockwise radians.
-function parseRotation(value: unknown): number | undefined {
-  const angle = parseAngle(value);
+function parseRotation(value: unknown, variables: Variables): number | undefined {
+  const angle = parseAngle(value, variables);
   return angle === undefined ? undefined : -angle;
 }
 
-function parseAngle(value: unknown): number | undefined {
+function parseAngle(value: unknown, variables: Variables): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value * Math.PI / 180;
   }
 
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const rotation = value as Record<string, unknown>;
-    const radians = asNumber(rotation.radians ?? rotation.rad, Number.NaN);
+    const radians = asNumber(rotation.radians ?? rotation.rad, Number.NaN, variables);
     if (Number.isFinite(radians)) {
       return radians;
     }
-    const degrees = asNumber(rotation.degrees ?? rotation.deg, Number.NaN);
+    const degrees = asNumber(rotation.degrees ?? rotation.deg, Number.NaN, variables);
     return Number.isFinite(degrees) ? degrees * Math.PI / 180 : undefined;
   }
 
@@ -272,13 +277,10 @@ function parseAngle(value: unknown): number | undefined {
     return undefined;
   }
 
-  const match = value.trim().toLowerCase().match(/^(-?(?:\d+(?:\.\d*)?|\.\d+))\s*(deg|rad)$/);
-  if (!match) {
-    return undefined;
-  }
-
-  const angle = Number(match[1]);
-  return match[2] === 'rad' ? angle : angle * Math.PI / 180;
+  // An expression is in degrees unless it ends with a deg or rad unit.
+  const match = value.trim().match(/^(.*?)\s*(deg|rad)$/);
+  const angle = evaluateExpression(match ? match[1] : value, variables);
+  return match?.[2] === 'rad' ? angle : angle * Math.PI / 180;
 }
 
 function rectPoint(geometry: RectGeometry, part: PointPart): Vec2 {
@@ -312,12 +314,12 @@ function zoomOffset(point: Vec2, view: ViewFrame, width: number, height: number,
   }, rotation);
 }
 
-function isPointLike(value: unknown): boolean {
+function isPointLike(value: unknown, variables: Variables): boolean {
   if (typeof value === 'string') {
     return true;
   }
   if (Array.isArray(value)) {
-    return value.length === 2 && value.every((part) => Number.isFinite(asNumber(part, Number.NaN)));
+    return value.length === 2 && value.every((part) => isNumeric(part, variables));
   }
   return Boolean(value) && typeof value === 'object';
 }
@@ -326,6 +328,7 @@ function parseAlignPairs(
   value: unknown,
   resolvePoint: PointResolver,
   elementName: string,
+  variables: Variables,
 ): AlignPair[] {
   const toPair = (pair: unknown, label: string): AlignPair => {
     const [fromValue, toValue] = Array.isArray(pair) && pair.length === 2
@@ -342,7 +345,7 @@ function parseAlignPairs(
   };
 
   const label = `${elementName} align`;
-  const isSinglePair = Array.isArray(value) && value.length === 2 && isPointLike(value[0]);
+  const isSinglePair = Array.isArray(value) && value.length === 2 && isPointLike(value[0], variables);
   const isObjectPair = Boolean(value) && typeof value === 'object' && !Array.isArray(value);
   if (isSinglePair || isObjectPair) {
     return [toPair(value, label)];
@@ -451,6 +454,7 @@ function resolveRectGeometry(
   rect: Record<string, unknown>,
   resolvePoint: PointResolver,
   elementName: string,
+  variables: Variables,
   zoom?: ZoomConstraints,
 ): RectGeometry {
   let center = resolvePoint(rect.centre, `${elementName} centre`);
@@ -459,10 +463,10 @@ function resolveRectGeometry(
       .map((name) => [name, resolvePoint(rect[name], `${elementName} ${name}`)] as const)
       .filter((entry): entry is [CornerName, Vec2] => Boolean(entry[1])),
   ) as Partial<Record<CornerName, Vec2>>;
-  let width = asPositiveNumber(rect.width);
-  let height = asPositiveNumber(rect.height);
+  let width = asPositiveNumber(rect.width, variables);
+  let height = asPositiveNumber(rect.height, variables);
   if (zoom && rect.scale !== undefined) {
-    const scale = asPositiveNumber(rect.scale);
+    const scale = asPositiveNumber(rect.scale, variables);
     if (!scale) {
       throw new Error(`${elementName} scale must be a positive number`);
     }
@@ -477,9 +481,9 @@ function resolveRectGeometry(
   } else if (zoom && height && !width) {
     width = height * zoom.aspect;
   }
-  let rotation = parseRotation(rect.rotation);
+  let rotation = parseRotation(rect.rotation, variables);
   if (rect.rotation !== undefined && rotation === undefined) {
-    throw new Error(`${elementName} rotation must be degrees, "<angle>deg", "<angle>rad", or a unit object`);
+    throw new Error(`${elementName} rotation must be degrees, an expression with an optional deg or rad unit, or a unit object`);
   }
 
   if (zoom?.align.length === 2) {
@@ -628,12 +632,13 @@ function parseRectElement(
   name: string | undefined,
   elementName: string,
   resolvePoint: PointResolver,
+  variables: Variables,
 ): RectElement {
   if (rect.scale !== undefined || rect.align !== undefined) {
     throw new Error(`${elementName}: scale and align are only supported on zooms`);
   }
-  const geometry = resolveRectGeometry(rect, resolvePoint, elementName);
-  const opacity = clamp(asNumber(rect.opacity, 1), 0, 1);
+  const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables);
+  const opacity = clamp(asNumber(rect.opacity, 1, variables), 0, 1);
 
   return {
     kind: 'rect',
@@ -651,13 +656,14 @@ function parseZoomElement(
   resolvePoint: PointResolver,
   aspect: number,
   view: ViewFrame,
+  variables: Variables,
 ): ZoomElement {
-  const align = zoom.align === undefined ? [] : parseAlignPairs(zoom.align, resolvePoint, elementName);
+  const align = zoom.align === undefined ? [] : parseAlignPairs(zoom.align, resolvePoint, elementName, variables);
   return {
     kind: 'zoom',
     name,
-    ...resolveRectGeometry(zoom, resolvePoint, elementName, { aspect, view, align }),
-    opacity: clamp(asNumber(zoom.opacity, 1), 0, 1),
+    ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, { aspect, view, align }),
+    opacity: clamp(asNumber(zoom.opacity, 1, variables), 0, 1),
     alignTargets: align.map((pair) => pair.to),
   };
 }
@@ -717,6 +723,7 @@ function resolveSceneElements(
   items: SceneItem[],
   aspect: number,
   view: ViewFrame,
+  variables: Variables,
 ): DrawableElement[] {
   const indexByName = new Map(items.flatMap((item, index) => item.name ? [[item.name, index] as const] : []));
   const resolved: (DrawableElement | undefined)[] = [];
@@ -727,7 +734,7 @@ function resolveSceneElements(
       return undefined;
     }
     if (typeof value !== 'string') {
-      const point = parsePoint(value);
+      const point = parsePoint(value, variables);
       if (!point) {
         throw new Error(`${label} must be [x, y], { x, y }, or a name.part reference`);
       }
@@ -768,14 +775,81 @@ function resolveSceneElements(
     resolving.add(index);
     const resolvePoint = pointResolverFor(index);
     const element = item.type === 'rect'
-      ? parseRectElement(item.record, item.name, item.label, resolvePoint)
-      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view);
+      ? parseRectElement(item.record, item.name, item.label, resolvePoint, variables)
+      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables);
     resolving.delete(index);
     resolved[index] = element;
     return element;
   };
 
   return items.map((_, index) => resolveElement(index));
+}
+
+// Evaluates a value once, on first use. Re-entering while it is being
+// computed means the definitions refer to each other in a loop.
+function lazy<T>(label: string, compute: () => T): () => T {
+  let resolving = false;
+  let result: { value: T } | undefined;
+  return () => {
+    if (result) {
+      return result.value;
+    }
+    if (resolving) {
+      throw new Error(`${label} is part of a reference loop`);
+    }
+    resolving = true;
+    try {
+      result = { value: compute() };
+      return result.value;
+    } finally {
+      resolving = false;
+    }
+  };
+}
+
+// Variables are a list of { name, value }. Values may be numbers or
+// expressions referring to other variables or view values in any order.
+function parseVariableDefinitions(node: unknown): Map<string, number | string> {
+  const definitions = new Map<string, number | string>();
+  if (node === undefined) {
+    return definitions;
+  }
+  if (!Array.isArray(node)) {
+    throw new Error('variables must be a list of { name, value } items');
+  }
+
+  node.forEach((item, index) => {
+    const label = `Variable ${index + 1}`;
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`${label} must be an object with a name and a value`);
+    }
+    const { name, value } = item as Record<string, unknown>;
+    if (typeof name !== 'string' || !isIdentifier(name)) {
+      throw new Error(`${label} name must start with a letter or underscore and contain only letters, digits, and underscores`);
+    }
+    if (isReservedName(name)) {
+      throw new Error(`Variable "${name}" has the same name as a built-in constant or function`);
+    }
+    if (definitions.has(name)) {
+      throw new Error(`Variable "${name}" is defined more than once`);
+    }
+    if (typeof value !== 'number' && typeof value !== 'string') {
+      throw new Error(`Variable "${name}" value must be a number or an expression`);
+    }
+    definitions.set(name, value);
+  });
+  return definitions;
+}
+
+function variableCell(name: string, value: number | string, lookup: Variables): () => number {
+  return lazy(`Variable "${name}"`, () => {
+    try {
+      return asNumber(value, Number.NaN, lookup);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(message.startsWith('Variable "') ? message : `Variable "${name}": ${message}`);
+    }
+  });
 }
 
 export function parseScene(text: string): SceneDefinition {
@@ -821,31 +895,54 @@ export function parseScene(text: string): SceneDefinition {
   }
 
   const sceneRoot = parsed as Record<string, unknown>;
+  const viewNode = sceneRoot.view && typeof sceneRoot.view === 'object' && !Array.isArray(sceneRoot.view)
+    ? (sceneRoot.view as Record<string, unknown>)
+    : {};
+  const coordinatesNode = viewNode.coordinates && typeof viewNode.coordinates === 'object' && !Array.isArray(viewNode.coordinates)
+    ? (viewNode.coordinates as Record<string, unknown>)
+    : {};
+
+  // Variables and view values resolve lazily through one lookup, so each
+  // may refer to the others as long as there is no loop.
+  const cells = new Map<string, () => number>();
+  const variables: Variables = (name) => cells.get(name)?.();
+  const resolvedView = lazy('view.resolution', () => resolveView(viewNode, variables));
+  const xRange = lazy('view.coordinates.x', () => parseAxisRange(coordinatesNode.x, fallback.view.coordinates.x, variables));
+  const yRange = lazy('view.coordinates.y', () => parseAxisRange(coordinatesNode.y, fallback.view.coordinates.y, variables));
+  const viewValues: Record<string, () => number> = {
+    'view.left': () => xRange().from,
+    'view.right': () => xRange().to,
+    'view.bottom': () => yRange().from,
+    'view.top': () => yRange().to,
+    'view.width': () => xRange().to - xRange().from,
+    'view.height': () => yRange().to - yRange().from,
+    'view.centre.x': () => (xRange().from + xRange().to) / 2,
+    'view.centre.y': () => (yRange().from + yRange().to) / 2,
+    'view.aspect': () => resolvedView().aspect,
+    'view.pixels.width': () => resolvedView().resolution.width,
+    'view.pixels.height': () => resolvedView().resolution.height,
+    'view.pixel.width': () => (xRange().to - xRange().from) / resolvedView().resolution.width,
+    'view.pixel.height': () => (yRange().to - yRange().from) / resolvedView().resolution.height,
+  };
+  Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
+  parseVariableDefinitions(sceneRoot.variables)
+    .forEach((value, name) => cells.set(name, variableCell(name, value, variables)));
+  // Evaluate everything so mistakes in unused variables are still reported.
+  cells.forEach((cell) => cell());
+
   const frameNode = sceneRoot.frame && typeof sceneRoot.frame === 'object' && !Array.isArray(sceneRoot.frame)
     ? (sceneRoot.frame as Record<string, unknown>)
     : {};
     const frame: FrameDefinition = {
-      width: asNonNegativeNumber(frameNode.width, fallback.frame.width),
-      radius: asNonNegativeNumber(frameNode.radius, fallback.frame.radius),
+      width: asNonNegativeNumber(frameNode.width, fallback.frame.width, variables),
+      radius: asNonNegativeNumber(frameNode.radius, fallback.frame.radius, variables),
       color: typeof frameNode.color === 'string' ? frameNode.color : fallback.frame.color,
       wall: typeof frameNode.wall === 'string' ? frameNode.wall : fallback.frame.wall,
       background: typeof frameNode.background === 'string' ? frameNode.background : fallback.frame.background,
-      padding: asNonNegativeNumber(frameNode.padding, fallback.frame.padding),
-      margin: asNonNegativeNumber(frameNode.margin, fallback.frame.margin),
+      padding: asNonNegativeNumber(frameNode.padding, fallback.frame.padding, variables),
+      margin: asNonNegativeNumber(frameNode.margin, fallback.frame.margin, variables),
     };
-    const viewNode = sceneRoot.view && typeof sceneRoot.view === 'object' && !Array.isArray(sceneRoot.view)
-      ? (sceneRoot.view as Record<string, unknown>)
-      : {};
-    const resolvedView = resolveView(viewNode);
-    const coordinatesNode = viewNode.coordinates && typeof viewNode.coordinates === 'object' && !Array.isArray(viewNode.coordinates)
-      ? (viewNode.coordinates as Record<string, unknown>)
-      : null;
-    const coordinates = coordinatesNode
-      ? {
-          x: parseAxisRange(coordinatesNode.x, fallback.view.coordinates.x),
-          y: parseAxisRange(coordinatesNode.y, fallback.view.coordinates.y),
-        }
-      : fallback.view.coordinates;
+    const coordinates = { x: xRange(), y: yRange() };
 
     if (!Array.isArray(sceneRoot.scene)) {
       throw new Error('scene must be a list of typed items');
@@ -870,8 +967,9 @@ export function parseScene(text: string): SceneDefinition {
     };
     const elements = resolveSceneElements(
       parseSceneItems(sceneRoot.scene),
-      resolvedView.aspect,
+      resolvedView().aspect,
       viewFrame,
+      variables,
     );
 
     return {
@@ -880,10 +978,10 @@ export function parseScene(text: string): SceneDefinition {
         color: typeof sceneRoot.seed === 'string'
           ? sceneRoot.seed
           : typeof seedNode.color === 'string' ? seedNode.color : fallback.seed.color,
-        opacity: clamp(asNumber(seedNode.opacity, fallback.seed.opacity), 0, 1),
+        opacity: clamp(asNumber(seedNode.opacity, fallback.seed.opacity, variables), 0, 1),
       },
       view: {
-        ...resolvedView,
+        ...resolvedView(),
         coordinates,
       },
       elements,

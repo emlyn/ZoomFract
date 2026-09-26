@@ -1,4 +1,5 @@
 import './style.css';
+import GUIDE_HTML from './guide.html?raw';
 import {
   DEFAULT_EXAMPLE,
   EXAMPLES,
@@ -426,6 +427,59 @@ const sceneInputLabel = document.createElement('label');
 sceneInputLabel.className = 'scene-label';
 sceneInputLabel.textContent = 'Scene definition';
 
+const guideButton = document.createElement('button');
+guideButton.type = 'button';
+guideButton.className = 'guide-button';
+guideButton.textContent = 'Guide';
+guideButton.title = 'How to write a scene definition';
+guideButton.setAttribute('aria-expanded', 'false');
+
+const sceneLabelRow = document.createElement('div');
+sceneLabelRow.className = 'scene-label-row';
+sceneLabelRow.append(sceneInputLabel, guideButton);
+
+const guide = document.createElement('aside');
+guide.className = 'guide';
+guide.hidden = true;
+guide.setAttribute('aria-label', 'Definition guide');
+
+const guideHeader = document.createElement('div');
+guideHeader.className = 'guide-header';
+const guideTitle = document.createElement('h2');
+guideTitle.textContent = 'Definition guide';
+const guideClose = document.createElement('button');
+guideClose.type = 'button';
+guideClose.className = 'guide-close';
+guideClose.setAttribute('aria-label', 'Close guide');
+guideClose.textContent = '\u00d7';
+guideHeader.append(guideTitle, guideClose);
+
+const guideBody = document.createElement('div');
+guideBody.className = 'guide-body';
+guideBody.innerHTML = GUIDE_HTML;
+guide.append(guideHeader, guideBody);
+
+const setGuideOpen = (open: boolean) => {
+  guide.hidden = !open;
+  guideButton.setAttribute('aria-expanded', String(open));
+};
+guideButton.addEventListener('click', () => setGuideOpen(guide.hidden));
+guideClose.addEventListener('click', () => setGuideOpen(false));
+guide.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    setGuideOpen(false);
+    guideButton.focus();
+  }
+});
+// Contents links scroll within the guide instead of changing the page URL.
+guideBody.addEventListener('click', (event) => {
+  const link = event.target instanceof Element ? event.target.closest('a[href^="#"]') : null;
+  if (link) {
+    event.preventDefault();
+    guideBody.querySelector(link.getAttribute('href')!)?.scrollIntoView({ behavior: 'smooth' });
+  }
+});
+
 const sceneInput = document.createElement('textarea');
 sceneInput.className = 'scene-input';
 sceneInput.rows = 18;
@@ -487,7 +541,7 @@ controls.append(
   customSettings,
   exampleRow,
   exampleDetails,
-  sceneInputLabel,
+  sceneLabelRow,
   sceneInput,
   editModeRow,
   applySceneButton,
@@ -495,7 +549,7 @@ controls.append(
   sceneStatus,
 );
 panel.append(panelHeader, controls, panelResizeHandle);
-shell.append(panel, panelToggle, canvasHost, renderProgress);
+shell.append(panel, panelToggle, guide, canvasHost, renderProgress);
 app.append(shell);
 
 const baseScene = parseScene(DEFAULT_SCENE_TEXT);

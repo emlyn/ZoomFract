@@ -8,7 +8,7 @@ frame:
   margin: 20
 
 view:
-  aspect: 1.333
+  aspect: 4/3
   resolution:
     height: 1200
   coordinates:

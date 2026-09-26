@@ -1,5 +1,6 @@
 import fernText from './examples/fern.yaml?raw';
 import frameAndRectanglesText from './examples/frame-and-rectangles.yaml?raw';
+import pythagorasTreeText from './examples/pythagoras-tree.yaml?raw';
 import rotatedSpiralText from './examples/rotated-spiral.yaml?raw';
 import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
 import sierpinskiText from './examples/sierpinski.yaml?raw';
@@ -30,6 +31,12 @@ export const EXAMPLES: ExampleDefinition[] = [
     label: 'Fern',
     description: 'Three scaled, rotated zooms aligned to the top of a stem.',
     text: fernText,
+  },
+  {
+    id: 'pythagoras-tree',
+    label: 'Pythagoras Tree',
+    description: 'Two zooms aligned to a 3-4-5 triangle on top of a square, using variables.',
+    text: pythagorasTreeText,
   },
   {
     id: 'rotated-spiral',
