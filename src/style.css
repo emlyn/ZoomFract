@@ -375,10 +375,22 @@ canvas {
   text-transform: uppercase;
 }
 
+/* The controls scroll when the window is too short to show them all. */
 .controls {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 0.75rem;
+  min-height: 0;
+  margin: 0 -0.5rem;
+  padding: 0 0.5rem 1rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(212, 212, 216, 0.25) transparent;
+}
+
+.controls > * {
+  flex-shrink: 0;
 }
 
 .control-row,
@@ -472,13 +484,6 @@ canvas {
 
 .quality-details {
   min-height: 1.25rem;
-  color: #a1a1aa;
-  font-size: 0.78rem;
-}
-
-.example-details {
-  min-height: 1.25rem;
-  overflow-wrap: anywhere;
   color: #a1a1aa;
   font-size: 0.78rem;
 }
@@ -660,6 +665,12 @@ canvas {
   color: #f4f4f5;
 }
 
+.guide h4 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.85rem;
+  color: #d4d4d8;
+}
+
 .guide p,
 .guide ul {
   margin: 0.5rem 0;
@@ -739,4 +750,115 @@ canvas {
 code {
   font-family: 'SFMono-Regular', Consolas, monospace;
   font-size: 0.9em;
+}
+
+.share-dialog {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 1rem;
+  border: 1px solid rgba(212, 212, 216, 0.16);
+  border-radius: 0.9rem;
+  background: rgba(38, 39, 42, 0.98);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+  color: #e4e4e7;
+}
+
+.share-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.share-dialog:focus {
+  outline: none;
+}
+
+.share-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.share-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border-radius: 0.7rem;
+  background: rgba(24, 24, 27, 0.6);
+}
+
+.share-tab {
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: #a1a1aa;
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.share-tab:hover {
+  color: #e4e4e7;
+}
+
+.share-tab[aria-selected='true'] {
+  background: rgba(63, 63, 66, 0.9);
+  color: #f4f4f5;
+}
+
+.share-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 8rem;
+}
+
+.share-panel[hidden],
+.share-dialog .edit-mode-row[hidden] {
+  display: none;
+}
+
+.share-preview {
+  align-self: center;
+  max-width: 100%;
+  border-radius: 0.4rem;
+  background: rgba(24, 24, 27, 0.6);
+}
+
+.share-preview.transparent {
+  background: repeating-conic-gradient(#3f3f46 0 25%, #27272a 0 50%) 0 0 / 16px 16px;
+}
+
+.share-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.share-link-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid rgba(212, 212, 216, 0.18);
+  border-radius: 0.6rem;
+  background: rgba(24, 24, 27, 0.6);
+  color: #e4e4e7;
+  padding: 0.5rem 0.6rem;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.share-status {
+  margin: 0.75rem 0 0;
+}
+
+.share-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.share-qr {
+  width: 15rem;
+  height: 15rem;
+  background: #fff;
 }

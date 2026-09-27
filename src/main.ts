@@ -1,5 +1,6 @@
 import './style.css';
 import { createSceneEditor } from './editor';
+import { createShareDialog, type LinkOptions } from './share-dialog';
 import GUIDE_HTML from './guide.html?raw';
 import {
   DEFAULT_EXAMPLE,
@@ -29,6 +30,7 @@ import {
   clamp,
   parseScene,
   type InputValue,
+  type InputValues,
   type SceneDefinition,
   type SceneInput,
   type Vec2,
@@ -38,6 +40,7 @@ import {
 type DefinitionLocation =
   | { kind: 'example'; id: string }
   | { kind: 'source'; url: string }
+  | { kind: 'shared'; code: string }
   | { kind: 'custom' };
 
 const DEFAULT_SCENE_TEXT = DEFAULT_EXAMPLE.text;
@@ -132,19 +135,26 @@ async function fetchRemoteDefinition(source: string): Promise<string> {
   }
 }
 
+// Shared links put their code in the fragment, or in `q` in the query.
 function definitionLocationFromUrl(): DefinitionLocation {
   const parameters = new URLSearchParams(window.location.search);
   const example = parameters.get('example');
   const source = parameters.get('source');
+  const fragment = window.location.hash.slice(1);
+  const shared = [parameters.get('q'), fragment === '' ? null : fragment]
+    .filter((code) => code !== null);
 
-  if (example && source) {
-    throw new Error('Use either "example" or "source", not both');
+  if ([example, source].filter(Boolean).length + shared.length > 1) {
+    throw new Error('Use only one of "example", "source", "q" or a shared link fragment');
   }
   if (example) {
     return { kind: 'example', id: example };
   }
   if (source) {
     return { kind: 'source', url: source };
+  }
+  if (shared.length > 0) {
+    return { kind: 'shared', code: shared[0] };
   }
   return { kind: 'example', id: DEFAULT_EXAMPLE.id };
 }
@@ -153,11 +163,15 @@ function updateDefinitionUrl(location: DefinitionLocation) {
   const url = new URL(window.location.href);
   url.searchParams.delete('example');
   url.searchParams.delete('source');
+  url.searchParams.delete('q');
+  url.hash = '';
 
   if (location.kind === 'example') {
     url.searchParams.set('example', location.id);
   } else if (location.kind === 'source') {
     url.searchParams.set('source', location.url);
+  } else if (location.kind === 'shared') {
+    url.hash = location.code;
   }
 
   window.history.replaceState(null, '', url);
@@ -429,10 +443,6 @@ for (const example of EXAMPLES) {
 exampleSelect.value = DEFAULT_EXAMPLE.id;
 exampleRow.append(exampleSelect);
 
-const exampleDetails = document.createElement('div');
-exampleDetails.className = 'example-details';
-exampleDetails.textContent = DEFAULT_EXAMPLE.description;
-
 const renderProgress = document.createElement('div');
 renderProgress.className = 'render-progress';
 renderProgress.hidden = true;
@@ -508,7 +518,6 @@ guideBody.addEventListener('click', (event) => {
 
 const sceneEditor = createSceneEditor(DEFAULT_SCENE_TEXT, () => {
   exampleSelect.value = '';
-  exampleDetails.textContent = 'Custom definition';
 });
 
 const wrapRow = document.createElement('label');
@@ -534,22 +543,8 @@ sceneStatus.setAttribute('role', 'status');
 
 applySceneButton.addEventListener('click', () => {
   definitionLoadRevision += 1;
-  applyDefinition(sceneEditor.text(), { kind: 'custom' }, true, true);
+  applyDefinition(sceneEditor.text(), { kind: 'custom' }, true, state.inputValues);
 });
-
-const downloadButton = document.createElement('button');
-downloadButton.type = 'button';
-downloadButton.className = 'apply-scene download-image';
-downloadButton.textContent = 'Download PNG';
-downloadButton.disabled = true;
-
-const transparentRow = document.createElement('label');
-transparentRow.className = 'edit-mode-row';
-transparentRow.innerHTML = '<span>Transparent PNG</span>';
-
-const transparentToggle = document.createElement('input');
-transparentToggle.type = 'checkbox';
-transparentRow.append(transparentToggle);
 
 const labelRow = document.createElement('label');
 labelRow.className = 'edit-mode-row';
@@ -563,45 +558,37 @@ labelToggle.addEventListener('change', () => {
   updateWallLabel();
 });
 
-// The canvas drawn over the frame background, at the same resolution.
-function withBackground(source: HTMLCanvasElement, background: string): HTMLCanvasElement {
-  const output = document.createElement('canvas');
-  output.width = source.width;
-  output.height = source.height;
-  const context = output.getContext('2d');
-  if (!context) {
-    throw new Error('Could not create a canvas to add the background');
-  }
-  context.fillStyle = background;
-  context.fillRect(0, 0, output.width, output.height);
-  context.drawImage(source, 0, 0);
-  return output;
+const shareButton = document.createElement('button');
+shareButton.type = 'button';
+shareButton.className = 'apply-scene share-button';
+shareButton.textContent = 'Share';
+
+// The link holds the applied definition, with the current input values and
+// app settings when they are chosen.
+async function shareLink({ inputs, settings }: LinkOptions): Promise<string> {
+  const { encodeSharedDefinition } = await import('./share');
+  const url = new URL(window.location.pathname, window.location.origin);
+  url.hash = encodeSharedDefinition({
+    text: state.definitionText,
+    inputs: inputs ? state.inputValues : new Map(),
+    settings: settings ? { quality: state.quality, custom: state.custom, label: labelToggle.checked } : null,
+  });
+  return url.href;
 }
 
-// Saves the canvas at its full declared resolution, on the frame background
-// unless a transparent image is requested.
-downloadButton.addEventListener('click', () => {
-  const location = state.definitionLocation;
-  const name = location.kind === 'example' ? location.id : 'custom';
-  const image = transparentToggle.checked ? canvas : withBackground(canvas, state.scene.frame.background);
-  image.toBlob((blob) => {
-    if (!blob) {
-      showSceneStatus('Could not create PNG', true);
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `zoomfract-${name}.png`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-  }, 'image/png');
+const shareDialog = createShareDialog({
+  canvas,
+  background: () => state.scene.frame.background,
+  fileName: () => state.definitionLocation.kind === 'example' ? state.definitionLocation.id : 'custom',
+  hasInputs: () => state.scene.inputs.length > 0,
+  hasUnappliedEdits: () => sceneEditor.text().trim() !== state.definitionText.trim(),
+  link: shareLink,
 });
+shareButton.addEventListener('click', () => shareDialog.open());
 
 exampleSelect.addEventListener('change', () => {
   const example = findExample(exampleSelect.value);
   if (!example) {
-    exampleDetails.textContent = 'Custom definition';
     return;
   }
   void loadDefinitionLocation({ kind: 'example', id: example.id }, true);
@@ -611,19 +598,17 @@ controls.append(
   qualityControl.row,
   customSettings,
   exampleRow,
-  exampleDetails,
   sceneLabelRow,
   sceneEditor.element,
   wrapRow,
   editModeRow,
   labelRow,
   applySceneButton,
-  transparentRow,
-  downloadButton,
+  shareButton,
   sceneStatus,
 );
 panel.append(panelHeader, controls, panelResizeHandle);
-shell.append(panel, panelToggle, guide, canvasHost, renderProgress);
+shell.append(panel, panelToggle, guide, canvasHost, renderProgress, shareDialog.element);
 app.append(shell);
 
 const baseScene = parseScene(DEFAULT_SCENE_TEXT);
@@ -650,37 +635,28 @@ function showSceneStatus(message: string, isError = false) {
 }
 
 // Input values are kept when the edited definition is applied, as long as it
-// still has a matching input, but reset when another definition is loaded.
+// still has a matching input, but reset when another definition is loaded
+// unless it comes with its own, as shared links do.
 function applyDefinition(
   text: string,
   location: DefinitionLocation,
   updateUrl: boolean,
-  keepInputs = false,
+  inputValues: InputValues = new Map(),
 ): boolean {
   try {
-    const nextScene = parseScene(text, keepInputs ? state.inputValues : new Map());
+    const nextScene = parseScene(text, inputValues);
     // Info only changes the label, so the current picture can stay.
     const pictureChanged = JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
     state.scene = nextScene;
     state.definitionText = text;
     state.inputValues = new Map(nextScene.inputs.flatMap((input) => {
-      const value = keepInputs ? state.inputValues.get(input.name) : undefined;
+      const value = inputValues.get(input.name);
       return value !== undefined && typeof value === typeof input.value ? [[input.name, value]] : [];
     }));
     state.definitionLocation = location;
     sceneEditor.setText(text.trim());
 
-    if (location.kind === 'example') {
-      const example = findExample(location.id);
-      exampleSelect.value = example?.id ?? '';
-      exampleDetails.textContent = example?.description ?? 'Custom definition';
-    } else if (location.kind === 'source') {
-      exampleSelect.value = '';
-      exampleDetails.textContent = `Remote: ${location.url}`;
-    } else {
-      exampleSelect.value = '';
-      exampleDetails.textContent = 'Custom definition';
-    }
+    exampleSelect.value = location.kind === 'example' ? findExample(location.id)?.id ?? '' : '';
 
     showSceneStatus('');
     if (updateUrl) {
@@ -727,6 +703,32 @@ async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: b
         return;
       }
       showSceneStatus(error instanceof Error ? error.message : 'Could not load source', true);
+    }
+    return;
+  }
+
+  if (location.kind === 'shared') {
+    try {
+      const { decodeSharedDefinition } = await import('./share');
+      if (revision !== definitionLoadRevision) {
+        return;
+      }
+      const { text, inputs, settings } = decodeSharedDefinition(location.code);
+      const renderChanged = settings !== null && JSON.stringify([settings.quality, settings.custom])
+        !== JSON.stringify([state.quality, state.quality === 'custom' ? state.custom : null]);
+      if (settings) {
+        state.quality = settings.quality;
+        state.custom = settings.custom ?? state.custom;
+        labelToggle.checked = settings.label;
+        syncQualityControls();
+      }
+      if (applyDefinition(text, location, updateUrl, inputs) && renderChanged) {
+        render();
+      }
+    } catch (error) {
+      if (revision === definitionLoadRevision) {
+        showSceneStatus(error instanceof Error ? error.message : 'Could not read shared link', true);
+      }
     }
     return;
   }
@@ -1187,7 +1189,7 @@ function stopActiveRender(terminate: boolean) {
   window.clearTimeout(progressTimer);
   setRenderProgress(null);
   activeRequest = null;
-  downloadButton.disabled = displayedFrame === null || displayedFrame.preview;
+  shareDialog.setImageReady(displayedFrame !== null && !displayedFrame.preview);
   if (terminate) {
     renderWorker?.terminate();
     renderWorker = null;
@@ -1216,7 +1218,7 @@ function render() {
 function startRender(request: RenderRequest) {
   const worker = renderWorker ??= new Worker(new URL('./render/worker.ts', import.meta.url), { type: 'module' });
   activeRequest = request;
-  downloadButton.disabled = true;
+  shareDialog.setImageReady(false);
   let details: string[] = [];
   let started: Extract<RenderMessage, { type: 'start' }> | null = null;
   let latestProgress = 0;

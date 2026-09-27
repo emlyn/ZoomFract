@@ -22,6 +22,8 @@
     "@codemirror/view": "^6.43.12",
     "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-indentation-markers": "^6.5.3",
+    "fflate": "^0.8.3",
+    "qrcode-generator": "^2.0.4",
     "yaml": "^2.9.1"
   }
 }

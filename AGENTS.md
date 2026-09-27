@@ -41,6 +41,8 @@ Do not commit generated or local artifacts:
 - `src/scene.ts`: scene types, YAML parsing, error locations, and geometry
   resolution.
 - `src/editor.ts`: CodeMirror definition editor with inline diagnostics.
+- `src/share.ts`: shared-link encoding, loaded on demand with its dictionary.
+- `src/share-dialog.ts`: the Share dialog for images, links and QR codes.
 - `src/expression.ts`: arithmetic expression parser and evaluator.
 - `src/guide.html`: user guide for the definition language, shown from the
   panel. Keep it in simple English and update it whenever the scene language
@@ -95,7 +97,10 @@ files unless extracting a module clearly reduces complexity.
 - Elements may have an optional `name`. Names must be unique, non-blank,
   contain no dots or spaces, and cannot be the reserved name `view`.
 - `scene` is an ordered list of typed items. Every item has a `type`, currently
-  `rect` or `zoom`, and later items draw on top of earlier items.
+  `rect` or `zoom`, and later items draw on top of earlier items. Planned
+  syntax (more shapes, images, groups, gradients, zoom colour changes,
+  repeats) is described in the guide's "Coming soon" section and baked into
+  the v1 share dictionary; implement it with those exact names.
 - Anywhere a point is accepted, it may be `[x, y]`, `{ x, y }`, or a
   `name.part` reference. Parts are `topLeft`, `topRight`, `bottomLeft`,
   `bottomRight`, `centre`, `top`, `bottom`, `left`, and `right`; `view.<part>`
@@ -114,10 +119,22 @@ files unless extracting a module clearly reduces complexity.
   there as well as in the parser.
 - Line endings are LF everywhere (enforced by `.gitattributes`).
 - Built-in examples use stable IDs and ordinary YAML files. Their dropdown
-  label and description come from each file's `info` (a title is required);
+  label comes from each file's `info` (a title is required);
   `src/examples.ts` only lists IDs and imports.
 - `?example=<id>` loads a built-in definition. `?source=<http-url>` loads a
   remote YAML definition; never add credentials or a server-side proxy.
+- `#<code>` (made by the Share dialog) or `?q=<code>` loads a shared link: a
+  version character, then base64url of deflate (fflate) of the definition
+  text. When there are extras, the text is followed by `\0` and a JSON object
+  documented in `src/share.ts` (input values and app settings). It is
+  compressed against a preset dictionary, `src/share/dictionary-<version>.txt`,
+  made of the planned syntax snippets from the guide's "Coming soon" section,
+  the examples, guide snippets and sample extras JSON (the most
+  likely matches go last, where deflate references them most cheaply).
+  Released dictionaries are frozen: never edit one, or old links break. To
+  improve compression, add a new dictionary under a new version character and
+  keep the old ones decodable. Only one of `example`, `source`, `q` and a
+  fragment may be given.
 - Invalid, ambiguous, conflicting, or underdetermined definitions must produce
   a visible error. Do not silently invent missing geometry.
 - Any numeric value may be a number or an expression string such as
@@ -237,7 +254,7 @@ files unless extracting a module clearly reduces complexity.
   and at most 0.5 megapixels, scaled up for display, without progress. A
   running preview finishes before the newest starts instead of restarting
   the worker. The selected quality renders once values settle (400 ms, or on
-  drag release). Download stays disabled while a preview is displayed.
+  drag release). Image sharing stays disabled while a preview is displayed.
 - Rendering runs in a Web Worker on `OffscreenCanvas`, so the UI thread only
   displays finished frames. Each render uses a fresh worker; starting a new
   render terminates the old one, which cancels obsolete work immediately.
@@ -324,6 +341,18 @@ files unless extracting a module clearly reduces complexity.
   X while open and morphs into three lines before fading. Hovering near the
   top-right reveals it; reopening reverses the transition.
 - The left panel edge is draggable.
+- The controls scroll within the panel when the window is too short.
+- Share opens a modal dialog (`src/share-dialog.ts`) with Image (preview,
+  size, transparency, copy and download), Link (optional input values and app
+  settings, copy) and QR code (the same link options plus a centred preview,
+  on by default, copy and download) tabs. Image actions stay disabled until the latest full
+  render has finished. QR codes use `qrcode-generator`, loaded on demand, with
+  error correction H when the preview covers the middle (at most 30% of the
+  width) and M otherwise. The preview is the transparent picture cropped to its
+  non-transparent pixels. It sits on a white backing that follows its shape with
+  narrow gaps filled in (a morphological closing using distance transforms),
+  with a thin fading halo, and is drawn with slightly offset copies beneath it
+  to thicken very thin lines.
 - Keep the YAML editor monospace and tall enough to show useful context.
 - Editor wrapping is on by default with a "Wrap lines" toggle. Long unbroken
   runs such as URLs may break at any character; prose wraps between words.

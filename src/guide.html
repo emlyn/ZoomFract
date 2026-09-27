@@ -17,6 +17,8 @@
   <a href="#guide-variables">Variables</a>
   <a href="#guide-inputs">Inputs</a>
   <a href="#guide-values">View values</a>
+  <a href="#guide-sharing">Sharing</a>
+  <a href="#guide-planned">Coming soon</a>
 </nav>
 
 <section id="guide-overview">
@@ -149,8 +151,8 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   padding: 12          # space between border and picture
   margin: 24           # space between frame and window edge</code></pre>
   <p>
-    The border, wall and margin are not part of the picture. Downloaded images are
-    drawn on the background colour, unless you tick <strong>Transparent PNG</strong>,
+    The border, wall and margin are not part of the picture. Shared images are
+    drawn on the background colour, unless you tick <strong>Transparent background</strong>,
     which leaves them transparent wherever nothing is drawn.
   </p>
 </section>
@@ -448,7 +450,7 @@ scene:
     </li>
     <li>
       Values are kept when the edited definition is applied, and reset when another
-      definition is loaded.
+      definition is loaded, unless it is a shared link that includes them.
     </li>
   </ul>
 </section>
@@ -480,4 +482,201 @@ scene:
     <code>centre: view.centre</code>), and <code>view.centre.x</code>, which is a number
     (used in expressions).
   </p>
+</section>
+
+<section id="guide-sharing">
+  <h3>Sharing</h3>
+  <p><em>Share</em> opens a window with three tabs:</p>
+  <ul>
+    <li>
+      <strong>Image</strong> copies or downloads the picture as a PNG, at full size or
+      smaller, optionally with a transparent background. These wait until rendering
+      has finished.
+    </li>
+    <li>
+      <strong>Link</strong> copies a link that contains the applied definition, so it
+      shows the same picture without needing to be saved anywhere. It can include the
+      current input values, and the app settings: quality, render settings and whether
+      the label is shown. Edits that have not been applied are not included.
+    </li>
+    <li>
+      <strong>QR code</strong> shows the link as a QR code to copy or download, with the
+      same options as the link. By default it includes a small preview of the drawn
+      part of the picture in the centre; the code is then made more robust so it still scans.
+    </li>
+  </ul>
+  <p>
+    The definition is compressed to keep links short. Definitions that are similar to the
+    examples give the shortest links.
+  </p>
+</section>
+
+<section id="guide-planned">
+  <h3>Coming soon</h3>
+  <p>
+    These parts of the language are planned but not available yet. Using them now gives
+    an error. They are described here so you can see where ZoomFract is going.
+  </p>
+
+  <h4>More shapes</h4>
+  <pre><code>- type: circle
+  centre: [0, 0]
+  radius: 1
+- type: ellipse
+  centre: [0, 0]
+  width: 3
+  height: 2
+  rotation: 20
+- type: triangle
+  points: [[0, 0], [1, 0], [0.5, 0.8]]
+- type: polygon
+  points: [[0, 0], [2, 0], [2, 1], [1, 1.5], [0, 1]]
+- type: polygon            # a regular polygon
+  sides: 6
+  centre: [0, 0]
+  radius: 1                # centre to corner
+- type: star
+  sides: 5
+  centre: [0, 0]
+  radius: 1
+  inner: 0.4               # inner corners, as a fraction of the radius
+- type: line
+  points: [[0, 0], [1, 1], [2, 0]]
+  thickness: 0.05
+  caps: round              # butt, round or square
+  joins: round             # miter, round or bevel
+- type: path
+  path: "M 0 0 C 1 1, 2 1, 3 0 Z"</code></pre>
+  <ul>
+    <li>
+      Circles, ellipses, regular polygons and stars are placed like rectangles, with
+      the same points (<code>name.centre</code>, <code>name.topLeft</code> and so on)
+      for their surrounding box.
+    </li>
+    <li>
+      Shapes made from <code>points</code> refer to them as <code>name.points.0</code>,
+      <code>name.points.1</code> and so on, counting from 0.
+    </li>
+    <li><code>path</code> uses SVG path commands, in view coordinates.</li>
+    <li>Any shape can have an outline:</li>
+  </ul>
+  <pre><code>  outline:
+    colour: black
+    thickness: 0.02
+    opacity: 0.8</code></pre>
+
+  <h4>Images</h4>
+  <pre><code>- type: image
+  source: https://example.com/leaf.png
+  centre: [0, 0]
+  width: 2                 # the height follows the image's shape
+  crop: { left: 10%, right: 90%, top: 0, bottom: 400 }   # pixels or percentages
+  fit: cover               # fill, contain or cover, when both sizes are given
+  smooth: false            # keep pixel art sharp</code></pre>
+  <p>
+    Images are placed like rectangles. The site must allow other pages to use its
+    images; if it does not, an error says so.
+  </p>
+
+  <h4>Groups and combining</h4>
+  <pre><code>- type: group
+  name: window
+  combine: difference      # union, intersection, difference or xor
+  colour: "#335"
+  items:
+    - type: rect
+      width: 4
+      height: 3
+    - type: circle
+      radius: 1</code></pre>
+  <ul>
+    <li>
+      With <code>combine</code>, the items only give the shape, and the result is filled
+      with the group's colour. <code>difference</code> takes the other items away from
+      the first. <code>add</code>, <code>overlap</code>, <code>subtract</code> and
+      <code>exclude</code> are other names for the four ways.
+    </li>
+    <li>
+      Without <code>combine</code>, the items are drawn in order, and the group's
+      <code>opacity</code> and <code>glow</code> apply to them all together.
+    </li>
+    <li>
+      A group can be moved as a whole with <code>move</code>, <code>rotation</code>,
+      <code>scale</code> and <code>flip</code>, turning and scaling
+      <code>about</code> a point, which is the middle of its items unless given.
+    </li>
+    <li>
+      <code>clip</code> keeps only the part of a group or zoom inside a shape:
+    </li>
+  </ul>
+  <pre><code>- type: zoom
+  centre: [0, 0]
+  scale: 0.5
+  clip:
+    type: circle
+    centre: [0, 0]
+    radius: 0.4</code></pre>
+
+  <h4>Gradients</h4>
+  <p>Any colour of a shape can be a gradient instead:</p>
+  <pre><code>colour:
+  gradient: linear         # linear, radial or conic
+  from: block.left
+  to: block.right
+  colours: [red, "#fde047", blue]
+
+colour:
+  gradient: radial
+  centre: block.centre
+  radius: 1
+  colours:
+    0%: white
+    70%: "#93c5fd"
+    100%: "#1e3a8a"
+
+colour:
+  gradient: conic
+  centre: [0, 0]
+  angle: 90
+  colours: [red, yellow, lime, cyan, blue, magenta, red]
+  repeat: mirror           # none, repeat or mirror</code></pre>
+  <p>
+    <code>colours</code> is written like the density shading colours. Without
+    <code>from</code> and <code>to</code> (or <code>centre</code>), a gradient spans the
+    shape's own box, so it turns and shrinks with it in every copy.
+  </p>
+
+  <h4>Zooms</h4>
+  <pre><code>- type: zoom
+  centre: [0, 0.5]
+  scale: 0.6
+  flip: horizontal         # horizontal, vertical or both
+  depth: 5                 # copy at most 5 levels deep
+  tint:
+    colour: "#f97316"
+    amount: 0.2
+  hue: 15                  # degrees around the colour wheel
+  brightness: 0.9
+  saturation: 1.1</code></pre>
+  <p>
+    Colour changes build up: a copy inside a copy is tinted twice. An
+    <code>align</code> with three pairs can also stretch, slant or mirror a copy.
+  </p>
+
+  <h4>Repeats and hidden items</h4>
+  <pre><code>- type: repeat
+  count: 6
+  rotation: 60             # each copy turns a further 60 degrees
+  about: [0, 0]
+  items:
+    - type: rect
+      centre: [0, 1]
+      width: 0.2
+      height: 0.5
+      opacity: 1 - index/10  # index counts the copies from 0
+- type: rect
+  name: guide
+  hidden: true             # only shown in edit mode, but can be referred to
+  bottomLeft: [-1, -1]
+  topRight: [1, 1]</code></pre>
 </section>

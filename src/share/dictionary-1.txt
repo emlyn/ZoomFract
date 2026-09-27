@@ -1,0 +1,614 @@
+- type: circle
+  centre: [0, 0]
+  radius: 1
+- type: ellipse
+  centre: [0, 0]
+  width: 3
+  height: 2
+  rotation: 20
+- type: triangle
+  points: [[0, 0], [1, 0], [0.5, 0.8]]
+- type: polygon
+  points: [[0, 0], [2, 0], [2, 1], [1, 1.5], [0, 1]]
+- type: polygon            # a regular polygon
+  sides: 6
+  centre: [0, 0]
+  radius: 1                # centre to corner
+- type: star
+  sides: 5
+  centre: [0, 0]
+  radius: 1
+  inner: 0.4               # inner corners, as a fraction of the radius
+- type: line
+  points: [[0, 0], [1, 1], [2, 0]]
+  thickness: 0.05
+  caps: round              # butt, round or square
+  joins: round             # miter, round or bevel
+- type: path
+  path: "M 0 0 C 1 1, 2 1, 3 0 Z"
+  outline:
+    colour: black
+    thickness: 0.02
+    opacity: 0.8
+- type: image
+  source: https://example.com/leaf.png
+  centre: [0, 0]
+  width: 2                 # the height follows the image's shape
+  crop: { left: 10%, right: 90%, top: 0, bottom: 400 }   # pixels or percentages
+  fit: cover               # fill, contain or cover, when both sizes are given
+  smooth: false            # keep pixel art sharp
+- type: group
+  name: window
+  combine: difference      # union, intersection, difference or xor
+  colour: "#335"
+  items:
+    - type: rect
+      width: 4
+      height: 3
+    - type: circle
+      radius: 1
+- type: zoom
+  centre: [0, 0]
+  scale: 0.5
+  clip:
+    type: circle
+    centre: [0, 0]
+    radius: 0.4
+colour:
+  gradient: linear         # linear, radial or conic
+  from: block.left
+  to: block.right
+  colours: [red, "#fde047", blue]
+
+colour:
+  gradient: radial
+  centre: block.centre
+  radius: 1
+  colours:
+    0%: white
+    70%: "#93c5fd"
+    100%: "#1e3a8a"
+
+colour:
+  gradient: conic
+  centre: [0, 0]
+  angle: 90
+  colours: [red, yellow, lime, cyan, blue, magenta, red]
+  repeat: mirror           # none, repeat or mirror
+- type: zoom
+  centre: [0, 0.5]
+  scale: 0.6
+  flip: horizontal         # horizontal, vertical or both
+  depth: 5                 # copy at most 5 levels deep
+  tint:
+    colour: "#f97316"
+    amount: 0.2
+  hue: 15                  # degrees around the colour wheel
+  brightness: 0.9
+  saturation: 1.1
+- type: repeat
+  count: 6
+  rotation: 60             # each copy turns a further 60 degrees
+  about: [0, 0]
+  items:
+    - type: rect
+      centre: [0, 1]
+      width: 0.2
+      height: 0.5
+      opacity: 1 - index/10  # index counts the copies from 0
+- type: rect
+  name: guide
+  hidden: true             # only shown in edit mode, but can be referred to
+  bottomLeft: [-1, -1]
+  topRight: [1, 1]
+info:
+  title: Sierpiński triangle
+  author: Emlyn Corrin
+  date: 2026
+  description: Three ordered axis-aligned zooms with a black terminal seed.
+  links:
+    - https://en.wikipedia.org/wiki/Sierpi%C5%84ski_triangle
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 2/sqrt(3)
+  resolution:
+    height: 1200
+  coordinates:
+    x: [-1, 1]
+    y: [-1, 1]
+
+seed:
+  colour: "#000"
+
+scene:
+  - type: zoom
+    name: bottom-left
+    bottomLeft: [-1, -1]
+    topRight: [0, 0]
+  - type: zoom
+    name: bottom-right
+    bottomLeft: [0, -1]
+    topRight: [1, 0]
+  - type: zoom
+    name: top
+    bottomLeft: [-0.5, 0]
+    topRight: [0.5, 1]
+info:
+  title: Sierpiński Carpet
+  author: Emlyn Corrin
+  date: 2026
+  description: Eight zooms around an empty centre form a recursive square carpet.
+  links:
+    - https://en.wikipedia.org/wiki/Sierpi%C5%84ski_carpet
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 1
+  resolution:
+    height: 1200
+  coordinates:
+    x: [0, 3]
+    y: [0, 3]
+
+seed:
+  colour: "#000"
+
+scene:
+  - type: zoom
+    name: bottom-left
+    bottomLeft: [0, 0]
+    topRight: [1, 1]
+  - type: zoom
+    name: bottom-centre
+    bottomLeft: [1, 0]
+    topRight: [2, 1]
+  - type: zoom
+    name: bottom-right
+    bottomLeft: [2, 0]
+    topRight: [3, 1]
+  - type: zoom
+    name: mid-left
+    bottomLeft: [0, 1]
+    topRight: [1, 2]
+  - type: zoom
+    name: mid-right
+    bottomLeft: [2, 1]
+    topRight: [3, 2]
+  - type: zoom
+    name: top-left
+    bottomLeft: [0, 2]
+    topRight: [1, 3]
+  - type: zoom
+    name: top-centre
+    bottomLeft: [1, 2]
+    topRight: [2, 3]
+  - type: zoom
+    name: top-right
+    bottomLeft: [2, 2]
+    topRight: [3, 3]
+info:
+  title: Vicsek Red Blue
+  author: Emlyn Corrin
+  date: 2026
+  description: A Vicsek cross with sharper red and blue glows on alternate arms.
+  links:
+    - https://en.wikipedia.org/wiki/Vicsek_fractal
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 1
+  overflow: 0.02
+  resolution:
+    height: 1200
+  coordinates:
+    x: [0, 3]
+    y: [0, 3]
+
+seed:
+  colour: "#000"
+
+scene:
+  - type: zoom
+    name: top
+    bottomLeft: [1, 2]
+    scale: 1/3
+    glow:
+      colour: "#c00"
+      size: 0.01
+      softness: 0.7
+  - type: zoom
+    name: left
+    bottomLeft: [0, 1]
+    scale: 1/3
+    glow:
+      colour: "#00c"
+      size: 0.01
+      softness: 0.7
+  - type: zoom
+    name: mid
+    bottomLeft: [1, 1]
+    scale: 1/3
+  - type: zoom
+    name: right
+    bottomLeft: [2, 1]
+    scale: 1/3
+    glow:
+      colour: "#00c"
+      size: 0.01
+      softness: 0.7
+  - type: zoom
+    name: bottom
+    bottomLeft: [1, 0]
+    scale: 1/3
+    glow:
+      colour: "#c00"
+      size: 0.01
+      softness: 0.7
+info:
+  title: Fern
+  author: Emlyn Corrin
+  date: 2026
+  description: Three scaled, rotated zooms aligned to the top of a stem.
+  links:
+    - https://en.wikipedia.org/wiki/Barnsley_fern
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 0.8
+  resolution:
+    height: 1200
+  coordinates:
+    x: [-0.8, 0.8]
+    y: [-1, 1]
+
+scene:
+  - type: rect
+    name: stem
+    bottomLeft: [-0.11, -1]
+    topRight: [-0.09, -0.7]
+    colour: "#4c4"
+  - type: zoom
+    name: top
+    scale: 0.86
+    align: [stem.bottomLeft, stem.topLeft]
+    rotation: 4deg
+  - type: zoom
+    name: left
+    scale: 0.32
+    align: [stem.bottom, stem.left]
+    rotation: -80deg
+  - type: zoom
+    name: right
+    scale: 0.32
+    align: [stem.bottom, stem.top]
+    rotation: 80deg
+info:
+  title: Pythagoras Tree
+  author: Emlyn Corrin
+  date: 2026
+  description: Two zooms aligned to a 3-4-5 triangle on top of a square, using variables.
+  links:
+    - https://en.wikipedia.org/wiki/Pythagoras_tree_(fractal)
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 4/3
+  resolution:
+    height: 1200
+  coordinates:
+    x: [0, 4]
+    y: [0, 3]
+
+variables:
+  - name: size
+    value: 0.6
+  - name: shift
+    value: 0.41
+  - name: shifty
+    value: 0.1
+  - name: left
+    value: 3/5
+  - name: right
+    value: 4/5
+  - name: cosa
+    value: (left^2 + 1 - right^2) / (2 * left)
+  - name: sina
+    value: sin(acos(cosa))
+
+scene:
+  - type: rect
+    name: base
+    opacity: 0.2
+    bottomLeft: [view.right*shift-size/2, view.top * shifty]
+    topRight: [view.right*shift+size/2, view.top * shifty + size]
+  - type: zoom
+    align:
+      - [base.bottomLeft, base.topLeft]
+      - [base.bottomRight, [view.right*shift-size/2 + left * cosa * size, view.top * shifty + size + left * sina * size]]
+  - type: zoom
+    align:
+      - [base.bottomRight, base.topRight]
+      - [base.bottomLeft, [view.right*shift-size/2 + left * cosa * size, view.top * shifty + size + left * sina * size]]
+info:
+  title: Pythagoras Tree (density)
+  author: Emlyn Corrin
+  date: 2026
+  description: The Pythagoras tree shaded by how many copies cover each pixel.
+  links:
+    - https://en.wikipedia.org/wiki/Pythagoras_tree_(fractal)
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+shading:
+  mode: density
+  scale: log
+  colours:  # hit count or % of busiest
+    0%: "#fef3c7"
+    33.333%: "#f59e0b"
+    66.667%: "#b91c1c"
+    100%: "#1e1b4b"
+
+view:
+  aspect: 4/3
+  resolution:
+    height: 1200
+  coordinates:
+    x: [0, 4]
+    y: [0, 3]
+
+variables:
+  - name: size
+    value: 0.6
+  - name: shift
+    value: 0.41
+  - name: shifty
+    value: 0.1
+  - name: left
+    value: 3/5
+  - name: right
+    value: 4/5
+  - name: cosa
+    value: (left^2 + 1 - right^2) / (2 * left)
+  - name: sina
+    value: sin(acos(cosa))
+
+scene:
+  - type: rect
+    name: base
+    bottomLeft: [view.right*shift-size/2, view.top * shifty]
+    topRight: [view.right*shift+size/2, view.top * shifty + size]
+  - type: zoom
+    align:
+      - [base.bottomLeft, base.topLeft]
+      - [base.bottomRight, [view.right*shift-size/2 + left * cosa * size, view.top * shifty + size + left * sina * size]]
+  - type: zoom
+    align:
+      - [base.bottomRight, base.topRight]
+      - [base.bottomLeft, [view.right*shift-size/2 + left * cosa * size, view.top * shifty + size + left * sina * size]]
+info:
+  title: Interactive Pythagoras Tree
+  author: Emlyn Corrin
+  date: 2026
+  description: Drag on the picture to move the top of the triangle, and use the sliders to resize and raise the square.
+  links:
+    - https://en.wikipedia.org/wiki/Pythagoras_tree_(fractal)
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  aspect: 4/3
+  resolution:
+    height: 1200
+  coordinates:
+    x: [0, 4]
+    y: [0, 3]
+
+variables:
+  - name: size
+    value: 0.6
+    input: { type: slider, min: 0.2, max: 1, label: Square size }
+  - name: pos
+    value: 0
+    input: { type: slider, min: 0, max: 0.5, label: Vertical position }
+  - name: apex
+    value: [1.55, 1.2]
+    input: { type: drag, label: Triangle top }
+  - name: left
+    value: (view.width - size) / 2
+  - name: bottom
+    value: (view.height - size) * pos
+
+scene:
+  - type: rect
+    name: base
+    opacity: 0.2
+    bottomLeft: [left, bottom]
+    topRight: [left + size, bottom + size]
+  - type: zoom
+    align:
+      - [base.bottomLeft, base.topLeft]
+      - [base.bottomRight, [apex.x, apex.y]]
+  - type: zoom
+    align:
+      - [base.bottomRight, base.topRight]
+      - [base.bottomLeft, [apex.x, apex.y]]
+info:       # title, author and other details for the label
+variables:  # named numbers to use in expressions
+frame:      # the border drawn around the picture
+view:       # picture size and coordinates
+seed:       # colour of the smallest copies
+shading:    # colour by paint (normal) or by density
+scene:      # the shapes and zooms, in drawing order
+info:
+  title: Vicsek Red Blue
+  author: Emlyn Corrin
+  date: 2026-09-26        # any text, such as "Spring 2026"
+  description: >
+    A Vicsek cross with red and blue
+    glows on alternate arms.
+  links:
+    - https://en.wikipedia.org/wiki/Vicsek_fractal
+    - title: PowerPoint Fractals
+      url: https://github.com/emlyn/PowerPointFractals
+view:
+  aspect: 4/3          # width divided by height
+  resolution:
+    height: 1200       # in pixels
+  coordinates:
+    x: [-4, 4]         # left edge, right edge
+    y: [-3, 3]         # bottom edge, top edge
+frame:
+  width: 12            # border thickness
+  radius: 6            # rounded corners
+  colour: "#444"        # border colour
+  wall: "#ddd"         # colour of the page around the frame
+  background: "#fff"   # colour behind the picture
+  padding: 12          # space between border and picture
+  margin: 24           # space between frame and window edge
+- type: rect
+  name: block
+  centre: [0, 0]
+  width: 2
+  height: 1
+  rotation: 30         # degrees, clockwise
+  colour: "#d97757"
+  opacity: 0.8         # 0 is invisible, 1 is solid
+rotation: 30              # degrees
+rotation: 30deg           # degrees
+rotation: pi/6 rad        # radians
+rotation: { radians: 0.5 }
+rotation: { degrees: 30 }
+centre: [1, 2]
+centre: { x: 1, y: 2 }
+centre: block.topRight    # a point of the item named block
+centre: view.centre       # a point of the whole view
+- type: zoom
+  centre: [0.5, 0.5]
+  scale: 0.5          # half the size of the view
+  rotation: 15
+- type: rect
+  name: stem
+  bottomLeft: [-0.11, -1]
+  topRight: [-0.09, -0.7]
+- type: zoom
+  scale: 0.86
+  rotation: -2
+  align: [stem.bottomLeft, stem.topLeft]
+align:
+  - [view.bottomLeft, stem.topLeft]
+  - [view.bottomRight, stem.topRight]
+seed: "#111827"
+
+seed:
+  colour: "#111827"
+  opacity: 0.9
+- type: rect
+  centre: [0, 0]
+  width: 1
+  colour: "#3b82f6"
+  glow:
+    colour: "#fde047"  # required
+    opacity: 0.6       # defaults to 1
+    size: 0.1          # how far it spreads, in coordinates; required
+    softness: 0.3      # 0 is a solid band, 1 (the default) fades over the whole size
+shading:
+  mode: density              # paint (default) or density
+  scale: log                 # log (default), sqrt or linear
+  colours: [white, orange, "#1e1b4b"]
+colours:
+  1: "#fef3c7"     # covered once
+  3: orange        # covered three times
+  60%: "#b91c1c"
+  100%: "#1e1b4b"
+aspect: 2/sqrt(3)
+width: 1/phi
+x: [-4/3, 4/3]
+rotation: 360/5
+centre: [0, "root(3, 2)"]   # quote it if it contains a comma inside [ ]
+variables:
+  - name: s
+    value: 1/sqrt(2)
+  - name: gap
+    value: s/10
+
+scene:
+  - type: zoom
+    centre: [0, gap]
+    scale: s
+variables:
+  - name: size
+    value: 0.6
+    input: { type: slider, min: 0.3, max: 0.9, label: Square size }
+  - name: apex
+    value: [1.55, 1.2]
+    input: drag
+
+scene:
+  - type: zoom
+    align:
+      - [base.bottomLeft, base.topLeft]
+      - [base.bottomRight, [apex.x, apex.y]]
+view:
+  aspect: 3/2
+  coordinates:
+    x: [-view.aspect, view.aspect]
+    y: [-1, 1]
+{"i":{"size":0.6,"apex":[1.55,1.2]},"q":"high","l":true}
+{"q":"fast","l":false}
+{"q":"custom","l":false,"r":["canvas2d",1,3,"auto"]}
+{"q":"custom","l":true,"r":["webgl",2,4,5]}

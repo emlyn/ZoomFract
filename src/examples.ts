@@ -10,18 +10,17 @@ import vicsekRedBlueText from './examples/vicsek-red-blue.yaml?raw';
 export type ExampleDefinition = {
   id: string;
   label: string;
-  description: string;
   text: string;
 };
 
-// Names and descriptions come from each definition's `info`, so they are
-// written in one place. Built-in examples must have a title.
+// Names come from each definition's `info` title, so they are written in one
+// place. Built-in examples must have a title.
 function example(id: string, text: string): ExampleDefinition {
-  const { title, description } = parseScene(text).info;
+  const { title } = parseScene(text).info;
   if (!title) {
     throw new Error(`Example "${id}" needs an info title`);
   }
-  return { id, label: title, description: description ?? '', text };
+  return { id, label: title, text };
 }
 
 export const EXAMPLES: ExampleDefinition[] = [
