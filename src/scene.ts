@@ -116,7 +116,11 @@ const DEFINITION: Shape = {
         coordinates: { keys: { x: AXIS, y: AXIS } },
       },
     },
-    variables: { items: { keys: leaves('name', 'value') } },
+    variables: {
+      items: {
+        keys: { ...leaves('name', 'value'), input: { keys: leaves('type', 'label', 'min', 'max', 'step') } },
+      },
+    },
     shading: { keys: { ...leaves('mode', 'scale'), colours: LEAF } },
     seed: { keys: leaves('colour', 'opacity') },
     scene: {
@@ -326,8 +330,19 @@ export type SceneInfo = {
   links: SceneLink[];
 };
 
+// Variables that can be changed while viewing. Sliders set a number; click and
+// drag inputs set a point from where the picture is pressed, available as
+// `name.x` and `name.y`. `initial` is the value from the definition.
+export type SceneInput =
+  | { type: 'slider'; name: string; label: string; min: number; max: number; step?: number; value: number; initial: number }
+  | { type: 'click' | 'drag'; name: string; label: string; value: Vec2; initial: Vec2 };
+
+export type InputValue = number | Vec2;
+export type InputValues = ReadonlyMap<string, InputValue>;
+
 export type SceneDefinition = {
   info: SceneInfo;
+  inputs: SceneInput[];
   shading: Shading;
   frame: FrameDefinition;
   seed: {
@@ -1216,7 +1231,46 @@ function lazy<T>(label: string, compute: () => T): () => T {
 
 // Variables are a list of { name, value }. Values may be numbers or
 // expressions referring to other variables or view values in any order.
-type VariableDefinition = { value: number | string; index: number };
+// Variables with an `input` can also be changed while viewing.
+type InputSpec =
+  | { type: 'slider'; label?: string; min: unknown; max: unknown; step: unknown }
+  | { type: 'click' | 'drag'; label?: string };
+type VariableDefinition = { value: unknown; index: number; input?: InputSpec };
+
+const isPointInput = (input: InputSpec | undefined): input is Extract<InputSpec, { type: 'click' | 'drag' }> =>
+  input?.type === 'click' || input?.type === 'drag';
+
+function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec | undefined {
+  if (node === undefined) {
+    return undefined;
+  }
+  const record = typeof node === 'string' ? { type: node } : isRecord(node) ? node : undefined;
+  if (!record) {
+    throw new PathError(`Variable "${name}" input must be slider, click, drag, or an object with a type`, path);
+  }
+  const { type, label, min, max, step } = record;
+  if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
+    throw new PathError(`Variable "${name}" input label must be text`, [...path, 'label']);
+  }
+  if (type === 'slider') {
+    const missing = min === undefined ? 'min' : max === undefined ? 'max' : undefined;
+    if (missing) {
+      throw new PathError(`Slider "${name}" needs a ${missing}`, path);
+    }
+    return { type, label, min, max, step };
+  }
+  if (type === 'click' || type === 'drag') {
+    const unused = Object.entries({ min, max, step }).find(([, value]) => value !== undefined);
+    if (unused) {
+      throw new PathError(`${type} inputs do not use ${unused[0]}`, [...path, unused[0]]);
+    }
+    return { type, label };
+  }
+  throw new PathError(
+    `Variable "${name}" input type must be slider, click, or drag`,
+    typeof node === 'string' ? path : [...path, 'type'],
+  );
+}
 
 function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition> {
   const definitions = new Map<string, VariableDefinition>();
@@ -1233,7 +1287,7 @@ function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`${label} must be an object with a name and a value`);
     }
-    const { name, value } = item as Record<string, unknown>;
+    const { name, value, input: inputNode } = item as Record<string, unknown>;
     if (typeof name !== 'string' || !isIdentifier(name)) {
       throw at('name', `${label} name must start with a letter or underscore and contain only letters, digits, and underscores`);
     }
@@ -1243,10 +1297,15 @@ function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition
     if (definitions.has(name)) {
       throw at('name', `Variable "${name}" is defined more than once`);
     }
-    if (typeof value !== 'number' && typeof value !== 'string') {
+    const input = parseInputSpec(inputNode, name, ['variables', index, 'input']);
+    if (isPointInput(input)) {
+      if (!Array.isArray(value) && !isRecord(value)) {
+        throw at('value', `Variable "${name}" value must be a point [x, y]`);
+      }
+    } else if (typeof value !== 'number' && typeof value !== 'string') {
       throw at('value', `Variable "${name}" value must be a number or an expression`);
     }
-    definitions.set(name, { value, index });
+    definitions.set(name, { value, index, input });
   }));
   return definitions;
 }
@@ -1295,6 +1354,62 @@ function variableCell(name: string, { value, index }: VariableDefinition, lookup
       );
     }
   });
+}
+
+type DefinedVariable = { cells: [string, () => number][]; input?: () => SceneInput };
+
+// The expression names a variable provides, using the value set while viewing
+// when there is one. Slider values stay within their range.
+function defineVariable(
+  name: string,
+  definition: VariableDefinition,
+  lookup: Variables,
+  override: InputValue | undefined,
+): DefinedVariable {
+  const { input, index } = definition;
+  const at = <T>(path: ScenePath, compute: () => T) => atPath(['variables', index, ...path], compute);
+  const label = input?.label?.trim() ?? name;
+
+  if (isPointInput(input)) {
+    const initial = lazy(`Variable "${name}"`, () => at(['value'], () => {
+      const point = parsePoint(definition.value, lookup);
+      if (!point) {
+        throw new Error(`Variable "${name}" value must be a point [x, y]`);
+      }
+      return point;
+    }));
+    const current = () => typeof override === 'object' ? override : initial();
+    return {
+      cells: [[`${name}.x`, () => current().x], [`${name}.y`, () => current().y]],
+      input: () => ({ type: input.type, name, label, value: current(), initial: initial() }),
+    };
+  }
+
+  const initial = variableCell(name, definition, lookup);
+  if (input?.type !== 'slider') {
+    return { cells: [[name, initial]] };
+  }
+  const range = lazy(`Slider "${name}"`, () => {
+    const min = at(['input', 'min'], () => asNumber(input.min, Number.NaN, lookup));
+    const max = at(['input', 'max'], () => asNumber(input.max, Number.NaN, lookup));
+    if (!(max > min)) {
+      throw new PathError(`Slider "${name}" max must be greater than its min`, ['variables', index, 'input', 'max']);
+    }
+    const step = input.step === undefined ? undefined : at(['input', 'step'], () => asPositiveNumber(input.step, lookup));
+    if (input.step !== undefined && step === undefined) {
+      throw new PathError(`Slider "${name}" step must be a positive number`, ['variables', index, 'input', 'step']);
+    }
+    const start = initial();
+    if (start < min || start > max) {
+      throw new PathError(`Variable "${name}" value must be between the slider's min and max`, ['variables', index, 'value']);
+    }
+    return { min, max, step };
+  });
+  const current = () => typeof override === 'number' ? clamp(override, range().min, range().max) : initial();
+  return {
+    cells: [[name, current]],
+    input: () => ({ type: 'slider', name, label, ...range(), value: current(), initial: initial() }),
+  };
 }
 
 const fallback = {
@@ -1385,9 +1500,10 @@ export type ParsedScene = {
 };
 
 // Parses a definition, reporting mistakes with their positions in the text.
-export function parseSceneWithDiagnostics(text: string): ParsedScene {
+// Input values replace the values of variables set while viewing.
+export function parseSceneWithDiagnostics(text: string, inputValues: InputValues = new Map()): ParsedScene {
   if (!text.trim()) {
-    return { scene: { ...fallback, shading: { mode: 'paint' } }, warnings: [] };
+    return { scene: { ...fallback, inputs: [], shading: { mode: 'paint' } }, warnings: [] };
   }
   const document = YAML.parseDocument(text, { prettyErrors: false });
   const lineOf = (offset: number) => text.slice(0, offset).split('\n').length;
@@ -1400,7 +1516,7 @@ export function parseSceneWithDiagnostics(text: string): ParsedScene {
     ]);
   }
   try {
-    return { scene: sceneFromValue(document.toJS()), warnings };
+    return { scene: sceneFromValue(document.toJS(), inputValues), warnings };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const [from, to] = error instanceof PathError ? rangeForPath(document, error.path) : headRange(document.contents) ?? [0, 0];
@@ -1408,11 +1524,11 @@ export function parseSceneWithDiagnostics(text: string): ParsedScene {
   }
 }
 
-export function parseScene(text: string): SceneDefinition {
-  return parseSceneWithDiagnostics(text).scene;
+export function parseScene(text: string, inputValues: InputValues = new Map()): SceneDefinition {
+  return parseSceneWithDiagnostics(text, inputValues).scene;
 }
 
-function sceneFromValue(value: unknown): SceneDefinition {
+function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefinition {
   const parsed = normaliseSpellings(value);
   if (!isRecord(parsed)) {
     throw new Error('Scene definition must be a YAML object');
@@ -1469,10 +1585,15 @@ function sceneFromValue(value: unknown): SceneDefinition {
     'view.pixel.height': () => (yRange().to - yRange().from) * growth().y / resolvedView().resolution.height,
   };
   Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
-  atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))
-    .forEach((definition, name) => cells.set(name, variableCell(name, definition, variables)));
+  const inputBuilders = [...atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))]
+    .flatMap(([name, definition]) => {
+      const defined = defineVariable(name, definition, variables, inputValues.get(name));
+      defined.cells.forEach(([cellName, cell]) => cells.set(cellName, cell));
+      return defined.input ? [defined.input] : [];
+    });
   // Evaluate everything so mistakes in unused variables are still reported.
   cells.forEach((cell) => cell());
+  const inputs = inputBuilders.map((build) => build());
 
   const frameNode = sceneRoot.frame && typeof sceneRoot.frame === 'object' && !Array.isArray(sceneRoot.frame)
     ? (sceneRoot.frame as Record<string, unknown>)
@@ -1528,6 +1649,7 @@ function sceneFromValue(value: unknown): SceneDefinition {
 
     return {
       info: atPath(['info'], () => parseInfo(sceneRoot.info)),
+      inputs,
       shading,
       frame,
       seed: {

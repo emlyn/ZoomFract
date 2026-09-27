@@ -1,6 +1,7 @@
 import { MAXIMUM_DENSITY_COLORS, type SceneDefinition, type Vec2 } from '../scene';
 import {
   EDIT_MODE_ZOOM_OPACITY,
+  GPU_LOST_MESSAGE,
   type FrameCallbacks,
   type RenderOutcome,
   type RenderResult,
@@ -55,6 +56,37 @@ const GLOW_BLUR_TEXELS = 8;
 const UNROLL_MINIMUM_ZOOM_PIXELS = 12;
 // Bounds geometry memory when many zooms stay large for several generations.
 const UNROLL_BUDGET = 150000;
+// Windows resets a GPU that spends about two seconds on one submission, and
+// Chrome turns the GPU off after a few resets. Scene draws are split into
+// batches that each fill at most this many working pixels, and the renderer
+// waits for the GPU after each one, so slow GPUs never queue seconds of work.
+const MAXIMUM_BATCH_PIXELS = 8_000_000;
+
+// Ranges of whole triangles, as [first vertex, vertex count], that each fill
+// at most the batch size. A triangle larger than that is drawn on its own.
+function fillBatches(vertices: Float32Array, width: number, height: number): [number, number][] {
+  const count = vertices.length / FLOATS_PER_VERTEX;
+  const batches: [number, number][] = [];
+  let first = 0;
+  let fill = 0;
+  for (let vertex = 0; vertex < count; vertex += 3) {
+    const [ax, ay, bx, by, cx, cy] = [0, 1, 2].flatMap((corner) => {
+      const offset = (vertex + corner) * FLOATS_PER_VERTEX;
+      return [vertices[offset], vertices[offset + 1]];
+    });
+    const area = Math.min(Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2, width * height);
+    if (fill > 0 && fill + area > MAXIMUM_BATCH_PIXELS) {
+      batches.push([first, vertex - first]);
+      first = vertex;
+      fill = 0;
+    }
+    fill += area;
+  }
+  if (count > first) {
+    batches.push([first, count - first]);
+  }
+  return batches;
+}
 
 const SCENE_VERTEX_SHADER = `#version 300 es
 in vec2 position;
@@ -357,22 +389,13 @@ function countPercentile(values: Float32Array, fraction: number): number {
   return counts.length === 0 ? 1 : Math.max(counts[Math.min(counts.length - 1, Math.floor(counts.length * fraction))], 1e-6);
 }
 
-export function isWebglAvailable(): boolean {
-  return new OffscreenCanvas(1, 1).getContext('webgl2') !== null;
-}
-
 export function renderWebgl(
   scene: SceneDefinition,
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,
 ): RenderResult {
-  const outputWidth = scene.view.resolution.width;
-  const outputHeight = scene.view.resolution.height;
-  const factor = settings.supersampling;
-  const width = outputWidth * factor;
-  const height = outputHeight * factor;
-  const output = new OffscreenCanvas(outputWidth, outputHeight);
+  const output = new OffscreenCanvas(scene.view.resolution.width, scene.view.resolution.height);
   const gl = output.getContext('webgl2', {
     alpha: true,
     antialias: false,
@@ -382,8 +405,39 @@ export function renderWebgl(
     preserveDrawingBuffer: true,
   });
   if (!gl) {
-    throw new Error('WebGL2 is not available');
+    throw new Error('WebGL2 is not available in workers');
   }
+  // Chrome keeps only a few contexts per page and drops the oldest, so a
+  // failed render releases its context straight away.
+  try {
+    return drawWebgl(gl, output, scene, settings, editMode, callbacks);
+  } catch (error) {
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    throw error;
+  }
+}
+
+function drawWebgl(
+  gl: WebGL2RenderingContext,
+  output: OffscreenCanvas,
+  scene: SceneDefinition,
+  settings: RenderSettings,
+  editMode: boolean,
+  callbacks: FrameCallbacks,
+): RenderResult {
+  const outputWidth = output.width;
+  const outputHeight = output.height;
+  const factor = settings.supersampling;
+  const width = outputWidth * factor;
+  const height = outputHeight * factor;
+  // A lost context turns later calls into no-ops, so it is checked each time
+  // the queue drains.
+  const waitForGpu = () => {
+    gl.finish();
+    if (gl.isContextLost()) {
+      throw new Error(GPU_LOST_MESSAGE);
+    }
+  };
 
   const maximumSize = Math.min(
     gl.getParameter(gl.MAX_TEXTURE_SIZE),
@@ -645,6 +699,7 @@ export function renderWebgl(
 
   // Continuations redraw the same items, so their vertices are built once.
   const vertexCache = new Map<UnrolledItem[], Map<string, Float32Array>>();
+  const batchCache = new WeakMap<Float32Array, [number, number][]>();
   const cachedVertices = (items: UnrolledItem[], sampleSource: boolean, mask: boolean) => {
     const byMode = vertexCache.get(items) ?? new Map<string, Float32Array>();
     vertexCache.set(items, byMode);
@@ -723,7 +778,12 @@ export function renderWebgl(
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
-    gl.drawArrays(gl.TRIANGLES, 0, vertices.length / FLOATS_PER_VERTEX);
+    const batches = batchCache.get(vertices) ?? fillBatches(vertices, width, height);
+    batchCache.set(vertices, batches);
+    for (const [first, count] of batches) {
+      gl.drawArrays(gl.TRIANGLES, first, count);
+      waitForGpu();
+    }
     if (!drawFramebuffer) {
       return;
     }
@@ -747,6 +807,7 @@ export function renderWebgl(
     const target = unusedTexture();
     drawLevel(target, lastFeedback, levelItems);
     generateMips(target);
+    waitForGpu();
     lastFeedback = target;
     completedFeedbackLevels += 1;
   };
@@ -764,6 +825,7 @@ export function renderWebgl(
       const target = lastMask === masks[0] ? masks[1] : masks[0];
       drawLevel(target, lastMask, levelItems, true);
       generateMips(target);
+      waitForGpu();
       lastMask = target;
     }
     glowFields.compute(lastMask);
@@ -821,7 +883,7 @@ export function renderWebgl(
     gl.bindVertexArray(emptyVertexArray);
     gl.bindTexture(gl.TEXTURE_2D, finalTexture.texture);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.finish();
+    waitForGpu();
     const error = gl.getError();
     if (error !== gl.NO_ERROR) {
       throw new Error(`WebGL error ${error}`);

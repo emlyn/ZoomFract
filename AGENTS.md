@@ -134,6 +134,13 @@ files unless extracting a module clearly reduces complexity.
   variables in any order. Expressions anywhere in the scene may use them.
   Unknown names, reference loops, and errors in unused variables are all
   reported.
+- A variable may have an `input`: `{ type: slider, min, max, step?, label? }`
+  sets a number (the definition's value must lie in range; values set while
+  viewing are clamped), and `click` or `drag` (string shorthand allowed) set a
+  point whose `value` is `[x, y]` and which expressions use as `name.x` and
+  `name.y`. `parseScene(text, inputValues)` replaces input values and returns
+  them in `scene.inputs`. Values are kept when the edited definition is
+  applied and reset when another definition loads.
 - Expressions may also use dotted view values: `view.left`, `view.right`
   (x), `view.bottom`, `view.top` (y), `view.width`, `view.height`,
   `view.centre.x`, `view.centre.y` (coordinate units), `view.aspect`,
@@ -223,6 +230,14 @@ files unless extracting a module clearly reduces complexity.
 - The framed canvas and wall label are centred together as one group,
   independent of the overlay panel width. The label sits beside the frame,
   bottom-aligned, or below it, right-aligned, when that gives a larger picture.
+  Input controls are a matching card, stacked above the label beside the
+  frame or to its left below it. Pressing the picture moves the nearest point
+  input; drag inputs follow the pointer until release.
+- While inputs change, previews render at Fast quality with 1x supersampling
+  and at most 0.5 megapixels, scaled up for display, without progress. A
+  running preview finishes before the newest starts instead of restarting
+  the worker. The selected quality renders once values settle (400 ms, or on
+  drag release). Download stays disabled while a preview is displayed.
 - Rendering runs in a Web Worker on `OffscreenCanvas`, so the UI thread only
   displays finished frames. Each render uses a fresh worker; starting a new
   render terminates the old one, which cancels obsolete work immediately.
@@ -234,6 +249,12 @@ files unless extracting a module clearly reduces complexity.
   except in Custom. Custom is initialised from the first mode it is opened
   from, then remembered.
   WebGL2 falls back to Canvas 2D only if it is unavailable or fails.
+- Windows resets a GPU that spends about two seconds on one submission, and
+  Chrome disables the GPU for every page after a few resets. WebGL scene
+  draws are split into batches of at most 8 million working pixels, and the
+  renderer calls `gl.finish()` after each batch and each feedback level. Once
+  a context is lost, the page stops requesting WebGL2 until it is reloaded,
+  and says why.
 - Levels count generations of zooms, with the seed at the last generation.
   Automatic levels are estimated as where the largest zoom falls below half a
   working pixel, i.e. the fixed point. Canvas 2D treats that as an upper bound

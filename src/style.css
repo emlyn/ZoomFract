@@ -79,6 +79,89 @@ textarea {
   align-items: flex-end;
 }
 
+.artwork-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.artwork.label-below .artwork-side {
+  flex-direction: row;
+}
+
+.artwork-side[hidden] {
+  display: none;
+}
+
+.input-panel {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.input-panel > * + * {
+  margin-top: 0;
+}
+
+.input-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  column-gap: 0.5rem;
+  row-gap: 0.2rem;
+}
+
+.input-name {
+  color: #18181b;
+  font-weight: 600;
+}
+
+.input-control output {
+  color: #52525b;
+  font-variant-numeric: tabular-nums;
+}
+
+.input-control input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+  accent-color: #52525b;
+}
+
+.input-hint {
+  grid-column: 1 / -1;
+  color: #71717a;
+}
+
+.input-error {
+  color: #b91c1c;
+}
+
+.input-error[hidden] {
+  display: none;
+}
+
+.input-reset {
+  justify-self: end;
+  padding: 0.2rem 0.7rem;
+  border: 1px solid #d4d4d8;
+  border-radius: 0.3rem;
+  background: #fff;
+  color: #3f3f46;
+  font: inherit;
+  cursor: pointer;
+}
+
+.input-reset:disabled {
+  color: #a1a1aa;
+  cursor: default;
+}
+
+canvas.point-input {
+  cursor: crosshair;
+  touch-action: none;
+}
+
 .wall-label {
   flex: none;
   width: 15rem;

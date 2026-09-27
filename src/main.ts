@@ -7,6 +7,7 @@ import {
   findExample,
 } from './examples';
 import {
+  GPU_LOST_MESSAGE,
   MAXIMUM_LEVELS,
   MAXIMUM_RECURSION_CHOICE,
   QUALITY_LABELS,
@@ -27,7 +28,10 @@ import {
 import {
   clamp,
   parseScene,
+  type InputValue,
   type SceneDefinition,
+  type SceneInput,
+  type Vec2,
   type ZoomElement,
 } from './scene';
 
@@ -196,14 +200,22 @@ const canvas = document.createElement('canvas');
 const displayContext = canvas.getContext('2d')!;
 
 // A gallery-style label beside the framed picture, centred with it as a group.
+// Controls for the definition's inputs sit on a matching card next to it.
 const wallLabel = document.createElement('aside');
 wallLabel.className = 'wall-label';
+const inputPanel = document.createElement('aside');
+inputPanel.className = 'wall-label input-panel';
+inputPanel.setAttribute('aria-label', 'Inputs');
+const artworkSide = document.createElement('div');
+artworkSide.className = 'artwork-side';
+artworkSide.style.gap = `${WALL_LABEL_GAP_PX}px`;
 const artwork = document.createElement('div');
 artwork.className = 'artwork';
 artwork.style.gap = `${WALL_LABEL_GAP_PX}px`;
 
 canvasFrame.append(canvas);
-artwork.append(canvasFrame, wallLabel);
+artworkSide.append(inputPanel, wallLabel);
+artwork.append(canvasFrame, artworkSide);
 canvasHost.append(artwork);
 
 let panelIsOpen = true;
@@ -522,7 +534,7 @@ sceneStatus.setAttribute('role', 'status');
 
 applySceneButton.addEventListener('click', () => {
   definitionLoadRevision += 1;
-  applyDefinition(sceneEditor.text(), { kind: 'custom' }, true);
+  applyDefinition(sceneEditor.text(), { kind: 'custom' }, true, true);
 });
 
 const downloadButton = document.createElement('button');
@@ -623,6 +635,9 @@ const state = {
   offsetX: 0,
   offsetY: -10,
   scene: baseScene,
+  definitionText: DEFAULT_SCENE_TEXT,
+  // Values set with the input controls, replacing those in the definition.
+  inputValues: new Map<string, InputValue>() as ReadonlyMap<string, InputValue>,
   rendered: null as { renderer: RendererName; levels: number } | null,
   definitionLocation: { kind: 'example', id: DEFAULT_EXAMPLE.id } as DefinitionLocation,
 };
@@ -634,16 +649,24 @@ function showSceneStatus(message: string, isError = false) {
   sceneStatus.classList.toggle('error', isError);
 }
 
+// Input values are kept when the edited definition is applied, as long as it
+// still has a matching input, but reset when another definition is loaded.
 function applyDefinition(
   text: string,
   location: DefinitionLocation,
   updateUrl: boolean,
+  keepInputs = false,
 ): boolean {
   try {
-    const nextScene = parseScene(text);
+    const nextScene = parseScene(text, keepInputs ? state.inputValues : new Map());
     // Info only changes the label, so the current picture can stay.
     const pictureChanged = JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
     state.scene = nextScene;
+    state.definitionText = text;
+    state.inputValues = new Map(nextScene.inputs.flatMap((input) => {
+      const value = keepInputs ? state.inputValues.get(input.name) : undefined;
+      return value !== undefined && typeof value === typeof input.value ? [[input.name, value]] : [];
+    }));
     state.definitionLocation = location;
     sceneEditor.setText(text.trim());
 
@@ -663,6 +686,7 @@ function applyDefinition(
     if (updateUrl) {
       updateDefinitionUrl(location);
     }
+    buildInputPanel();
     updateWallLabel();
     if (pictureChanged) {
       render();
@@ -781,8 +805,140 @@ function updateWallLabel() {
   resizeCanvas();
 }
 
-// The picture takes the largest size that leaves room for the label, which
-// goes beside it or, when that leaves a bigger picture, underneath.
+const formatInputNumber = (value: number) => String(Number(value.toPrecision(4)));
+
+const describeInputValue = (input: SceneInput) => input.type === 'slider'
+  ? formatInputNumber(input.value)
+  : `(${formatInputNumber(input.value.x)}, ${formatInputNumber(input.value.y)})`;
+
+type PointInput = Extract<SceneInput, { type: 'click' | 'drag' }>;
+const isPointInput = (input: SceneInput): input is PointInput => input.type !== 'slider';
+
+const inputReadouts = new Map<string, HTMLOutputElement>();
+const inputSliders = new Map<string, HTMLInputElement>();
+const inputError = labelElement('p', 'input-error', '');
+const inputReset = document.createElement('button');
+inputReset.type = 'button';
+inputReset.className = 'input-reset';
+inputReset.textContent = 'Reset';
+inputReset.addEventListener('click', () => {
+  updateInputs(new Map(), true);
+});
+
+function buildInputPanel() {
+  const { inputs } = state.scene;
+  inputReadouts.clear();
+  inputSliders.clear();
+  const rows = inputs.map((input) => {
+    const row = document.createElement('label');
+    row.className = 'input-control';
+    const readout = document.createElement('output');
+    inputReadouts.set(input.name, readout);
+    row.append(labelElement('span', 'input-name', input.label), readout);
+    if (input.type === 'slider') {
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = String(input.min);
+      slider.max = String(input.max);
+      slider.step = input.step === undefined ? 'any' : String(input.step);
+      slider.addEventListener('input', () => setInputValue(input.name, Number(slider.value), true));
+      inputSliders.set(input.name, slider);
+      row.append(slider);
+    } else {
+      row.append(labelElement('span', 'input-hint', input.type === 'drag' ? 'Drag on the picture' : 'Click the picture'));
+    }
+    return row;
+  });
+  inputPanel.replaceChildren(...rows, inputError, inputReset);
+  inputPanel.hidden = inputs.length === 0;
+  canvas.classList.toggle('point-input', inputs.some(isPointInput));
+  inputError.hidden = true;
+  refreshInputPanel();
+}
+
+function refreshInputPanel() {
+  state.scene.inputs.forEach((input) => {
+    inputReadouts.get(input.name)!.textContent = describeInputValue(input);
+    const slider = inputSliders.get(input.name);
+    if (slider && input.type === 'slider' && Number(slider.value) !== input.value) {
+      slider.value = String(input.value);
+    }
+  });
+  inputReset.disabled = state.inputValues.size === 0;
+}
+
+// Keeps the last good picture when a value makes the definition invalid.
+function updateInputs(inputValues: ReadonlyMap<string, InputValue>, settle: boolean) {
+  state.inputValues = inputValues;
+  try {
+    state.scene = parseScene(state.definitionText, inputValues);
+    inputError.hidden = true;
+  } catch (error) {
+    inputError.textContent = error instanceof Error ? error.message : 'Invalid input value';
+    inputError.hidden = false;
+    refreshInputPanel();
+    return;
+  }
+  refreshInputPanel();
+  renderPreview(settle);
+}
+
+function setInputValue(name: string, value: InputValue, settle: boolean) {
+  updateInputs(new Map(state.inputValues).set(name, value), settle);
+}
+
+// Canvas pixels and scene coordinates of a pointer over the picture.
+function pointerPosition(event: PointerEvent): { pixel: Vec2; scene: Vec2 } {
+  const rect = canvas.getBoundingClientRect();
+  const fx = (event.clientX - rect.left) / rect.width;
+  const fy = (event.clientY - rect.top) / rect.height;
+  const { x, y } = state.scene.view.coordinates;
+  return {
+    pixel: { x: fx * canvas.width, y: fy * canvas.height },
+    scene: { x: x.from + fx * (x.to - x.from), y: y.from + (1 - fy) * (y.to - y.from) },
+  };
+}
+
+// Pressing the picture moves the nearest point input there; drag inputs
+// then follow the pointer until it is released.
+let draggingInput: string | null = null;
+
+canvas.addEventListener('pointerdown', (event) => {
+  const pointInputs = state.scene.inputs.filter(isPointInput);
+  if (pointInputs.length === 0 || event.button !== 0) {
+    return;
+  }
+  event.preventDefault();
+  const { pixel, scene } = pointerPosition(event);
+  const distance = (input: PointInput) => {
+    const at = scenePointToCanvas(input.value, state.scene);
+    return Math.hypot(at.x - pixel.x, at.y - pixel.y);
+  };
+  const nearest = pointInputs.reduce((best, input) => distance(input) < distance(best) ? input : best);
+  if (nearest.type === 'drag') {
+    draggingInput = nearest.name;
+    canvas.setPointerCapture(event.pointerId);
+  }
+  setInputValue(nearest.name, scene, nearest.type === 'click');
+});
+
+canvas.addEventListener('pointermove', (event) => {
+  if (draggingInput) {
+    setInputValue(draggingInput, pointerPosition(event).scene, false);
+  }
+});
+
+const endDrag = () => {
+  if (draggingInput) {
+    draggingInput = null;
+    scheduleSettledRender();
+  }
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
+// The picture takes the largest size that leaves room for the label and
+// inputs, which go beside it or, when that leaves a bigger picture, underneath.
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
   const frame = state.scene.frame;
@@ -792,10 +948,13 @@ function resizeCanvas() {
   const availableHeight = Math.max(1, host.height - 2 * frame.margin - frameSpace);
   const scaleWithin = (width: number, height: number) =>
     Math.max(0, Math.min(width / resolution.width, height / resolution.height));
-  const labelWidth = wallLabel.hidden ? 0 : wallLabel.offsetWidth + WALL_LABEL_GAP_PX;
-  const labelHeight = wallLabel.hidden ? 0 : wallLabel.offsetHeight + WALL_LABEL_GAP_PX;
-  const besideScale = scaleWithin(availableWidth - labelWidth, availableHeight);
-  const belowScale = scaleWithin(availableWidth, availableHeight - labelHeight);
+  // Cards stack beside the picture and sit side by side underneath it.
+  const cards = [inputPanel, wallLabel].filter((card) => !card.hidden);
+  artworkSide.hidden = cards.length === 0;
+  const sideWidth = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetWidth)) + WALL_LABEL_GAP_PX;
+  const sideHeight = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetHeight)) + WALL_LABEL_GAP_PX;
+  const besideScale = scaleWithin(availableWidth - sideWidth, availableHeight);
+  const belowScale = scaleWithin(availableWidth, availableHeight - sideHeight);
   const labelBelow = belowScale > besideScale;
   const displayScale = Math.max(Number.EPSILON, labelBelow ? belowScale : besideScale);
   artwork.classList.toggle('label-below', labelBelow);
@@ -896,6 +1055,8 @@ type DisplayedFrame = {
   bitmap: ImageBitmap;
   scene: SceneDefinition;
   editMode: boolean;
+  // Previews are reduced, so they are never downloaded.
+  preview: boolean;
 };
 
 let displayedFrame: DisplayedFrame | null = null;
@@ -966,13 +1127,67 @@ const formatChange = ({ fraction, levels }: StepChange) => {
 let renderWorker: Worker | null = null;
 let activeRequest: RenderRequest | null = null;
 let pendingRequest: RenderRequest | null = null;
+// Set once a render loses the GPU; later renders avoid WebGL2 until reload.
+let webglDisabled: string | undefined;
+const noteGpuLost = (reason: string | undefined) => {
+  if (reason === GPU_LOST_MESSAGE) {
+    webglDisabled = reason;
+  }
+};
 let progressTimer = 0;
+
+// While inputs change, pictures are previewed at Fast quality. A preview in
+// progress finishes before the newest one starts, so the picture keeps up
+// without restarting the renderer. Once the values settle, the selected
+// quality is rendered.
+const SETTLE_DELAY_MS = 400;
+const PREVIEW_OPTIONS: RenderOptions = { ...QUALITY_MODES.fast, supersampling: 1 };
+// Previews render at a reduced resolution, scaled up for display. Each
+// preview request maps to the full scene, which edit-mode outlines use.
+const PREVIEW_MAX_PIXELS = 500_000;
+const previewRequests = new WeakMap<RenderRequest, SceneDefinition>();
+let settleTimer = 0;
+
+function previewScene(scene: SceneDefinition): SceneDefinition {
+  const { width, height } = scene.view.resolution;
+  const scale = Math.min(1, Math.sqrt(PREVIEW_MAX_PIXELS / (width * height)));
+  const resolution = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  return { ...scene, view: { ...scene.view, resolution } };
+}
+
+function scheduleSettledRender() {
+  window.clearTimeout(settleTimer);
+  settleTimer = window.setTimeout(render, SETTLE_DELAY_MS);
+}
+
+function renderPreview(settle: boolean) {
+  window.clearTimeout(settleTimer);
+  const request: RenderRequest = {
+    scene: previewScene(state.scene),
+    options: PREVIEW_OPTIONS,
+    editMode: state.editMode,
+    webglDisabled,
+  };
+  previewRequests.set(request, state.scene);
+  if (activeRequest && previewRequests.has(activeRequest)) {
+    pendingRequest = request;
+  } else {
+    pendingRequest = null;
+    if (activeRequest) {
+      stopActiveRender(true);
+    }
+    startRender(request);
+  }
+  if (settle) {
+    scheduleSettledRender();
+  }
+}
 
 function stopActiveRender(terminate: boolean) {
   window.clearTimeout(progressTimer);
   setRenderProgress(null);
   activeRequest = null;
-  downloadButton.disabled = displayedFrame === null;
+  downloadButton.disabled = displayedFrame === null || displayedFrame.preview;
   if (terminate) {
     renderWorker?.terminate();
     renderWorker = null;
@@ -980,10 +1195,12 @@ function stopActiveRender(terminate: boolean) {
 }
 
 function render() {
+  window.clearTimeout(settleTimer);
   const request: RenderRequest = {
     scene: state.scene,
     options: renderOptions(),
     editMode: state.editMode,
+    webglDisabled,
   };
   if (activeRequest && canContinue(activeRequest, request)) {
     pendingRequest = request;
@@ -1008,12 +1225,15 @@ function startRender(request: RenderRequest) {
     qualityDetails.textContent = ['Rendering...', ...details].join(' · ');
   };
   // Fast renders swap straight to the final details, so the text does not
-  // briefly shrink and shift the controls below it.
-  progressTimer = window.setTimeout(() => {
-    progressVisible = true;
-    setRenderProgress(latestProgress);
-    showInProgress();
-  }, PROGRESS_DELAY_MS);
+  // briefly shrink and shift the controls below it. Previews never show
+  // progress, which would flicker while inputs change.
+  if (!previewRequests.has(request)) {
+    progressTimer = window.setTimeout(() => {
+      progressVisible = true;
+      setRenderProgress(latestProgress);
+      showInProgress();
+    }, PROGRESS_DELAY_MS);
+  }
   setRenderProgress(null);
 
   const finish = (failed: boolean) => {
@@ -1033,6 +1253,7 @@ function startRender(request: RenderRequest) {
     switch (message.type) {
       case 'start':
         started = message;
+        noteGpuLost(message.fallbackReason);
         details = describeRender(message.settings, message.fallbackReason);
         setSettingsTitle(describeSettings(message.renderer, message.settings));
         if (progressVisible) {
@@ -1047,7 +1268,12 @@ function startRender(request: RenderRequest) {
         break;
       case 'frame':
         displayedFrame?.bitmap.close();
-        displayedFrame = { bitmap: message.bitmap, scene: request.scene, editMode: request.editMode };
+        displayedFrame = {
+          bitmap: message.bitmap,
+          scene: previewRequests.get(request) ?? request.scene,
+          editMode: request.editMode,
+          preview: previewRequests.has(request),
+        };
         drawDisplay();
         break;
       case 'done': {
@@ -1079,6 +1305,7 @@ function startRender(request: RenderRequest) {
         break;
       }
       case 'error':
+        noteGpuLost(message.message);
         qualityDetails.textContent = `Render failed: ${message.message}`;
         finish(true);
         break;
@@ -1104,6 +1331,7 @@ window.addEventListener('popstate', () => {
 });
 
 resizeCanvas();
+buildInputPanel();
 updateWallLabel();
 render();
 void loadDefinitionFromAddressBar();

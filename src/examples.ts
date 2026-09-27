@@ -1,6 +1,7 @@
 import { parseScene } from './scene';
 import fernText from './examples/fern.yaml?raw';
 import pythagorasTreeDensityText from './examples/pythagoras-tree-density.yaml?raw';
+import pythagorasTreeInteractiveText from './examples/pythagoras-tree-interactive.yaml?raw';
 import pythagorasTreeText from './examples/pythagoras-tree.yaml?raw';
 import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
 import sierpinskiText from './examples/sierpinski.yaml?raw';
@@ -30,6 +31,7 @@ export const EXAMPLES: ExampleDefinition[] = [
   example('fern', fernText),
   example('pythagoras-tree', pythagorasTreeText),
   example('pythagoras-tree-density', pythagorasTreeDensityText),
+  example('pythagoras-tree-interactive', pythagorasTreeInteractiveText),
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0];

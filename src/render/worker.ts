@@ -11,7 +11,7 @@ import {
   type RenderSettings,
   type StepChange,
 } from './common';
-import { isWebglAvailable, renderWebgl } from './webgl';
+import { renderWebgl } from './webgl';
 
 const post = (message: RenderMessage, transfer: Transferable[] = []) => {
   self.postMessage(message, { transfer });
@@ -120,26 +120,25 @@ function render(request: RenderRequest) {
   const { width, height } = request.scene.view.resolution;
   const density = request.scene.shading.mode === 'density';
   const glow = request.scene.elements.some((element) => element.glow);
-  if (density && request.options.renderer !== 'webgl') {
-    post({ type: 'error', message: 'Density shading needs the WebGL2 renderer' });
+  const webgl = request.options.renderer === 'webgl' && !request.webglDisabled;
+  const disabled = request.webglDisabled ? `. ${request.webglDisabled}` : '';
+  if (density && !webgl) {
+    post({ type: 'error', message: `Density shading needs the WebGL2 renderer${disabled}` });
     return;
   }
-  if (glow && request.options.renderer !== 'webgl') {
-    post({ type: 'error', message: 'Glows need the WebGL2 renderer' });
+  if (glow && !webgl) {
+    post({ type: 'error', message: `Glows need the WebGL2 renderer${disabled}` });
     return;
   }
   const candidates: RendererName[] = density || glow
     ? ['webgl']
-    : request.options.renderer === 'webgl'
+    : webgl
       ? ['webgl', 'canvas2d']
       : ['canvas2d'];
-  let fallbackReason: string | undefined;
+  let fallbackReason = request.options.renderer === 'webgl' ? request.webglDisabled : undefined;
 
   for (const renderer of candidates) {
     try {
-      if (renderer === 'webgl' && !isWebglAvailable()) {
-        throw new Error('WebGL2 is not available in workers');
-      }
       const settings = resolveRenderSettings(request.scene, request.options, renderer);
       post({ type: 'start', renderer, settings, fallbackReason });
       const draw = renderer === 'webgl' ? renderWebgl : renderCanvas2d;

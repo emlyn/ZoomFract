@@ -32,7 +32,13 @@ export type RenderRequest = {
   scene: SceneDefinition;
   options: RenderOptions;
   editMode: boolean;
+  // Why WebGL2 must not be used, once the GPU has stopped responding.
+  webglDisabled?: string;
 };
+
+// Retrying WebGL2 after a GPU reset tends to reset it again, and Chrome turns
+// the GPU off for every page after a few resets.
+export const GPU_LOST_MESSAGE = 'The GPU stopped responding, so WebGL2 is off until the page is reloaded';
 
 // Fraction of pixels that changed between two images, and how many levels
 // apart they were.
