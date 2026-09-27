@@ -1,13 +1,16 @@
+import { powerPointFile, powerPointLimits } from './pptx';
+import type { SceneDefinition } from './scene';
+
 type QrCodeFactory = typeof import('qrcode-generator');
 
 // The Share dialog: the picture as an image file, a link to the definition,
-// and a QR code for the link.
+// a QR code for the link, the definition itself, and a PowerPoint file.
 
 export type LinkOptions = { inputs: boolean; settings: boolean };
 
 type ShareDialogOptions = {
   canvas: HTMLCanvasElement;
-  background: () => string;
+  scene: () => SceneDefinition;
   fileName: () => string;
   hasInputs: () => boolean;
   hasUnappliedEdits: () => boolean;
@@ -40,6 +43,8 @@ const QR_HALO_RADIUS = 1;
 // the thicken distance.
 const QR_PICTURE_CLOSING = 0.08;
 const QR_PICTURE_THICKEN = 0.003;
+// The longest side of the picture a PowerPoint file carries for its zooms.
+const POWERPOINT_PICTURE_MAX_SIDE = 1920;
 
 type Bounds = { x: number; y: number; width: number; height: number };
 
@@ -300,11 +305,20 @@ export function createShareDialog(options: ShareDialogOptions) {
   const definitionPanel = element('div', 'share-panel');
   definitionPanel.append(definitionText, definitionButtons, definitionFile);
 
+  // PowerPoint tab.
+  const powerPointAbout = element('p', 'share-note',
+    'Download this image as a PowerPoint file, using Slide Zooms for the recursion.');
+  const powerPointLimitList = element('ul', 'share-limits');
+  const downloadPowerPoint = button('apply-scene', 'Download');
+  const powerPointPanel = element('div', 'share-panel');
+  powerPointPanel.append(powerPointAbout, powerPointLimitList, downloadPowerPoint);
+
   const tabs = [
     { name: 'Image', panel: imagePanel },
     { name: 'Link', panel: linkPanel },
     { name: 'QR code', panel: qrPanel },
     { name: 'Definition', panel: definitionPanel },
+    { name: 'PowerPoint', panel: powerPointPanel },
   ].map(({ name, panel }) => {
     const tab = button('share-tab', name);
     tab.setAttribute('role', 'tab');
@@ -327,7 +341,7 @@ export function createShareDialog(options: ShareDialogOptions) {
     target.height = height;
     const context = context2d(target);
     if (withBackground) {
-      context.fillStyle = options.background();
+      context.fillStyle = options.scene().frame.background;
       context.fillRect(0, 0, width, height);
     }
     context.imageSmoothingQuality = 'high';
@@ -520,13 +534,15 @@ export function createShareDialog(options: ShareDialogOptions) {
     showTab(index);
     showStatus('');
     const { panel } = tabs[index];
-    if (panel === linkPanel || panel === definitionPanel) {
+    if (panel === linkPanel || panel === definitionPanel || panel === powerPointPanel) {
       dialog.classList.remove('wide');
     }
     if (panel === imagePanel) {
       refreshImage();
     } else if (panel === definitionPanel) {
       refreshDefinition();
+    } else if (panel === powerPointPanel) {
+      refreshPowerPoint();
     } else {
       panel.insertBefore(linkOptions, panel === linkPanel ? copyLink : qrPicture.row);
       void refreshLink();
@@ -610,6 +626,40 @@ export function createShareDialog(options: ShareDialogOptions) {
     }
   };
 
+  function refreshPowerPoint() {
+    const limits = powerPointLimits(options.scene());
+    powerPointLimitList.replaceChildren(...limits.map(({ text, color }) => {
+      const item = element('li', '');
+      const [before, ...after] = color ? text.split(color) : [text];
+      item.append(before);
+      if (color && after.length > 0) {
+        const swatch = element('span', 'share-swatch');
+        swatch.style.background = color;
+        item.append(swatch, color, after.join(color));
+      }
+      return item;
+    }));
+    powerPointLimitList.hidden = limits.length === 0;
+    downloadPowerPoint.disabled = !imageReady;
+    showStatus(imageReady ? '' : 'Available when rendering finishes');
+  }
+
+  // The zooms show this picture until PowerPoint redraws them.
+  async function powerPointBlob() {
+    const fit = Math.min(1, POWERPOINT_PICTURE_MAX_SIDE / Math.max(canvas.width, canvas.height));
+    const { width, height } = imageSize(fit);
+    const picture = await pngBlob(drawImage(document.createElement('canvas'), width, height, false));
+    return powerPointFile(options.scene(), new Uint8Array(await picture.arrayBuffer()));
+  }
+
+  downloadPowerPoint.addEventListener('click', () => void (async () => {
+    try {
+      downloadBlob(await powerPointBlob(), `zoomfract-${options.fileName()}.pptx`);
+    } catch (error) {
+      showStatus(errorMessage(error, 'Could not make the PowerPoint file'), true);
+    }
+  })());
+
   copyImage.addEventListener('click', () => void copyPng(imageBlob(), 'Image copied'));
   downloadImage.addEventListener('click', () => void savePng(imageBlob, `zoomfract-${options.fileName()}.png`));
   copyQr.addEventListener('click', () => void copyPng(qrBlob(), 'QR code copied'));
@@ -662,6 +712,8 @@ export function createShareDialog(options: ShareDialogOptions) {
       }
       if (currentTab() === imagePanel) {
         refreshImage();
+      } else if (currentTab() === powerPointPanel) {
+        refreshPowerPoint();
       } else if (currentTab() === qrPanel && qrPicture.input.checked) {
         void refreshLink();
       }

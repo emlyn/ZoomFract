@@ -632,7 +632,7 @@ function loadDefinitionFile(text: string): boolean {
 
 const shareDialog = createShareDialog({
   canvas,
-  background: () => state.scene.frame.background,
+  scene: () => state.scene,
   fileName: () => state.definitionLocation.kind === 'example' ? state.definitionLocation.id : 'custom',
   hasInputs: () => state.scene.inputs.length > 0,
   hasUnappliedEdits: () => sceneEditor.text().trim() !== state.definitionText.trim(),

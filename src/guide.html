@@ -501,7 +501,7 @@ scene:
 
 <section id="guide-sharing">
   <h3>Sharing</h3>
-  <p><em>Share</em> opens a window with three tabs:</p>
+  <p><em>Share</em> opens a window with five tabs:</p>
   <ul>
     <li>
       <strong>Image</strong> copies or downloads the picture as a PNG, at full size or
@@ -523,6 +523,15 @@ scene:
     <li>
       <strong>Definition</strong> downloads the applied definition as a YAML file, or opens
       one you saved earlier. You can also drop a YAML file anywhere on the window to load it.
+    </li>
+    <li>
+      <strong>PowerPoint</strong> downloads a one-slide presentation of the top level of the
+      scene. Rectangles become PowerPoint rectangles, and each zoom becomes a Slide Zoom of
+      the slide itself, so PowerPoint draws the repeats. Density shading, zoom opacity and
+      glow softness are not carried over, and the tab lists any the scene uses. When only the
+      seed draws anything, PowerPoint can fade the picture away as it updates the zooms;
+      covering the slide with a rectangle in the seed colour and deleting it brings it back.
+      This waits until rendering has finished, because the zooms start out showing the picture.
     </li>
   </ul>
   <p>

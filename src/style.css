@@ -898,6 +898,30 @@ code {
   overflow-x: auto;
 }
 
+.share-note {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.share-limits {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.5rem 1.75rem;
+  border-radius: 6px;
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  line-height: 1.45;
+}
+
+.share-swatch {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  margin-right: 0.3em;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 2px;
+  vertical-align: -0.05em;
+}
+
 .app-shell.dropping::after {
   position: absolute;
   z-index: 40;

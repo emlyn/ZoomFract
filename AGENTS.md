@@ -42,8 +42,10 @@ Do not commit generated or local artifacts:
   resolution.
 - `src/editor.ts`: CodeMirror definition editor with inline diagnostics.
 - `src/share.ts`: shared-link encoding, loaded on demand with its dictionary.
-- `src/share-dialog.ts`: the Share dialog for images, links, QR codes and
-  definition files.
+- `src/share-dialog.ts`: the Share dialog for images, links, QR codes,
+  definition files and PowerPoint files.
+- `src/pptx.ts`: PowerPoint export, a hand-written OOXML package in an
+  uncompressed zip with no dependencies.
 - `src/expression.ts`: arithmetic expression parser and evaluator.
 - `src/guide.html`: user guide for the definition language, shown from the
   panel. Keep it in simple English and update it whenever the scene language
@@ -362,9 +364,9 @@ files unless extracting a module clearly reduces complexity.
 - Share opens a modal dialog (`src/share-dialog.ts`) with Image (preview,
   size, transparency, copy and download), Link (optional input values and app
   settings, copy), QR code (the same link options plus a centred preview,
-  on by default, copy and download) and Definition (download the applied
-  definition as YAML, or open a saved one) tabs. A YAML file dropped anywhere on
-  the window loads the same way. Image actions stay disabled until the latest full
+  on by default, copy and download), Definition (download the applied
+  definition as YAML, or open a saved one) and PowerPoint (download) tabs. A YAML file dropped anywhere on
+  the window loads the same way. Image and PowerPoint actions stay disabled until the latest full
   render has finished. Ctrl+C copies whatever the open tab shows, unless text is
   selected, in which case the browser's own copy is left alone. Clicking either
   preview enlarges it and widens the dialog; clicking again goes back.
@@ -378,6 +380,23 @@ files unless extracting a module clearly reduces complexity.
   narrow gaps filled in (a morphological closing using distance transforms),
   with a thin fading halo, and is drawn with slightly offset copies beneath it
   to thicken very thin lines.
+- The PowerPoint export is one slide of the top level only. Rects become
+  `p:sp` rectangles; each zoom is an `mc:AlternateContent` holding a
+  self-referencing Slide Zoom (`pslz:sldZmObj` whose `sldId` is the slide's own
+  ID and whose `cId` equals the slide's `p14:creationId`, with `showBg="0"` so
+  copies stay transparent) and a fallback picture. Both use the rendered canvas
+  (at most 1920 px) as the zoom's cached image; PowerPoint redraws the
+  recursion itself. Frames are placed by mapping each element's rotated edges
+  onto the slide and decomposing into `rot` (60000ths of a degree, clockwise)
+  plus `flipV`, which PowerPoint applies before rotating. Scene units that are
+  not square on the slide would slant rotated frames, so that is an error.
+  Glows go in the zoom's `p166:spPr` effect list and on the fallback picture;
+  PowerPoint draws them around the shapes the zoom shows. The seed needs no
+  export because the zooms bottom out in the cached picture.
+  `powerPointLimits` lists what cannot be carried over (density shading, zoom
+  opacity and glow softness), and warns when nothing but the seed draws: with no
+  visible rect or glow, PowerPoint's repeated cache updates can fade the picture out. Colours are normalised by drawing them to a 1x1
+  canvas.
 - Keep the YAML editor monospace and tall enough to show useful context.
 - Editor wrapping is on by default with a "Wrap lines" toggle. Long unbroken
   runs such as URLs may break at any character; prose wraps between words.
