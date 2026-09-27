@@ -842,6 +842,11 @@ code {
   max-width: 100%;
   border-radius: 0.4rem;
   background: rgba(24, 24, 27, 0.6);
+  cursor: zoom-in;
+}
+
+.share-preview.zoomed {
+  cursor: zoom-out;
 }
 
 .share-preview.transparent {
@@ -878,7 +883,28 @@ code {
 }
 
 .share-qr {
-  width: 15rem;
-  height: 15rem;
+  height: auto;
   background: #fff;
+}
+
+.share-dialog.wide {
+  width: min(44rem, calc(100vw - 2rem));
+}
+
+.share-definition-text {
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  overflow-x: auto;
+}
+
+.app-shell.dropping::after {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  border: 2px dashed rgba(244, 244, 245, 0.55);
+  border-radius: 0.6rem;
+  background: rgba(24, 24, 27, 0.35);
+  content: '';
+  pointer-events: none;
 }

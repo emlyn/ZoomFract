@@ -623,6 +623,13 @@ async function shareLink({ inputs, settings }: LinkOptions): Promise<string> {
   return url.href;
 }
 
+// A definition dropped on the window or opened from the Share dialog
+// replaces the current one, as if it had been typed in and applied.
+function loadDefinitionFile(text: string): boolean {
+  definitionLoadRevision += 1;
+  return applyDefinition(text, { kind: 'custom' }, true);
+}
+
 const shareDialog = createShareDialog({
   canvas,
   background: () => state.scene.frame.background,
@@ -630,8 +637,46 @@ const shareDialog = createShareDialog({
   hasInputs: () => state.scene.inputs.length > 0,
   hasUnappliedEdits: () => sceneEditor.text().trim() !== state.definitionText.trim(),
   link: shareLink,
+  definition: () => state.definitionText,
+  loadDefinition: loadDefinitionFile,
 });
 shareButton.addEventListener('click', () => shareDialog.open());
+
+const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+
+document.addEventListener('dragover', (event) => {
+  if (!hasFiles(event)) {
+    return;
+  }
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy';
+  }
+  shell.classList.add('dropping');
+});
+// Leaving for a child element reports a target; leaving the window does not.
+document.addEventListener('dragleave', (event) => {
+  if (event.relatedTarget === null) {
+    shell.classList.remove('dropping');
+  }
+});
+document.addEventListener('drop', (event) => {
+  if (!hasFiles(event)) {
+    return;
+  }
+  event.preventDefault();
+  shell.classList.remove('dropping');
+  const file = event.dataTransfer?.files[0];
+  if (file) {
+    void file.text()
+      .then((text) => {
+        if (loadDefinitionFile(text)) {
+          shareDialog.close();
+        }
+      })
+      .catch(() => showSceneStatus(`Could not read ${file.name}`, true));
+  }
+});
 
 exampleSelect.addEventListener('change', () => {
   const example = findExample(exampleSelect.value);

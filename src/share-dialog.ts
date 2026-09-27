@@ -12,14 +12,22 @@ type ShareDialogOptions = {
   hasInputs: () => boolean;
   hasUnappliedEdits: () => boolean;
   link: (options: LinkOptions) => Promise<string>;
+  definition: () => string;
+  loadDefinition: (text: string) => boolean;
 };
 
 const IMAGE_SCALES = [1, 1 / 2, 1 / 4];
 const PREVIEW_MAX_WIDTH = 480;
 const PREVIEW_MAX_HEIGHT = 300;
+// Enlarged, the preview is bounded by the wider dialog instead.
+const PREVIEW_ZOOM_MAX_WIDTH = 640;
+const PREVIEW_ZOOM_MAX_HEIGHT = 600;
 const QR_MARGIN_MODULES = 4;
 const QR_TARGET_PIXELS = 1024;
-const QR_PREVIEW_PIXELS = 300;
+// The preview shows the code at one of these fractions of its full size.
+// Squares are a whole number of pixels at both, so neither blurs the edges.
+const QR_PREVIEW_SCALES = [1 / 4, 1 / 2];
+const QR_SCALE_STEPS = 4;
 // The picture covers at most this fraction of the code's width. With the
 // highest error correction a code can lose about 30% of its data, and the
 // picture hides under 10% of it, leaving room for smudges and glare.
@@ -242,8 +250,8 @@ export function createShareDialog(options: ShareDialogOptions) {
   const sizeSelect = document.createElement('select');
   sizeRow.append(sizeSelect);
   const transparent = checkboxRow('Transparent background', false);
-  const copyImage = button('apply-scene', 'Copy image');
-  const downloadImage = button('apply-scene', 'Download PNG');
+  const copyImage = button('apply-scene', 'Copy');
+  const downloadImage = button('apply-scene', 'Download');
   const imageButtons = element('div', 'share-buttons');
   imageButtons.append(copyImage, downloadImage);
   const imagePanel = element('div', 'share-panel');
@@ -262,24 +270,41 @@ export function createShareDialog(options: ShareDialogOptions) {
   linkText.readOnly = true;
   linkText.rows = 4;
   linkText.spellcheck = false;
-  const copyLink = button('apply-scene', 'Copy link');
+  const copyLink = button('apply-scene', 'Copy');
   const linkPanel = element('div', 'share-panel');
   linkPanel.append(linkText, copyLink);
 
   // QR code tab.
   const qrPreview = element('canvas', 'share-preview share-qr');
   const qrPicture = checkboxRow('Include preview', true);
-  const copyQr = button('apply-scene', 'Copy image');
-  const downloadQr = button('apply-scene', 'Download PNG');
+  const copyQr = button('apply-scene', 'Copy');
+  const downloadQr = button('apply-scene', 'Download');
   const qrButtons = element('div', 'share-buttons');
   qrButtons.append(copyQr, downloadQr);
   const qrPanel = element('div', 'share-panel');
   qrPanel.append(qrPreview, qrPicture.row, qrButtons);
 
+  // Definition tab.
+  const definitionText = element('textarea', 'share-link-text share-definition-text');
+  definitionText.readOnly = true;
+  definitionText.rows = 8;
+  definitionText.spellcheck = false;
+  const downloadDefinition = button('apply-scene', 'Download');
+  const openDefinition = button('apply-scene', 'Open file...');
+  const definitionFile = document.createElement('input');
+  definitionFile.type = 'file';
+  definitionFile.accept = '.yaml,.yml,.txt,text/yaml,text/plain';
+  definitionFile.hidden = true;
+  const definitionButtons = element('div', 'share-buttons');
+  definitionButtons.append(downloadDefinition, openDefinition);
+  const definitionPanel = element('div', 'share-panel');
+  definitionPanel.append(definitionText, definitionButtons, definitionFile);
+
   const tabs = [
     { name: 'Image', panel: imagePanel },
     { name: 'Link', panel: linkPanel },
     { name: 'QR code', panel: qrPanel },
+    { name: 'Definition', panel: definitionPanel },
   ].map(({ name, panel }) => {
     const tab = button('share-tab', name);
     tab.setAttribute('role', 'tab');
@@ -315,6 +340,8 @@ export function createShareDialog(options: ShareDialogOptions) {
     return pngBlob(drawImage(document.createElement('canvas'), width, height, !transparent.input.checked));
   }
 
+  let imageZoom = 0;
+
   function refreshImage() {
     const selected = Math.max(0, sizeSelect.selectedIndex);
     sizeSelect.replaceChildren(...IMAGE_SCALES.map((factor) => {
@@ -323,13 +350,25 @@ export function createShareDialog(options: ShareDialogOptions) {
     }));
     sizeSelect.selectedIndex = selected;
     const { width, height } = imageSize(1);
-    const fit = Math.min(1, PREVIEW_MAX_WIDTH / width, PREVIEW_MAX_HEIGHT / height);
+    const zoomed = imageZoom > 0;
+    const maxWidth = zoomed ? PREVIEW_ZOOM_MAX_WIDTH : PREVIEW_MAX_WIDTH;
+    const maxHeight = zoomed ? PREVIEW_ZOOM_MAX_HEIGHT : PREVIEW_MAX_HEIGHT;
+    // Never larger than the picture itself, so zooming cannot blur it.
+    const fit = Math.min(1, maxWidth / width, maxHeight / height);
     drawImage(preview, Math.round(width * fit), Math.round(height * fit), !transparent.input.checked);
     preview.classList.toggle('transparent', transparent.input.checked);
+    preview.classList.toggle('zoomed', zoomed);
+    dialog.classList.toggle('wide', zoomed);
+    preview.title = zoomed ? 'Click to shrink' : 'Click to enlarge';
     copyImage.disabled = !imageReady;
     downloadImage.disabled = !imageReady;
     showStatus(imageReady ? '' : 'Available when rendering finishes');
   }
+
+  preview.addEventListener('click', () => {
+    imageZoom = imageZoom === 0 ? 1 : 0;
+    refreshImage();
+  });
 
   // Black modules on white with a quiet zone, and the drawn part of the
   // picture over the middle on a white backing that follows its shape.
@@ -337,7 +376,10 @@ export function createShareDialog(options: ShareDialogOptions) {
     const { default: qrcode } = await import('qrcode-generator');
     const code = makeQrCode(text, withPicture, qrcode);
     const count = code.getModuleCount();
-    const cell = Math.max(1, Math.ceil(QR_TARGET_PIXELS / (count + 2 * QR_MARGIN_MODULES)));
+    // A multiple of the smallest preview step, so every square stays a whole
+    // number of pixels when the preview shrinks it.
+    const wanted = QR_TARGET_PIXELS / (count + 2 * QR_MARGIN_MODULES);
+    const cell = QR_SCALE_STEPS * Math.max(1, Math.ceil(wanted / QR_SCALE_STEPS));
     const size = cell * (count + 2 * QR_MARGIN_MODULES);
     target.width = size;
     target.height = size;
@@ -386,11 +428,42 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   let linkRevision = 0;
   let qrImage: HTMLCanvasElement | null = null;
+  let qrZoom = 0;
+
+  // Drawn at an exact fraction of the full code so squares keep sharp edges.
+  function showQrCode() {
+    if (!qrImage) {
+      return;
+    }
+    const size = Math.round(qrImage.width * QR_PREVIEW_SCALES[qrZoom]);
+    qrPreview.width = size;
+    qrPreview.height = size;
+    qrPreview.style.width = `${size}px`;
+    const context = context2d(qrPreview);
+    context.imageSmoothingQuality = 'high';
+    context.drawImage(qrImage, 0, 0, size, size);
+    const zoomed = qrZoom > 0;
+    qrPreview.classList.toggle('zoomed', zoomed);
+    dialog.classList.toggle('wide', zoomed);
+    qrPreview.title = zoomed ? 'Click to shrink' : 'Click to enlarge';
+  }
 
   function clearQrPreview() {
     qrImage = null;
+    qrZoom = 0;
+    dialog.classList.remove('wide');
+    qrPreview.classList.remove('zoomed');
+    qrPreview.removeAttribute('title');
     context2d(qrPreview).clearRect(0, 0, qrPreview.width, qrPreview.height);
   }
+
+  qrPreview.addEventListener('click', () => {
+    if (!qrImage) {
+      return;
+    }
+    qrZoom = (qrZoom + 1) % QR_PREVIEW_SCALES.length;
+    showQrCode();
+  });
 
   // Makes the link, then shows it in whichever of the Link and QR code tabs is open.
   async function refreshLink() {
@@ -422,11 +495,7 @@ export function createShareDialog(options: ShareDialogOptions) {
         return;
       }
       qrImage = image;
-      qrPreview.width = QR_PREVIEW_PIXELS;
-      qrPreview.height = QR_PREVIEW_PIXELS;
-      const context = context2d(qrPreview);
-      context.imageSmoothingQuality = 'high';
-      context.drawImage(image, 0, 0, QR_PREVIEW_PIXELS, QR_PREVIEW_PIXELS);
+      showQrCode();
       copyQr.disabled = false;
       downloadQr.disabled = false;
       showStatus(`${count} \u00d7 ${count} squares${unapplied}`);
@@ -451,8 +520,13 @@ export function createShareDialog(options: ShareDialogOptions) {
     showTab(index);
     showStatus('');
     const { panel } = tabs[index];
+    if (panel === linkPanel || panel === definitionPanel) {
+      dialog.classList.remove('wide');
+    }
     if (panel === imagePanel) {
       refreshImage();
+    } else if (panel === definitionPanel) {
+      refreshDefinition();
     } else {
       panel.insertBefore(linkOptions, panel === linkPanel ? copyLink : qrPicture.row);
       void refreshLink();
@@ -493,18 +567,81 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   const qrBlob = () => qrImage ? pngBlob(qrImage) : Promise.reject(new Error('The QR code is not ready'));
 
+  // The applied definition, which the link and the file both hold.
+  function refreshDefinition() {
+    const text = options.definition().trim();
+    definitionText.value = text;
+    const lines = text.split('\n').length;
+    const unapplied = options.hasUnappliedEdits() ? ', without unapplied edits' : '';
+    showStatus(`${lines} ${lines === 1 ? 'line' : 'lines'}${unapplied}`);
+  }
+
+  async function openDefinitionFile(file: File) {
+    try {
+      if (!options.loadDefinition(await file.text())) {
+        showStatus(`${file.name} is not a valid definition`, true);
+        return;
+      }
+      dialog.close();
+    } catch (error) {
+      showStatus(errorMessage(error, 'Could not read the file'), true);
+    }
+  }
+
+  downloadDefinition.addEventListener('click', () => downloadBlob(
+    new Blob([`${options.definition().trim()}\n`], { type: 'text/yaml' }),
+    `zoomfract-${options.fileName()}.yaml`,
+  ));
+  openDefinition.addEventListener('click', () => definitionFile.click());
+  definitionFile.addEventListener('change', () => {
+    const file = definitionFile.files?.[0];
+    definitionFile.value = '';
+    if (file) {
+      void openDefinitionFile(file);
+    }
+  });
+
+  const copyText = async (text: string, done: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showStatus(done);
+    } catch (error) {
+      showStatus(errorMessage(error, 'Could not copy'), true);
+    }
+  };
+
   copyImage.addEventListener('click', () => void copyPng(imageBlob(), 'Image copied'));
   downloadImage.addEventListener('click', () => void savePng(imageBlob, `zoomfract-${options.fileName()}.png`));
   copyQr.addEventListener('click', () => void copyPng(qrBlob(), 'QR code copied'));
   downloadQr.addEventListener('click', () => void savePng(qrBlob, `zoomfract-${options.fileName()}-qr.png`));
+  copyLink.addEventListener('click', () => void copyText(linkText.value, 'Link copied'));
 
-  copyLink.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(linkText.value);
-      showStatus('Link copied');
-    } catch (error) {
-      showStatus(errorMessage(error, 'Could not copy link'), true);
+  // Ctrl+C copies whatever the open tab shows, unless some text is selected.
+  const textSelected = () => {
+    const focused = document.activeElement;
+    if (focused instanceof HTMLTextAreaElement || focused instanceof HTMLInputElement) {
+      return focused.selectionStart !== focused.selectionEnd;
     }
+    return !(window.getSelection()?.isCollapsed ?? true);
+  };
+
+  dialog.addEventListener('keydown', (event) => {
+    if (event.key.toLowerCase() !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey || textSelected()) {
+      return;
+    }
+    const panel = currentTab();
+    if (panel === imagePanel && imageReady) {
+      void copyPng(imageBlob(), 'Image copied');
+    } else if (panel === qrPanel && qrImage) {
+      void copyPng(qrBlob(), 'QR code copied');
+    } else if (panel === linkPanel && linkText.value) {
+      void copyText(linkText.value, 'Link copied');
+    } else if (panel === definitionPanel) {
+      void copyText(definitionText.value, 'Definition copied');
+    } else {
+      return;
+    }
+    event.preventDefault();
   });
 
   showTab(0);
@@ -516,8 +653,10 @@ export function createShareDialog(options: ShareDialogOptions) {
       dialog.focus();
       selectTab(tabs.findIndex(({ panel }) => panel === currentTab()));
     },
-    setImageReady(ready: boolean) {
-      imageReady = ready;
+    close() {
+      dialog.close();
+    },
+    setImageReady(ready: boolean) {      imageReady = ready;
       if (!dialog.open) {
         return;
       }

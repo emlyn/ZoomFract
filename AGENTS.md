@@ -42,7 +42,8 @@ Do not commit generated or local artifacts:
   resolution.
 - `src/editor.ts`: CodeMirror definition editor with inline diagnostics.
 - `src/share.ts`: shared-link encoding, loaded on demand with its dictionary.
-- `src/share-dialog.ts`: the Share dialog for images, links and QR codes.
+- `src/share-dialog.ts`: the Share dialog for images, links, QR codes and
+  definition files.
 - `src/expression.ts`: arithmetic expression parser and evaluator.
 - `src/guide.html`: user guide for the definition language, shown from the
   panel. Keep it in simple English and update it whenever the scene language
@@ -360,11 +361,19 @@ files unless extracting a module clearly reduces complexity.
 - The controls scroll within the panel when the window is too short.
 - Share opens a modal dialog (`src/share-dialog.ts`) with Image (preview,
   size, transparency, copy and download), Link (optional input values and app
-  settings, copy) and QR code (the same link options plus a centred preview,
-  on by default, copy and download) tabs. Image actions stay disabled until the latest full
-  render has finished. QR codes use `qrcode-generator`, loaded on demand, with
+  settings, copy), QR code (the same link options plus a centred preview,
+  on by default, copy and download) and Definition (download the applied
+  definition as YAML, or open a saved one) tabs. A YAML file dropped anywhere on
+  the window loads the same way. Image actions stay disabled until the latest full
+  render has finished. Ctrl+C copies whatever the open tab shows, unless text is
+  selected, in which case the browser's own copy is left alone. Clicking either
+  preview enlarges it and widens the dialog; clicking again goes back.
+  QR codes use `qrcode-generator`, loaded on demand, with
   error correction H when the preview covers the middle (at most 30% of the
-  width) and M otherwise. The preview is the transparent picture cropped to its
+  width) and M otherwise. The QR square size is rounded up to a multiple of 4
+  pixels so the preview, which shows the code at exactly a quarter of full size,
+  keeps sharp edges; clicking it toggles to a half.
+  The preview is the transparent picture cropped to its
   non-transparent pixels. It sits on a white backing that follows its shape with
   narrow gaps filled in (a morphological closing using distance transforms),
   with a thin fading halo, and is drawn with slightly offset copies beneath it
