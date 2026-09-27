@@ -66,10 +66,11 @@ type Session = {
 let session: Session | null = null;
 
 function continueSession(current: Session, request: RenderRequest): boolean {
-  if (current.key !== continuationKey(request) || current.settings.autoLevels || request.options.levels === 'auto') {
+  if (current.key !== continuationKey(request)
+    || (current.settings.autoLevels !== (request.options.levels === 'auto'))) {
     return false;
   }
-  const resolved = resolveRenderSettings(request.scene, request.options, current.renderer);
+  const resolved = resolveRenderSettings(request.scene, request.options, current.renderer, request.additionalLevels);
   const addedLevels = resolved.levels - current.settings.levels;
   if (addedLevels <= 0) {
     return false;
@@ -139,7 +140,7 @@ function render(request: RenderRequest) {
 
   for (const renderer of candidates) {
     try {
-      const settings = resolveRenderSettings(request.scene, request.options, renderer);
+      const settings = resolveRenderSettings(request.scene, request.options, renderer, request.additionalLevels);
       post({ type: 'start', renderer, settings, fallbackReason });
       const draw = renderer === 'webgl' ? renderWebgl : renderCanvas2d;
       const frames = frameCallbacks(width, height, null);

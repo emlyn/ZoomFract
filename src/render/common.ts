@@ -24,6 +24,7 @@ export type RenderSettings = {
   recursionDepth: number;
   levels: number;
   autoLevels: boolean;
+  autoLevelLimitReached: boolean;
   renderPasses: number;
   supersampling: number;
 };
@@ -32,6 +33,8 @@ export type RenderRequest = {
   scene: SceneDefinition;
   options: RenderOptions;
   editMode: boolean;
+  // Extra generations requested after automatic levels hit their limit.
+  additionalLevels?: number;
   // Why WebGL2 must not be used, once the GPU has stopped responding.
   webglDisabled?: string;
 };
@@ -120,10 +123,15 @@ export const continuationKey = ({ scene, options, editMode }: RenderRequest) =>
   JSON.stringify([scene, options.renderer, options.supersampling, options.recursionDepth, editMode]);
 
 export const canContinue = (from: RenderRequest, to: RenderRequest) =>
-  typeof from.options.levels === 'number'
-  && typeof to.options.levels === 'number'
-  && to.options.levels > from.options.levels
-  && continuationKey(from) === continuationKey(to);
+  continuationKey(from) === continuationKey(to)
+  && (
+    (typeof from.options.levels === 'number'
+      && typeof to.options.levels === 'number'
+      && to.options.levels > from.options.levels)
+    || (from.options.levels === 'auto'
+      && to.options.levels === 'auto'
+      && (to.additionalLevels ?? 0) > (from.additionalLevels ?? 0))
+  );
 
 export const RENDERER_LABELS: Record<RendererName, string> = {
   webgl: 'WebGL2',
@@ -132,7 +140,11 @@ export const RENDERER_LABELS: Record<RendererName, string> = {
 
 export const EDIT_MODE_ZOOM_OPACITY = 0.6;
 
-export const MAXIMUM_LEVELS = 64;
+export const MAXIMUM_LEVELS = 256;
+export const EXTRA_LEVELS_STEP = 256;
+// Non-shrinking zooms never reach a pixel-size stopping point. Keep their
+// previous bound rather than spending four times as long on an infinite scene.
+const NON_SHRINKING_LEVELS = 64;
 const FIXED_POINT_LEAF_PIXELS = 0.5;
 // Canvas 2D recursion is exponential, so its geometric depth stays bounded.
 const CANVAS2D_MINIMUM_LEAF_PIXELS = 2;
@@ -178,11 +190,15 @@ export function resolveRenderSettings(
   scene: SceneDefinition,
   options: RenderOptions,
   renderer: RendererName,
+  additionalLevels = 0,
 ): RenderSettings {
   const { supersampling } = options;
   const zooms = scene.elements.filter((element): element is ZoomElement => element.kind === 'zoom');
   if (zooms.length === 0) {
-    return { recursionDepth: 0, levels: 0, autoLevels: options.levels === 'auto', renderPasses: 1, supersampling };
+    return {
+      recursionDepth: 0, levels: 0, autoLevels: options.levels === 'auto',
+      autoLevelLimitReached: false, renderPasses: 1, supersampling,
+    };
   }
 
   const coordinateWidth = Math.abs(scene.view.coordinates.x.to - scene.view.coordinates.x.from);
@@ -207,13 +223,16 @@ export function resolveRenderSettings(
   };
 
   const autoLevels = options.levels === 'auto';
+  const limit = (largestZoomScale < 1 ? MAXIMUM_LEVELS : NON_SHRINKING_LEVELS) + additionalLevels;
+  const estimatedLevels = generationsAbove(FIXED_POINT_LEAF_PIXELS, limit) + 1;
+  const autoLevelLimitReached = autoLevels && estimatedLevels > limit;
   const levels = options.levels === 'auto'
-    ? Math.min(MAXIMUM_LEVELS, generationsAbove(FIXED_POINT_LEAF_PIXELS, MAXIMUM_LEVELS) + 1)
+    ? Math.min(limit, estimatedLevels)
     : options.levels;
   // Generation `levels` holds the terminal seed, so geometry stops one short.
   const requestedDepth = Math.min(options.recursionDepth, levels - 1);
   if (renderer === 'webgl') {
-    return { recursionDepth: requestedDepth, levels, autoLevels, renderPasses: 1, supersampling };
+    return { recursionDepth: requestedDepth, levels, autoLevels, autoLevelLimitReached, renderPasses: 1, supersampling };
   }
 
   const leafLimitedDepth = Math.floor(Math.log(CANVAS2D_MAXIMUM_LEAVES) / Math.log(Math.max(2, zooms.length)));
@@ -226,6 +245,7 @@ export function resolveRenderSettings(
     recursionDepth,
     levels,
     autoLevels,
+    autoLevelLimitReached,
     renderPasses: Math.max(1, Math.ceil(levels / (recursionDepth + 1))),
     supersampling,
   };

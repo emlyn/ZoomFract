@@ -462,6 +462,19 @@ canvas {
   color: #d4d4d8;
 }
 
+.level-limit-warning {
+  margin-left: 0.45rem;
+  color: #fbbf24;
+  font-size: 1rem;
+  letter-spacing: normal;
+}
+
+.extend-levels {
+  margin-left: 0.6rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .render-settings-body {
   display: flex;
   flex-direction: column;
@@ -486,6 +499,13 @@ canvas {
   min-height: 1.25rem;
   color: #a1a1aa;
   font-size: 0.78rem;
+}
+
+.details-note {
+  border-radius: 0.3rem;
+  background: rgba(251, 191, 36, 0.16);
+  padding: 0.05rem 0.3rem;
+  color: #fbbf24;
 }
 
 .value {

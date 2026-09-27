@@ -2,7 +2,7 @@ info:
   title: Interactive Pythagoras Tree
   author: Emlyn Corrin
   date: 2026
-  description: Drag on the picture to move the top of the triangle, and use the sliders to resize and raise the square.
+  description: Click the picture to move the top of the triangle, and use the sliders to resize and raise the square.
   links:
     - https://en.wikipedia.org/wiki/Pythagoras_tree_(fractal)
 
@@ -17,6 +17,7 @@ frame:
 
 view:
   aspect: 4/3
+  overflow: auto
   resolution:
     height: 1200
   coordinates:
@@ -31,8 +32,8 @@ variables:
     value: 0
     input: { type: slider, min: 0, max: 0.5, label: Vertical position }
   - name: apex
-    value: [1.55, 1.2]
-    input: { type: drag, label: Triangle top }
+    value: [2.084, 0.888]
+    input: { type: click, label: Triangle top }
   - name: left
     value: (view.width - size) / 2
   - name: bottom

@@ -55,6 +55,13 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     wrong. When you apply a definition with a mistake, the message is also shown in red
     under the buttons, and nothing is drawn until it is fixed.
   </p>
+  <p>
+    Automatic quality renders enough levels for the smallest visible details, up to a
+    safety limit. If it reaches that limit first, a warning appears beside
+    <em>Render settings</em>. Use <em>+256 levels</em> there to continue the current
+    picture without starting over. Each click allows another 256 levels, stopping
+    sooner if they become too small to see; changing the picture or quality starts fresh.
+  </p>
 </section>
 
 <section id="guide-editor">
@@ -135,6 +142,14 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
       Nothing is placed by it, but it shows anything that spills past the edges, such as
       glows. Each zoom's copy includes the border too, so zooms draw slightly bigger than
       their size. The default is 0. In edit mode the view edge is shown as a grey dashed line.
+    </li>
+    <li>
+      <code>overflow: auto</code> fits the picture to everything the scene draws, however
+      far the zooms spread it, so nothing is cut off and nothing is wasted. The view is
+      grown or shrunk evenly about the content, keeping its aspect, and the short side is
+      padded equally on both sides. The coordinates still set what each zoom copies, so the
+      shape is the same as without it. Every zoom must be smaller than the view, or the
+      picture would grow forever.
     </li>
   </ul>
 </section>
@@ -319,7 +334,7 @@ seed:
     <li>A zoom's glow follows the shapes in its copy.</li>
     <li>Use <code>size: 8 * view.pixel.width</code> for a glow about 8 pixels wide.</li>
     <li>Glows are copied into zooms along with everything else.</li>
-    <li>Glows are cut off at the edge of the picture; add a view <code>overflow</code> to make room.</li>
+    <li>Glows are cut off at the edge of the picture; add a view <code>overflow</code>, or <code>overflow: auto</code>, to make room.</li>
     <li>Glows need the WebGL2 renderer and cannot be used with density shading.</li>
   </ul>
 </section>

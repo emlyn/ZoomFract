@@ -8,6 +8,7 @@ import {
   findExample,
 } from './examples';
 import {
+  EXTRA_LEVELS_STEP,
   GPU_LOST_MESSAGE,
   MAXIMUM_LEVELS,
   MAXIMUM_RECURSION_CHOICE,
@@ -16,6 +17,7 @@ import {
   RENDERER_LABELS,
   SUPERSAMPLING_CHOICES,
   canContinue,
+  continuationKey,
   elementCorners,
   scenePointToCanvas,
   type QualityMode,
@@ -29,6 +31,8 @@ import {
 import {
   clamp,
   parseScene,
+  reframeZoom,
+  viewFrame,
   type InputValue,
   type InputValues,
   type SceneDefinition,
@@ -247,6 +251,13 @@ panelToggle.addEventListener('click', () => {
   setPanelOpen(!panelIsOpen);
 });
 
+// A picture chosen in the address opens with the panel out of the way.
+const urlChoosesPicture = ['example', 'source', 'q'].some((key) => new URLSearchParams(window.location.search).has(key))
+  || window.location.hash.length > 1;
+if (urlChoosesPicture) {
+  setPanelOpen(false);
+}
+
 panelResizeHandle.addEventListener('pointerdown', (event) => {
   panelIsResizing = true;
   panelResizeHandle.setPointerCapture(event.pointerId);
@@ -377,11 +388,47 @@ addLevelButton.addEventListener('click', () => {
 const customSettings = document.createElement('details');
 customSettings.className = 'render-settings';
 const customSettingsSummary = document.createElement('summary');
-customSettingsSummary.textContent = 'Render settings';
+const renderSettingsLabel = document.createElement('span');
+renderSettingsLabel.textContent = 'Render settings';
+const levelLimitWarning = document.createElement('span');
+levelLimitWarning.className = 'level-limit-warning';
+levelLimitWarning.innerHTML = '&#9888;';
+levelLimitWarning.setAttribute('role', 'img');
+levelLimitWarning.setAttribute('aria-label', 'Automatic level limit reached; more detail may be visible');
+levelLimitWarning.title = 'Automatic level limit reached; more detail may be visible';
+levelLimitWarning.hidden = true;
+const extendLevelsButton = document.createElement('button');
+extendLevelsButton.type = 'button';
+extendLevelsButton.className = 'add-level extend-levels';
+extendLevelsButton.textContent = `+${EXTRA_LEVELS_STEP} levels`;
+extendLevelsButton.title = 'Continue the current image with more iterations';
+extendLevelsButton.hidden = true;
+extendLevelsButton.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!activeRequest && renderOptions().levels === 'auto' && state.resolvedLevels !== null) {
+    extraAutoLevels += EXTRA_LEVELS_STEP;
+    render();
+  }
+});
+customSettingsSummary.append(renderSettingsLabel, levelLimitWarning, extendLevelsButton);
 const customSettingsBody = document.createElement('div');
 customSettingsBody.className = 'render-settings-body';
 const qualityDetails = document.createElement('div');
 qualityDetails.className = 'quality-details';
+
+// The auto-stop note goes last, highlighted, because it is the only part
+// asking for a decision rather than reporting what happened.
+function setQualityDetails(parts: string[], note: string | null) {
+  qualityDetails.textContent = parts.join(' · ');
+  if (note === null) {
+    return;
+  }
+  const highlight = document.createElement('span');
+  highlight.className = 'details-note';
+  highlight.textContent = note;
+  qualityDetails.append(' · ', highlight);
+}
 customSettingsBody.append(rendererControl.row, supersamplingControl.row, recursionControl.row, levelsRow, qualityDetails);
 customSettings.append(customSettingsSummary, customSettingsBody);
 
@@ -632,6 +679,10 @@ syncQualityControls();
 function showSceneStatus(message: string, isError = false) {
   sceneStatus.textContent = message;
   sceneStatus.classList.toggle('error', isError);
+  // The panel starts hidden for preloaded pictures, so reveal problems.
+  if (isError) {
+    setPanelOpen(true);
+  }
 }
 
 // Input values are kept when the edited definition is applied, as long as it
@@ -988,28 +1039,21 @@ function drawZoomOutlines(scene: SceneDefinition) {
   const pixelsPerCssPixel = cssWidth > 0 ? canvas.width / cssWidth : 1;
   const lineWidth = EDIT_MODE_OUTLINE_CSS_PIXELS * pixelsPerCssPixel;
   // Zooms and coordinates include the overflow; outline them as declared.
-  const { x, y } = scene.view.coordinates;
-  const overflow = scene.view.overflow;
-  const shrink = {
-    x: 1 - 2 * overflow / Math.abs(x.to - x.from),
-    y: 1 - 2 * overflow / Math.abs(y.to - y.from),
-  };
+  const { coordinates, declared } = scene.view;
   const zooms = scene.elements
     .filter((element): element is ZoomElement => element.kind === 'zoom')
-    .map((zoom) => ({ ...zoom, width: zoom.width * shrink.x, height: zoom.height * shrink.y }));
+    .map((zoom) => reframeZoom(zoom, viewFrame(coordinates), viewFrame(declared)));
 
   displayContext.save();
   displayContext.setTransform(1, 0, 0, 1, 0, 0);
   displayContext.lineJoin = 'miter';
-  if (overflow > 0) {
-    const inset = {
-      x: overflow / Math.abs(x.to - x.from) * canvas.width,
-      y: overflow / Math.abs(y.to - y.from) * canvas.height,
-    };
+  if (JSON.stringify(coordinates) !== JSON.stringify(declared)) {
+    const from = scenePointToCanvas({ x: declared.x.from, y: declared.y.to }, scene);
+    const to = scenePointToCanvas({ x: declared.x.to, y: declared.y.from }, scene);
     displayContext.setLineDash([lineWidth * 2, lineWidth * 2]);
     displayContext.strokeStyle = 'rgba(128, 128, 128, 0.9)';
     displayContext.lineWidth = lineWidth;
-    displayContext.strokeRect(inset.x, inset.y, canvas.width - 2 * inset.x, canvas.height - 2 * inset.y);
+    displayContext.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
   }
   for (const zoom of zooms) {
     const corners = elementCorners(zoom, scene);
@@ -1129,6 +1173,13 @@ const formatChange = ({ fraction, levels }: StepChange) => {
 let renderWorker: Worker | null = null;
 let activeRequest: RenderRequest | null = null;
 let pendingRequest: RenderRequest | null = null;
+let extraAutoLevels = 0;
+let autoExtensionKey: string | null = null;
+const showLevelLimit = (reached: boolean, levels = 0) => {
+  levelLimitWarning.hidden = !reached;
+  extendLevelsButton.hidden = !reached || !Number.isSafeInteger(levels + EXTRA_LEVELS_STEP);
+  extendLevelsButton.disabled = activeRequest !== null;
+};
 // Set once a render loses the GPU; later renders avoid WebGL2 until reload.
 let webglDisabled: string | undefined;
 const noteGpuLost = (reason: string | undefined) => {
@@ -1164,6 +1215,7 @@ function scheduleSettledRender() {
 
 function renderPreview(settle: boolean) {
   window.clearTimeout(settleTimer);
+  showLevelLimit(false);
   const request: RenderRequest = {
     scene: previewScene(state.scene),
     options: PREVIEW_OPTIONS,
@@ -1198,12 +1250,19 @@ function stopActiveRender(terminate: boolean) {
 
 function render() {
   window.clearTimeout(settleTimer);
-  const request: RenderRequest = {
+  const baseRequest: RenderRequest = {
     scene: state.scene,
     options: renderOptions(),
     editMode: state.editMode,
     webglDisabled,
   };
+  const key = continuationKey(baseRequest);
+  if (key !== autoExtensionKey) {
+    extraAutoLevels = 0;
+    autoExtensionKey = key;
+  }
+  const request: RenderRequest = { ...baseRequest, additionalLevels: extraAutoLevels };
+  showLevelLimit(false);
   if (activeRequest && canContinue(activeRequest, request)) {
     pendingRequest = request;
     return;
@@ -1218,6 +1277,7 @@ function render() {
 function startRender(request: RenderRequest) {
   const worker = renderWorker ??= new Worker(new URL('./render/worker.ts', import.meta.url), { type: 'module' });
   activeRequest = request;
+  extendLevelsButton.disabled = true;
   shareDialog.setImageReady(false);
   let details: string[] = [];
   let started: Extract<RenderMessage, { type: 'start' }> | null = null;
@@ -1297,18 +1357,24 @@ function startRender(request: RenderRequest) {
           updateWallLabel();
         }
         syncQualityControls();
-        qualityDetails.textContent = [
+        const limitReached = started !== null && started.settings.autoLevels
+          && started.settings.autoLevelLimitReached
+          && message.levels >= started.settings.levels;
+        setQualityDetails([
           ...details,
           ...message.details,
           ...(message.stepChange === undefined ? [] : [formatChange(message.stepChange)]),
           `${time}${step}`,
-        ].join(' · ');
+        ], limitReached ? `stopped at ${message.levels} levels; more detail may be visible` : null);
         finish(false);
+        if (!activeRequest) {
+          showLevelLimit(limitReached, message.levels);
+        }
         break;
       }
       case 'error':
         noteGpuLost(message.message);
-        qualityDetails.textContent = `Render failed: ${message.message}`;
+        setQualityDetails([`Render failed: ${message.message}`], null);
         finish(true);
         break;
     }
@@ -1317,7 +1383,7 @@ function startRender(request: RenderRequest) {
     if (activeRequest !== request) {
       return;
     }
-    qualityDetails.textContent = `Render failed: ${event.message}`;
+    setQualityDetails([`Render failed: ${event.message}`], null);
     finish(true);
   };
   worker.postMessage(request);

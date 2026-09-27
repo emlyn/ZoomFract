@@ -236,6 +236,11 @@ export type ZoomElement = SceneElement & {
 
 export type DrawableElement = RectElement | ZoomElement;
 
+export type ViewRanges = {
+  x: AxisRange;
+  y: AxisRange;
+};
+
 export type AxisRange = {
   from: number;
   to: number;
@@ -351,17 +356,14 @@ export type SceneDefinition = {
   };
   view: {
     aspect: number;
-    // Scene units added around the view on every side. The coordinates and
-    // resolution below include it; zooms are grown to match.
-    overflow: number;
     resolution: {
       width: number;
       height: number;
     };
-    coordinates: {
-      x: AxisRange;
-      y: AxisRange;
-    };
+    // The whole picture, including any overflow. Zooms copy this area.
+    coordinates: ViewRanges;
+    // The coordinates as written, which set the zoom transforms.
+    declared: ViewRanges;
   };
   elements: DrawableElement[];
 };
@@ -457,6 +459,139 @@ function resolveView(view: Record<string, unknown>, variables: Variables, growth
 const growAxis = (range: AxisRange, overflow: number): AxisRange => {
   const outwards = Math.sign(range.to - range.from) * overflow;
   return { from: range.from - outwards, to: range.to + outwards };
+};
+
+export const viewFrame = ({ x, y }: ViewRanges): ViewFrame => ({
+  centre: { x: (x.from + x.to) / 2, y: (y.from + y.to) / 2 },
+  width: x.to - x.from,
+  height: y.to - y.from,
+});
+
+// Where a zoom places a point of the area it copies.
+const zoomMap = (zoom: ZoomElement, view: ViewFrame) => (point: Vec2): Vec2 =>
+  add(zoom.center, zoomOffset(point, view, zoom.width, zoom.height, zoom.rotation));
+
+// The same zoom transform, described as copying `to` instead of `from`.
+export const reframeZoom = (zoom: ZoomElement, from: ViewFrame, to: ViewFrame): ZoomElement => ({
+  ...zoom,
+  center: zoomMap(zoom, from)(to.centre),
+  width: zoom.width * to.width / from.width,
+  height: zoom.height * to.height / from.height,
+});
+
+const cross = (origin: Vec2, a: Vec2, b: Vec2) =>
+  (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+
+function convexHull(points: Vec2[]): Vec2[] {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  const chain = (ordered: Vec2[]) => ordered.reduce<Vec2[]>((hull, point) => {
+    while (hull.length >= 2 && cross(hull[hull.length - 2], hull[hull.length - 1], point) <= 0) {
+      hull.pop();
+    }
+    hull.push(point);
+    return hull;
+  }, []);
+  if (sorted.length < 3) {
+    return sorted;
+  }
+  const lower = chain(sorted);
+  const upper = chain([...sorted].reverse());
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
+}
+
+type Bounds = { min: Vec2; max: Vec2 };
+
+const boundsOf = (points: Vec2[]): Bounds => ({
+  min: { x: Math.min(...points.map((p) => p.x)), y: Math.min(...points.map((p) => p.y)) },
+  max: { x: Math.max(...points.map((p) => p.x)), y: Math.max(...points.map((p) => p.y)) },
+});
+
+// Points of an octagon that contains a circle, for growing by a glow.
+const OCTAGON = Array.from({ length: 8 }, (_, index) => ({
+  x: Math.cos(index * Math.PI / 4) / Math.cos(Math.PI / 8),
+  y: Math.sin(index * Math.PI / 4) / Math.cos(Math.PI / 8),
+}));
+
+// Bounds of everything the scene draws once zooms have repeated forever.
+// The convex hull of the finished picture is the fixed point of hull(rects
+// plus each zoom's copy of the hull), which every shrinking zoom approaches
+// geometrically from any starting shape.
+function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
+  const zooms = elements.filter((element): element is ZoomElement => element.kind === 'zoom' && element.opacity > 0);
+  const growth = (zoom: ZoomElement) => Math.max(
+    Math.abs(zoom.width / view.width),
+    Math.abs(zoom.height / view.height),
+  );
+  const shrink = Math.max(0, ...zooms.map(growth));
+  if (shrink >= 1 - 1e-6) {
+    const index = elements.findIndex((element) => element.kind === 'zoom' && element.opacity > 0 && growth(element) === shrink);
+    const zoom = elements[index];
+    const label = zoom.name ? `Zoom "${zoom.name}"` : `Zoom ${index + 1}`;
+    throw new Error(`overflow: auto cannot fit the picture because ${label} is ${shrink.toFixed(2)} times the size of the view, so its copies keep growing`);
+  }
+  const base = elements
+    .filter((element): element is RectElement => element.kind === 'rect' && (element.opacity > 0 || element.glow !== undefined))
+    .flatMap((rect) => {
+      const grow = 2 * (rect.glow?.size ?? 0);
+      return CORNER_NAMES.map((name) => rectCorner({ ...rect, width: rect.width + grow, height: rect.height + grow }, name));
+    });
+  if (base.length === 0 && zooms.length === 0) {
+    throw new Error('overflow: auto needs something in the scene to fit');
+  }
+  const copies = zooms.map((zoom) => {
+    const map = zoomMap(zoom, view);
+    const glow = zoom.glow?.size ?? 0;
+    return (point: Vec2) => {
+      const placed = map(point);
+      return glow > 0 ? OCTAGON.map((corner) => add(placed, scaleVector(corner, glow))) : [placed];
+    };
+  });
+  const step = (hull: Vec2[]) => convexHull([...base, ...copies.flatMap((copy) => hull.flatMap(copy))]);
+
+  let hull = step(convexHull(CORNER_NAMES.map((name) => viewPoint(view, name))));
+  for (let iteration = 0; iteration < 100000; iteration += 1) {
+    const next = step(hull);
+    const [before, after] = [boundsOf(hull), boundsOf(next)];
+    const size = Math.max(after.max.x - after.min.x, after.max.y - after.min.y);
+    const change = Math.max(
+      Math.abs(after.min.x - before.min.x),
+      Math.abs(after.min.y - before.min.y),
+      Math.abs(after.max.x - before.max.x),
+      Math.abs(after.max.y - before.max.y),
+    );
+    hull = next;
+    // Remaining movement is at most change * shrink / (1 - shrink).
+    if (change * shrink <= 1e-9 * size * (1 - shrink)) {
+      break;
+    }
+  }
+  return boundsOf(hull);
+}
+
+// The declared view scaled evenly about the content until it just holds it.
+function fittedView(scene: SceneDefinition): ViewRanges {
+  const bounds = contentBounds(scene.elements, viewFrame(scene.view.coordinates));
+  const declared = viewFrame(scene.view.declared);
+  const scale = Math.max(
+    (bounds.max.x - bounds.min.x) / Math.abs(declared.width),
+    (bounds.max.y - bounds.min.y) / Math.abs(declared.height),
+  );
+  if (!(scale > 0)) {
+    throw new Error('overflow: auto found nothing with any size to fit');
+  }
+  const centre = { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 };
+  const halfWidth = declared.width * scale / 2;
+  const halfHeight = declared.height * scale / 2;
+  return {
+    x: { from: centre.x - halfWidth, to: centre.x + halfWidth },
+    y: { from: centre.y - halfHeight, to: centre.y + halfHeight },
+  };
+}
+
+const rangesMatch = (left: ViewRanges, right: ViewRanges) => {
+  const size = Math.max(Math.abs(left.x.to - left.x.from), Math.abs(left.y.to - left.y.from));
+  return [left.x.from - right.x.from, left.x.to - right.x.to, left.y.from - right.y.from, left.y.to - right.y.to]
+    .every((difference) => Math.abs(difference) <= 1e-6 * size);
 };
 
 // Text fields accept any scalar, so `date: 2026` is fine; blanks are omitted.
@@ -1429,9 +1564,12 @@ const fallback = {
     },
     view: {
       aspect: 1,
-      overflow: 0,
       resolution: { width: 1200, height: 1200 },
       coordinates: {
+        x: { from: -100, to: 100 },
+        y: { from: -100, to: 100 },
+      },
+      declared: {
         x: { from: -100, to: 100 },
         y: { from: -100, to: 100 },
       },
@@ -1528,7 +1666,25 @@ export function parseScene(text: string, inputValues: InputValues = new Map()): 
   return parseSceneWithDiagnostics(text, inputValues).scene;
 }
 
+// With `overflow: auto` the picture is fitted to the content, which may
+// depend on pixel sizes, so the scene is rebuilt until the fit settles.
 function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefinition {
+  let scene = buildScene(value, inputValues, undefined);
+  const parsed = normaliseSpellings(value);
+  if (!isRecord(parsed) || !isRecord(parsed.view) || parsed.view.overflow !== 'auto') {
+    return scene;
+  }
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const fitted = atPath(['view', 'overflow'], () => fittedView(scene));
+    if (attempt > 0 && rangesMatch(fitted, scene.view.coordinates)) {
+      return scene;
+    }
+    scene = buildScene(value, inputValues, fitted);
+  }
+  throw new PathError('overflow: auto could not settle on a size', ['view', 'overflow']);
+}
+
+function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges | undefined): SceneDefinition {
   const parsed = normaliseSpellings(value);
   if (!isRecord(parsed)) {
     throw new Error('Scene definition must be a YAML object');
@@ -1555,6 +1711,7 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
   };
   const xRange = axis('x');
   const yRange = axis('y');
+  const autoOverflow = viewNode.overflow === 'auto';
   const overflow = lazy('view.overflow', () => atPath(['view', 'overflow'], () => {
     const value = asNumber(viewNode.overflow, 0, variables);
     if (value < 0) {
@@ -1562,9 +1719,13 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
     }
     return value;
   }));
+  const declared = (): ViewRanges => ({ x: xRange(), y: yRange() });
+  const shown = (): ViewRanges => autoOverflow
+    ? fitted ?? declared()
+    : { x: growAxis(xRange(), overflow()), y: growAxis(yRange(), overflow()) };
   const growth = (): Vec2 => ({
-    x: 1 + 2 * overflow() / Math.abs(xRange().to - xRange().from),
-    y: 1 + 2 * overflow() / Math.abs(yRange().to - yRange().from),
+    x: (shown().x.to - shown().x.from) / (xRange().to - xRange().from),
+    y: (shown().y.to - shown().y.from) / (yRange().to - yRange().from),
   });
   const viewValues: Record<string, () => number> = {
     'view.left': () => xRange().from,
@@ -1578,11 +1739,11 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
     'view.center.x': () => (xRange().from + xRange().to) / 2,
     'view.center.y': () => (yRange().from + yRange().to) / 2,
     'view.aspect': () => resolvedView().aspect,
-    'view.overflow': overflow,
+    ...(autoOverflow ? {} : { 'view.overflow': overflow }),
     'view.pixels.width': () => resolvedView().resolution.width,
     'view.pixels.height': () => resolvedView().resolution.height,
-    'view.pixel.width': () => (xRange().to - xRange().from) * growth().x / resolvedView().resolution.width,
-    'view.pixel.height': () => (yRange().to - yRange().from) * growth().y / resolvedView().resolution.height,
+    'view.pixel.width': () => (shown().x.to - shown().x.from) / resolvedView().resolution.width,
+    'view.pixel.height': () => (shown().y.to - shown().y.from) / resolvedView().resolution.height,
   };
   Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
   const inputBuilders = [...atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))]
@@ -1629,22 +1790,14 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
     const seedNode = sceneRoot.seed && typeof sceneRoot.seed === 'object' && !Array.isArray(sceneRoot.seed)
       ? (sceneRoot.seed as Record<string, unknown>)
       : {};
-    const viewFrame: ViewFrame = {
-      centre: {
-        x: (coordinates.x.from + coordinates.x.to) / 2,
-        y: (coordinates.y.from + coordinates.y.to) / 2,
-      },
-      width: coordinates.x.to - coordinates.x.from,
-      height: coordinates.y.to - coordinates.y.from,
-    };
     const elements = resolveSceneElements(
       parseSceneItems(sceneRoot.scene),
       resolvedView().aspect,
-      viewFrame,
+      viewFrame(coordinates),
       variables,
       density,
     ).map((element) => element.kind === 'zoom'
-      ? { ...element, width: element.width * growth().x, height: element.height * growth().y }
+      ? reframeZoom(element, viewFrame(coordinates), viewFrame(shown()))
       : element);
 
     return {
@@ -1660,8 +1813,8 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
       },
       view: {
         ...resolvedView(),
-        overflow: overflow(),
-        coordinates: { x: growAxis(coordinates.x, overflow()), y: growAxis(coordinates.y, overflow()) },
+        coordinates: shown(),
+        declared: declared(),
       },
       elements,
     };

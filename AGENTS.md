@@ -83,10 +83,16 @@ files unless extracting a module clearly reduces complexity.
 - If resolution is omitted, default to height `1200` and infer width.
 - Optional `view.overflow` (scene units, default 0, non-negative) adds a
   border on every side that catches anything drawn past the view edge, such
-  as glows. After all geometry and references resolve, `sceneFromValue`
-  grows the output coordinates by it and every zoom by the same fraction of
-  the view, so renderers need no special handling. Edit mode outlines the
-  declared view and zooms.
+  as glows. After all geometry and references resolve, `buildScene` sets the
+  output coordinates to the shown area and re-describes every zoom with
+  `reframeZoom` so it copies that area with an unchanged transform; renderers
+  need no special handling. `view.declared` keeps the written coordinates.
+  Edit mode outlines the declared view and zooms.
+- `overflow: auto` fits the shown area to the content: `contentBounds`
+  iterates hull(rects + each zoom's copy of the hull) to its fixed point, and
+  `fittedView` scales the declared view evenly about it. Because pixel sizes
+  depend on the fit, `sceneFromValue` rebuilds until it settles. Zooms that
+  do not shrink are an error. `view.overflow` is not a variable in auto mode.
 - `view.coordinates.x` runs left to right.
 - `view.coordinates.y` runs bottom to top, following mathematical convention.
 - Axis ranges accept `[from, to]` and object forms such as
@@ -161,7 +167,7 @@ files unless extracting a module clearly reduces complexity.
 - Expressions may also use dotted view values: `view.left`, `view.right`
   (x), `view.bottom`, `view.top` (y), `view.width`, `view.height`,
   `view.centre.x`, `view.centre.y` (coordinate units), `view.aspect`,
-  `view.overflow`, `view.pixels.width`, `view.pixels.height` (resolved
+  `view.overflow` (numeric overflow only), `view.pixels.width`, `view.pixels.height` (resolved
   whole-image resolution), and
   `view.pixel.width`, `view.pixel.height` (size of one pixel in coordinate
   units; they differ when the axes are scaled differently). Variables and
@@ -274,7 +280,14 @@ files unless extracting a module clearly reduces complexity.
   and says why.
 - Levels count generations of zooms, with the seed at the last generation.
   Automatic levels are estimated as where the largest zoom falls below half a
-  working pixel, i.e. the fixed point. Canvas 2D treats that as an upper bound
+  working pixel, i.e. the fixed point, up to 256 levels. Non-shrinking zooms
+  retain the earlier 64-level cap because they cannot reach that threshold.
+  When an auto render reaches its limit, the collapsed settings header shows
+  a warning icon and a +256 levels button, and a highlighted note is appended
+  to the end of the render details line. Each click extends the auto limit,
+  continuing the existing worker render until details become too small to see
+  or the new limit is reached. There is no arbitrary manual-extension ceiling;
+  changing the picture or quality clears the extension. Canvas 2D treats that as an upper bound
   and stops early once a pass changes under 0.01% of its captured pixels;
   WebGL2 always renders the estimate, because per-level readbacks stall the
   GPU and feedback resampling keeps nudging pixels. Max recursion bounds how
@@ -337,6 +350,9 @@ files unless extracting a module clearly reduces complexity.
 - The panel overlays the canvas from the right, covering the wall label
   before the picture; it must never shift the image.
 - Hiding it must leave no gutter or visible residue.
+- It starts hidden when the address chooses a picture (`example`, `source`,
+  `q` or a fragment), and open otherwise. Definition errors open it so the
+  message is visible.
 - The single corner control sits in the window's top-right corner. It is an
   X while open and morphs into three lines before fading. Hovering near the
   top-right reveals it; reopening reverses the transition.
