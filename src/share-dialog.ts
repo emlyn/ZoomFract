@@ -319,12 +319,36 @@ export function createShareDialog(options: ShareDialogOptions) {
     { name: 'QR code', panel: qrPanel },
     { name: 'Definition', panel: definitionPanel },
     { name: 'PowerPoint', panel: powerPointPanel },
-  ].map(({ name, panel }) => {
+  ].map(({ name, panel }, index) => {
     const tab = button('share-tab', name);
+    tab.id = `share-tab-${index}`;
+    panel.id = `share-panel-${index}`;
     tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-controls', panel.id);
     panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', tab.id);
     tabList.append(tab);
     return { tab, panel };
+  });
+
+  // The tab list is one stop in the tab order; arrows move between tabs.
+  tabList.addEventListener('keydown', (event) => {
+    const current = tabs.findIndex(({ tab }) => tab === document.activeElement);
+    if (current < 0) {
+      return;
+    }
+    const next = {
+      ArrowLeft: current - 1,
+      ArrowRight: current + 1,
+      Home: 0,
+      End: tabs.length - 1,
+    }[event.key];
+    if (next !== undefined) {
+      event.preventDefault();
+      const index = (next + tabs.length) % tabs.length;
+      selectTab(index);
+      tabs[index].tab.focus();
+    }
   });
 
   dialog.append(header, ...tabs.map(({ panel }) => panel), status);
@@ -526,6 +550,7 @@ export function createShareDialog(options: ShareDialogOptions) {
   function showTab(index: number) {
     tabs.forEach(({ tab, panel }, tabIndex) => {
       tab.setAttribute('aria-selected', String(tabIndex === index));
+      tab.tabIndex = tabIndex === index ? 0 : -1;
       panel.hidden = tabIndex !== index;
     });
   }
@@ -604,10 +629,11 @@ export function createShareDialog(options: ShareDialogOptions) {
     }
   }
 
-  downloadDefinition.addEventListener('click', () => downloadBlob(
+  const saveDefinition = () => downloadBlob(
     new Blob([`${options.definition().trim()}\n`], { type: 'text/yaml' }),
     `zoomfract-${options.fileName()}.yaml`,
-  ));
+  );
+  downloadDefinition.addEventListener('click', saveDefinition);
   openDefinition.addEventListener('click', () => definitionFile.click());
   definitionFile.addEventListener('change', () => {
     const file = definitionFile.files?.[0];
@@ -706,7 +732,9 @@ export function createShareDialog(options: ShareDialogOptions) {
     close() {
       dialog.close();
     },
-    setImageReady(ready: boolean) {      imageReady = ready;
+    downloadDefinition: saveDefinition,
+    setImageReady(ready: boolean) {
+      imageReady = ready;
       if (!dialog.open) {
         return;
       }

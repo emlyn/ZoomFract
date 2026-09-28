@@ -1,0 +1,14 @@
+{
+  "name": "ZoomFract",
+  "short_name": "ZoomFract",
+  "description": "Recursive zoom fractals defined in YAML",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#020817",
+  "theme_color": "#020817",
+  "icons": [
+    { "src": "icon-243.png", "sizes": "243x243", "type": "image/png" },
+    { "src": "icon-729.png", "sizes": "729x729", "type": "image/png" }
+  ]
+}

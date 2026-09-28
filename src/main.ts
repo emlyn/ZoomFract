@@ -187,11 +187,22 @@ if (!app) {
   throw new Error('App root not found');
 }
 
+// The built app caches itself to work offline; development is always live.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js')
+    .catch((error: unknown) => console.warn('Offline support unavailable', error));
+}
+
 const shell = document.createElement('div');
 shell.className = 'app-shell';
 
+// Phone browsers tint their toolbars to match the wall.
+const themeColour = document.querySelector('meta[name="theme-color"]');
+
 const panel = document.createElement('aside');
 panel.className = 'sidebar';
+panel.id = 'panel';
+panel.setAttribute('aria-label', 'Settings');
 
 const panelResizeHandle = document.createElement('div');
 panelResizeHandle.className = 'panel-resize-handle';
@@ -202,7 +213,9 @@ panelResizeHandle.setAttribute('aria-orientation', 'vertical');
 const panelToggle = document.createElement('button');
 panelToggle.className = 'panel-toggle';
 panelToggle.type = 'button';
-panelToggle.setAttribute('aria-label', 'Hide panel');
+panelToggle.setAttribute('aria-label', 'Settings panel');
+panelToggle.setAttribute('aria-controls', panel.id);
+panelToggle.setAttribute('aria-expanded', 'true');
 
 const panelToggleIcon = document.createElement('span');
 panelToggleIcon.className = 'panel-toggle-icon';
@@ -215,12 +228,22 @@ const canvasFrame = document.createElement('div');
 canvasFrame.className = 'canvas-frame';
 
 const canvas = document.createElement('canvas');
+canvas.tabIndex = 0;
+canvas.setAttribute('role', 'img');
 const displayContext = canvas.getContext('2d')!;
 
 // A gallery-style label beside the framed picture, centred with it as a group.
 // Controls for the definition's inputs sit on a matching card next to it.
 const wallLabel = document.createElement('aside');
 wallLabel.className = 'wall-label';
+wallLabel.setAttribute('aria-label', 'Label');
+const wallLabelShare = document.createElement('button');
+wallLabelShare.type = 'button';
+wallLabelShare.className = 'wall-label-share';
+wallLabelShare.title = 'Share (S)';
+wallLabelShare.setAttribute('aria-label', 'Share');
+wallLabelShare.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M8 7l4-4 4 4M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>';
+wallLabelShare.addEventListener('click', () => shareDialog.open());
 const inputPanel = document.createElement('aside');
 inputPanel.className = 'wall-label input-panel';
 inputPanel.setAttribute('aria-label', 'Inputs');
@@ -244,7 +267,7 @@ function setPanelOpen(isOpen: boolean) {
   panel.classList.toggle('collapsed', !isOpen);
   shell.classList.toggle('panel-collapsed', !isOpen);
   shell.classList.remove('panel-handle-visible');
-  panelToggle.setAttribute('aria-label', isOpen ? 'Hide panel' : 'Show panel');
+  panelToggle.setAttribute('aria-expanded', String(isOpen));
 }
 
 panelToggle.addEventListener('click', () => {
@@ -258,6 +281,19 @@ if (urlChoosesPicture) {
   setPanelOpen(false);
 }
 
+const PANEL_MIN_WIDTH = 240;
+const PANEL_KEY_STEP = 16;
+panelResizeHandle.tabIndex = 0;
+panelResizeHandle.setAttribute('aria-valuemin', String(PANEL_MIN_WIDTH));
+
+const panelMaxWidth = () => Math.max(PANEL_MIN_WIDTH, Math.min(560, window.innerWidth * 0.6));
+
+function setPanelWidth(width: number) {
+  const clamped = Math.round(clamp(width, PANEL_MIN_WIDTH, panelMaxWidth()));
+  shell.style.setProperty('--panel-width', `${clamped}px`);
+  panelResizeHandle.setAttribute('aria-valuenow', String(clamped));
+}
+
 panelResizeHandle.addEventListener('pointerdown', (event) => {
   panelIsResizing = true;
   panelResizeHandle.setPointerCapture(event.pointerId);
@@ -269,9 +305,27 @@ panelResizeHandle.addEventListener('pointermove', (event) => {
     return;
   }
 
-  const width = clamp(window.innerWidth - event.clientX, 240, Math.min(560, window.innerWidth * 0.6));
-  shell.style.setProperty('--panel-width', `${width}px`);
-  panelResizeHandle.setAttribute('aria-valuenow', String(Math.round(width)));
+  setPanelWidth(window.innerWidth - event.clientX);
+});
+
+// The panel sits on the right, so Left widens it and Right narrows it.
+panelResizeHandle.addEventListener('keydown', (event) => {
+  const width = panel.getBoundingClientRect().width;
+  const next = {
+    ArrowLeft: width + PANEL_KEY_STEP,
+    ArrowRight: width - PANEL_KEY_STEP,
+    Home: PANEL_MIN_WIDTH,
+    End: panelMaxWidth(),
+  }[event.key];
+  if (next !== undefined) {
+    event.preventDefault();
+    setPanelWidth(next);
+  }
+});
+
+panelResizeHandle.addEventListener('focus', () => {
+  panelResizeHandle.setAttribute('aria-valuemax', String(Math.round(panelMaxWidth())));
+  panelResizeHandle.setAttribute('aria-valuenow', String(Math.round(panel.getBoundingClientRect().width)));
 });
 
 panelResizeHandle.addEventListener('pointerup', (event) => {
@@ -281,6 +335,9 @@ panelResizeHandle.addEventListener('pointerup', (event) => {
 });
 
 window.addEventListener('pointermove', (event) => {
+  if (event.pointerType !== 'mouse') {
+    return;
+  }
   if (panelIsOpen) {
     shell.classList.remove('panel-handle-visible');
     return;
@@ -288,6 +345,57 @@ window.addEventListener('pointermove', (event) => {
 
   const nearTopRight = event.clientX > window.innerWidth - 72 && event.clientY < 72;
   shell.classList.toggle('panel-handle-visible', nearTopRight);
+});
+
+// Touch screens cannot hover, so tapping the bare wall reveals or hides the
+// toggle, which fades again if left unused. Tapping the picture shows it alone,
+// filling the screen, and another tap anywhere brings the wall back.
+const TOGGLE_REVEAL_MS = 3000;
+let toggleHideTimer: number | undefined;
+let pictureOnly = false;
+
+function setPictureOnly(on: boolean) {
+  pictureOnly = on;
+  if (on) {
+    setPanelOpen(false);
+  }
+  shell.classList.toggle('picture-only', on);
+  shell.classList.remove('panel-handle-visible');
+  if (on && !document.fullscreenElement) {
+    // Fullscreen is a bonus; without it the picture still fills the window.
+    shell.requestFullscreen?.().catch(() => undefined);
+  } else if (!on && document.fullscreenElement) {
+    void document.exitFullscreen();
+  }
+  resizeCanvas();
+  drawDisplay();
+}
+
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && pictureOnly) {
+    setPictureOnly(false);
+  }
+});
+
+canvasHost.addEventListener('click', (event) => {
+  if (panelIsOpen) {
+    return;
+  }
+  if (pictureOnly) {
+    setPictureOnly(false);
+    return;
+  }
+  const target = event.target instanceof Element ? event.target : null;
+  const byMouse = event instanceof PointerEvent && event.pointerType === 'mouse';
+  if (target?.closest('canvas') && !state.scene.inputs.some(isPointInput)) {
+    setPictureOnly(true);
+  } else if (!byMouse && !target?.closest('.canvas-frame, .wall-label')) {
+    window.clearTimeout(toggleHideTimer);
+    const visible = shell.classList.toggle('panel-handle-visible');
+    if (visible) {
+      toggleHideTimer = window.setTimeout(() => shell.classList.remove('panel-handle-visible'), TOGGLE_REVEAL_MS);
+    }
+  }
 });
 
 const panelHeader = document.createElement('div');
@@ -686,6 +794,78 @@ exampleSelect.addEventListener('change', () => {
   void loadDefinitionLocation({ kind: 'example', id: example.id }, true);
 });
 
+const toggleCheckbox = (checkbox: HTMLInputElement) => {
+  checkbox.checked = !checkbox.checked;
+  checkbox.dispatchEvent(new Event('change'));
+};
+
+const setQuality = (quality: QualityMode) => {
+  qualityControl.select.value = quality;
+  qualityControl.select.dispatchEvent(new Event('change'));
+};
+
+const isTyping = (target: EventTarget | null) => target instanceof HTMLElement
+  && (target.isContentEditable || target.closest('input, textarea, select, .cm-editor') !== null);
+
+// Single keys act only when nothing is being typed; Ctrl combinations work
+// everywhere, including the editor, so they are caught before it sees them.
+const LETTER_SHORTCUTS: Record<string, () => void> = {
+  f: () => setPictureOnly(!pictureOnly),
+  p: () => setPanelOpen(!panelIsOpen),
+  s: () => shareDialog.open(),
+  '?': () => {
+    setPanelOpen(true);
+    setGuideOpen(guide.hidden);
+  },
+  l: () => toggleCheckbox(labelToggle),
+  e: () => toggleCheckbox(editModeToggle),
+  '+': () => setQuality('high'),
+  '=': () => setQuality('high'),
+  '-': () => setQuality('fast'),
+};
+
+window.addEventListener('keydown', (event) => {
+  if (shareDialog.element.open || event.altKey) {
+    return;
+  }
+  const key = event.key.toLowerCase();
+  if (event.ctrlKey || event.metaKey) {
+    if (key === 'enter') {
+      applySceneButton.click();
+    } else if (key === 's') {
+      shareDialog.downloadDefinition();
+    } else {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (key === 'escape') {
+    if (pictureOnly) {
+      setPictureOnly(false);
+    } else if (!guide.hidden && panelIsOpen) {
+      setGuideOpen(false);
+    } else if (panelIsOpen && !isTyping(event.target)) {
+      setPanelOpen(false);
+    } else {
+      return;
+    }
+    event.preventDefault();
+    return;
+  }
+  if (key === 'enter' && event.target === canvas) {
+    setPictureOnly(!pictureOnly);
+    event.preventDefault();
+    return;
+  }
+  const action = LETTER_SHORTCUTS[key];
+  if (action && !isTyping(event.target)) {
+    action();
+    event.preventDefault();
+  }
+}, { capture: true });
+
 controls.append(
   qualityControl.row,
   customSettings,
@@ -897,9 +1077,11 @@ function updateWallLabel() {
     labelElement('p', 'wall-label-medium', describeMedium(state.scene, state.rendered).join('\n')),
     ...(info.description ? [labelElement('p', 'wall-label-description', info.description)] : []),
     ...(info.links.length > 0 ? [links] : []),
+    wallLabelShare,
   );
   const hasInfo = Boolean(info.title || info.author || info.date || info.description || info.links.length > 0);
   wallLabel.hidden = !labelToggle.checked || !hasInfo;
+  canvas.setAttribute('aria-label', [info.title ?? 'ZoomFract picture', info.description].filter(Boolean).join('. '));
   resizeCanvas();
 }
 
@@ -1000,6 +1182,38 @@ function pointerPosition(event: PointerEvent): { pixel: Vec2; scene: Vec2 } {
 // Pressing the picture moves the nearest point input there; drag inputs
 // then follow the pointer until it is released.
 let draggingInput: string | null = null;
+// The arrow keys move the point last pressed, and Space picks the next one.
+let keyboardInput: string | null = null;
+const KEY_STEP_FRACTION = 0.01;
+const KEY_STEP_SHIFT_FRACTION = 0.1;
+
+canvas.addEventListener('keydown', (event) => {
+  const pointInputs = state.scene.inputs.filter(isPointInput);
+  if (pointInputs.length === 0 || event.ctrlKey || event.metaKey || event.altKey) {
+    return;
+  }
+  const index = Math.max(0, pointInputs.findIndex((input) => input.name === keyboardInput));
+  if (event.key === ' ') {
+    event.preventDefault();
+    const next = pointInputs[(index + 1) % pointInputs.length];
+    keyboardInput = next.name;
+    showSceneStatus(`Arrow keys move ${next.label}`);
+    return;
+  }
+  const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[event.key];
+  if (!direction) {
+    return;
+  }
+  event.preventDefault();
+  const input = pointInputs[index];
+  keyboardInput = input.name;
+  const { x, y } = state.scene.view.coordinates;
+  const step = event.shiftKey ? KEY_STEP_SHIFT_FRACTION : KEY_STEP_FRACTION;
+  const move = (value: number, range: typeof x, sign: number) =>
+    clamp(value + sign * step * (range.to - range.from), Math.min(range.from, range.to), Math.max(range.from, range.to));
+  setInputValue(input.name, { x: move(input.value.x, x, direction[0]), y: move(input.value.y, y, direction[1]) }, false);
+  scheduleSettledRender();
+});
 
 canvas.addEventListener('pointerdown', (event) => {
   const pointInputs = state.scene.inputs.filter(isPointInput);
@@ -1013,6 +1227,7 @@ canvas.addEventListener('pointerdown', (event) => {
     return Math.hypot(at.x - pixel.x, at.y - pixel.y);
   };
   const nearest = pointInputs.reduce((best, input) => distance(input) < distance(best) ? input : best);
+  keyboardInput = nearest.name;
   if (nearest.type === 'drag') {
     draggingInput = nearest.name;
     canvas.setPointerCapture(event.pointerId);
@@ -1039,15 +1254,23 @@ canvas.addEventListener('pointercancel', endDrag);
 // inputs, which go beside it or, when that leaves a bigger picture, underneath.
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
-  const frame = state.scene.frame;
   const resolution = state.scene.view.resolution;
+  // Alone, the picture drops its frame, margin and cards but keeps its background.
+  const frame = pictureOnly
+    ? { ...state.scene.frame, width: 0, padding: 0, margin: 0, radius: 0, wall: state.scene.frame.background }
+    : state.scene.frame;
   const frameSpace = 2 * (frame.width + frame.padding);
-  const availableWidth = Math.max(1, host.width - 2 * frame.margin - frameSpace);
-  const availableHeight = Math.max(1, host.height - 2 * frame.margin - frameSpace);
+  // Notched phones add safe-area insets to the margin.
+  canvasHost.style.padding = (['top', 'right', 'bottom', 'left'] as const)
+    .map((side) => `calc(${frame.margin}px + env(safe-area-inset-${side}))`).join(' ');
+  const hostStyle = getComputedStyle(canvasHost);
+  const inset = (side: 'Top' | 'Right' | 'Bottom' | 'Left') => parseFloat(hostStyle[`padding${side}`]);
+  const availableWidth = Math.max(1, host.width - inset('Left') - inset('Right') - frameSpace);
+  const availableHeight = Math.max(1, host.height - inset('Top') - inset('Bottom') - frameSpace);
   const scaleWithin = (width: number, height: number) =>
     Math.max(0, Math.min(width / resolution.width, height / resolution.height));
   // Cards stack beside the picture and sit side by side underneath it.
-  const cards = [inputPanel, wallLabel].filter((card) => !card.hidden);
+  const cards = pictureOnly ? [] : [inputPanel, wallLabel].filter((card) => !card.hidden);
   artworkSide.hidden = cards.length === 0;
   const sideWidth = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetWidth)) + WALL_LABEL_GAP_PX;
   const sideHeight = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetHeight)) + WALL_LABEL_GAP_PX;
@@ -1058,7 +1281,7 @@ function resizeCanvas() {
   artwork.classList.toggle('label-below', labelBelow);
 
   canvasHost.style.backgroundColor = frame.wall;
-  canvasHost.style.padding = `${frame.margin}px`;
+  themeColour?.setAttribute('content', frame.wall);
   canvasFrame.style.padding = `${frame.padding}px`;
   canvasFrame.style.borderWidth = `${frame.width}px`;
   canvasFrame.style.borderColor = frame.color;

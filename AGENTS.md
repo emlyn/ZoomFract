@@ -44,6 +44,9 @@ Do not commit generated or local artifacts:
 - `src/share.ts`: shared-link encoding, loaded on demand with its dictionary.
 - `src/share-dialog.ts`: the Share dialog for images, links, QR codes,
   definition files and PowerPoint files.
+- `src/service-worker.js`: production-only offline cache behavior. The Vite
+  plugin in `vite.config.ts` prepends the complete built-file list and a
+  content-derived cache name to `dist/sw.js`.
 - `src/pptx.ts`: PowerPoint export, a hand-written OOXML package in an
   uncompressed zip with no dependencies.
 - `src/expression.ts`: arithmetic expression parser and evaluator.
@@ -58,6 +61,9 @@ Do not commit generated or local artifacts:
 - `src/render/unroll.ts`: exact clipped geometry for unrolled WebGL2 zooms.
 - `src/render/canvas2d.ts`: reference Canvas 2D renderer.
 - `src/examples.ts`: built-in example registry (IDs and file imports).
+- `public/`: favicon, home-screen icons and web app manifest. The icons
+  are the Sierpinski carpet rendered by the app at powers of 3 (81, 243
+  and 729 px) so its holes stay pixel-aligned, on white.
 - `src/examples/*.yaml`: loadable example scene definitions.
 - `src/style.css`: full-window layout, overlay panel, controls, animations,
   and canvas presentation.
@@ -358,8 +364,41 @@ files unless extracting a module clearly reduces complexity.
   message is visible.
 - The single corner control sits in the window's top-right corner. It is an
   X while open and morphs into three lines before fading. Hovering near the
-  top-right reveals it; reopening reverses the transition.
-- The left panel edge is draggable.
+  top-right reveals it; on touch screens, tapping the bare wall (not the
+  picture or its cards) reveals or hides it, and it fades after 3 s if
+  unused. Reopening reverses the transition.
+- Tapping or clicking the picture (not when it has point inputs) shows
+  it alone: no frame, margin, cards or toggle, filling the window (and the
+  screen, where fullscreen is allowed) on the frame background. Any tap or
+  leaving fullscreen returns to the wall.
+- Keyboard shortcuts live in one capture-phase `keydown` handler in
+  `main.ts` and are listed in the guide's Keyboard shortcuts section. Letter
+  keys are ignored while typing in a field or the editor; Ctrl/Cmd combos
+  (Enter applies, S downloads the definition) work everywhere. All are off
+  while the Share dialog is open. The canvas is focusable (`role="img"`,
+  labelled from the title and description) so Enter toggles picture-only.
+  When the scene has point inputs, arrows on the focused canvas move the
+  last-pressed one (1% of the view, Shift 10%) and Space picks the next.
+- The toggle has a constant label with `aria-expanded`. The wall label has a
+  share button in its top-right corner.
+- Share dialog tabs use a roving tabindex: one Tab stop, arrows and
+  Home/End move between tabs.
+- `viewport-fit=cover` lets the page reach under notches; the toggle,
+  panel, guide and wall margin add `env(safe-area-inset-*)`. The
+  `theme-color` meta follows the frame wall. Forced-colors mode keeps the
+  toggle, resize edge and progress bar visible with system colours and
+  leaves the wall and label as the artwork defines them.
+- The left panel edge is draggable, and focusable: Left/Right arrows resize
+  it, Home/End jump to the limits.
+- Below 700 px wide the panel and guide fill the screen and the resize edge
+  is hidden. Coarse pointers get 44 px touch targets. Reduced-motion
+  preferences switch transitions off. Heights use `dvh` so mobile toolbars
+  do not clip the page.
+- Production registers `sw.js`; development does not. The build lists and
+  precaches every output file. Navigations try the network first and fall
+  back to the cached app, while content-hashed assets use the cache first.
+  This keeps bundled examples, rendering and exports available offline;
+  remote `?source=` definitions and external links still need a connection.
 - The controls scroll within the panel when the window is too short.
 - Share opens a modal dialog (`src/share-dialog.ts`) with Image (preview,
   size, transparency, copy and download), Link (optional input values and app
