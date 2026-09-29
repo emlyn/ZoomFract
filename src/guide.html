@@ -63,6 +63,17 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     picture without starting over. Each click allows another 256 levels, stopping
     sooner if they become too small to see; changing the picture or quality starts fresh.
   </p>
+  <p>
+    Quality also controls output resolution. <em>Fast</em> draws at half the display's
+    physical resolution, <em>Display</em> matches it, <em>High quality</em> is 1200
+    pixels high, and <em>Print</em> is 3000 pixels high. <em>Custom</em> lets you give
+    either width or height; the other dimension follows the scene's aspect and is shown
+    in grey. Entering a value in that field makes it the controlling dimension instead.
+    If the supersampled working image exceeds either the device's WebGL texture size
+    or ZoomFract's practical GPU capacity limit, the output is reduced proportionally
+    and a warning appears beside <em>Render quality</em>. Large WebGL failures do not
+    fall back automatically to an even more expensive Canvas 2D render.
+  </p>
 </section>
 
 <section id="guide-editor">
@@ -117,22 +128,14 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
 
 <section id="guide-view">
   <h3>View</h3>
-  <p>The view sets the shape of the picture, how many pixels it has, and its coordinates.</p>
+  <p>The view sets the shape of the picture and its coordinates. Quality controls its pixels.</p>
   <pre><code>view:
   aspect: 4/3          # width divided by height
-  resolution:
-    height: 1200       # in pixels
   coordinates:
     x: [-4, 4]         # left edge, right edge
     y: [-3, 3]         # bottom edge, top edge</code></pre>
   <ul>
     <li><code>aspect</code> is the width divided by the height. The default is 1 (square).</li>
-    <li>
-      <code>resolution</code> may give <code>width</code>, <code>height</code>, or both.
-      A missing one is worked out from the aspect. If both are given, they set the aspect.
-      Without a resolution the picture is 1200 pixels high.
-      The resolution is the whole picture, including any overflow.
-    </li>
     <li>
       <code>coordinates</code> sets the numbers used to place things. <code>x</code> goes
       from left to right, and <code>y</code> goes from bottom to top, as in maths.
@@ -334,7 +337,7 @@ seed:
     softness: 0.3      # 0 is a solid band, 1 (the default) fades over the whole size</code></pre>
   <ul>
     <li>A zoom's glow follows the shapes in its copy.</li>
-    <li>Use <code>size: 8 * view.pixel.width</code> for a glow about 8 pixels wide.</li>
+    <li>Glow size is part of the scene, so it stays proportional when quality changes.</li>
     <li>Glows are copied into zooms along with everything else.</li>
     <li>Glows are cut off at the edge of the picture; add a view <code>overflow</code>, or <code>overflow: auto</code>, to make room.</li>
     <li>Glows need the WebGL2 renderer and cannot be used with density shading.</li>
@@ -482,8 +485,6 @@ scene:
     <tr><th><code>view.centre.x</code>, <code>view.centre.y</code></th><td>middle of the view</td></tr>
     <tr><th><code>view.aspect</code></th><td>width divided by height</td></tr>
     <tr><th><code>view.overflow</code></th><td>border around the view in coordinates</td></tr>
-    <tr><th><code>view.pixels.width</code>, <code>view.pixels.height</code></th><td>size of the whole picture in pixels</td></tr>
-    <tr><th><code>view.pixel.width</code>, <code>view.pixel.height</code></th><td>size of one pixel in coordinates</td></tr>
   </table>
   <pre><code>view:
   aspect: 3/2

@@ -483,13 +483,23 @@ canvas {
 }
 
 .select-row select,
+.resolution-row input,
 .example-row select {
+  height: 2rem;
   min-width: 7rem;
   border: 1px solid rgba(212, 212, 216, 0.18);
   border-radius: 0.6rem;
   background: rgba(63, 63, 66, 0.78);
   color: #f4f4f5;
-  padding: 0.4rem 0.55rem;
+  padding: 0 0.55rem;
+}
+
+.resolution-row input {
+  width: 7rem;
+}
+
+.resolution-row input.inferred {
+  color: #a1a1aa;
 }
 
 .levels-row input {
@@ -526,12 +536,49 @@ canvas {
 }
 
 .render-settings summary {
-  width: fit-content;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  list-style: none;
   cursor: pointer;
   color: #a1a1aa;
   font-size: 0.78rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.render-settings summary::-webkit-details-marker {
+  display: none;
+}
+
+.render-settings summary::before {
+  flex: none;
+  width: 0.75rem;
+  content: '\25b6';
+  color: currentColor;
+  font-size: 0.65rem;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.render-settings[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.render-settings summary .quality-select {
+  height: 2rem;
+  min-width: 7rem;
+  margin-left: auto;
+  border: 1px solid rgba(212, 212, 216, 0.18);
+  border-radius: 0.6rem;
+  background: rgba(63, 63, 66, 0.78);
+  color: #f4f4f5;
+  padding: 0 0.55rem;
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
 }
 
 .render-settings summary:hover {
@@ -1048,6 +1095,8 @@ code {
 /* Touch screens get finger-sized targets. */
 @media (pointer: coarse) {
   .select-row select,
+  .resolution-row input,
+  .quality-select,
   .example-row select,
   .apply-scene,
   .input-reset,

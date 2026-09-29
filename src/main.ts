@@ -10,6 +10,7 @@ import {
 import {
   EXTRA_LEVELS_STEP,
   GPU_LOST_MESSAGE,
+  MAX_WEBGL_WORKING_PIXELS,
   MAXIMUM_LEVELS,
   MAXIMUM_RECURSION_CHOICE,
   QUALITY_LABELS,
@@ -21,6 +22,7 @@ import {
   elementCorners,
   scenePointToCanvas,
   type QualityMode,
+  type QualityOptions,
   type RenderMessage,
   type RenderOptions,
   type RenderRequest,
@@ -33,8 +35,10 @@ import {
   parseScene,
   reframeZoom,
   viewFrame,
+  withResolution,
   type InputValue,
   type InputValues,
+  type ResolvedSceneDefinition,
   type SceneDefinition,
   type SceneInput,
   type Vec2,
@@ -367,8 +371,11 @@ function setPictureOnly(on: boolean) {
   } else if (!on && document.fullscreenElement) {
     void document.exitFullscreen();
   }
-  resizeCanvas();
-  drawDisplay();
+  if (resizeCanvas()) {
+    render();
+  } else {
+    drawDisplay();
+  }
 }
 
 document.addEventListener('fullscreenchange', () => {
@@ -408,24 +415,34 @@ controls.className = 'controls';
 // The slider's rightmost position selects automatic levels.
 const AUTO_LEVELS_POSITION = MAXIMUM_LEVELS + 1;
 
-const renderOptions = (): RenderOptions =>
+const renderOptions = (): QualityOptions =>
   state.quality === 'custom' ? customOptions() : QUALITY_MODES[state.quality];
 
 // Custom starts from the first mode it is opened from, then keeps its own values.
-const customOptions = (): RenderOptions => {
-  state.custom ??= state.quality === 'custom' ? QUALITY_MODES.high : QUALITY_MODES[state.quality];
+const customOptions = (): QualityOptions => {
+  const source = state.quality === 'custom' ? QUALITY_MODES.high : QUALITY_MODES[state.quality];
+  state.custom ??= {
+    ...source,
+    resolution: { mode: 'fixed', height: Math.max(1, canvas.height) },
+  };
   return state.custom;
 };
 
-const updateCustomOptions = (update: Partial<RenderOptions>) => {
+const updateCustomOptions = (update: Partial<QualityOptions>) => {
   state.custom = { ...customOptions(), ...update };
+  syncQualityControls();
+  render();
+};
+
+const updateCustomResolution = (width: number | undefined, height: number | undefined) => {
+  state.custom = { ...customOptions(), resolution: { mode: 'fixed', width, height } };
   syncQualityControls();
   render();
 };
 
 const qualityControl = selectRow<QualityMode>(
   'quality-row',
-  'Quality',
+  'Render quality',
   Object.entries(QUALITY_LABELS) as [QualityMode, string][],
   (quality) => {
     if (quality === 'custom') {
@@ -437,6 +454,9 @@ const qualityControl = selectRow<QualityMode>(
     render();
   },
 );
+qualityControl.select.className = 'quality-select';
+qualityControl.select.setAttribute('aria-label', 'Render quality');
+qualityControl.select.addEventListener('click', (event) => event.stopPropagation());
 
 const rendererControl = selectRow<RendererName>(
   'renderer-row',
@@ -464,6 +484,38 @@ const recursionControl = selectRow<number>(
 );
 recursionControl.row.title = 'How many levels of zooms are drawn precisely as shapes. Deeper levels reuse '
   + 'an earlier picture, which is faster but slightly blurrier. Higher values are sharper but slower.';
+
+function resolutionInput(label: string) {
+  const row = document.createElement('label');
+  row.className = 'select-row resolution-row';
+  const caption = document.createElement('span');
+  caption.textContent = label;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.step = '1';
+  input.inputMode = 'numeric';
+  row.append(caption, input);
+  return { row, input };
+}
+
+const widthControl = resolutionInput('Width');
+const heightControl = resolutionInput('Height');
+widthControl.row.title = 'Output width in pixels. Leave blank to infer it from height and the scene aspect.';
+heightControl.row.title = 'Output height in pixels. Leave blank to infer it from width and the scene aspect.';
+const updateResolutionInput = (changed: 'width' | 'height') => {
+  const input = changed === 'width' ? widthControl.input : heightControl.input;
+  const other = changed === 'width' ? heightControl.input : widthControl.input;
+  const value = input.valueAsNumber;
+  if (!Number.isFinite(value) || value < 1) {
+    input.value = '';
+    return;
+  }
+  other.value = '';
+  updateCustomResolution(changed === 'width' ? Math.round(value) : undefined, changed === 'height' ? Math.round(value) : undefined);
+};
+widthControl.input.addEventListener('change', () => updateResolutionInput('width'));
+heightControl.input.addEventListener('change', () => updateResolutionInput('height'));
 
 const levelsRow = document.createElement('label');
 levelsRow.className = 'levels-row';
@@ -497,7 +549,7 @@ const customSettings = document.createElement('details');
 customSettings.className = 'render-settings';
 const customSettingsSummary = document.createElement('summary');
 const renderSettingsLabel = document.createElement('span');
-renderSettingsLabel.textContent = 'Render settings';
+renderSettingsLabel.textContent = 'Render quality';
 const levelLimitWarning = document.createElement('span');
 levelLimitWarning.className = 'level-limit-warning';
 levelLimitWarning.innerHTML = '&#9888;';
@@ -505,6 +557,11 @@ levelLimitWarning.setAttribute('role', 'img');
 levelLimitWarning.setAttribute('aria-label', 'Automatic level limit reached; more detail may be visible');
 levelLimitWarning.title = 'Automatic level limit reached; more detail may be visible';
 levelLimitWarning.hidden = true;
+const textureLimitWarning = document.createElement('span');
+textureLimitWarning.className = 'level-limit-warning texture-limit-warning';
+textureLimitWarning.innerHTML = '&#9888;';
+textureLimitWarning.setAttribute('role', 'img');
+textureLimitWarning.hidden = true;
 const extendLevelsButton = document.createElement('button');
 extendLevelsButton.type = 'button';
 extendLevelsButton.className = 'add-level extend-levels';
@@ -519,7 +576,13 @@ extendLevelsButton.addEventListener('click', (event) => {
     render();
   }
 });
-customSettingsSummary.append(renderSettingsLabel, levelLimitWarning, extendLevelsButton);
+customSettingsSummary.append(
+  renderSettingsLabel,
+  levelLimitWarning,
+  textureLimitWarning,
+  extendLevelsButton,
+  qualityControl.select,
+);
 const customSettingsBody = document.createElement('div');
 customSettingsBody.className = 'render-settings-body';
 const qualityDetails = document.createElement('div');
@@ -537,17 +600,24 @@ function setQualityDetails(parts: string[], note: string | null) {
   highlight.textContent = note;
   qualityDetails.append(' · ', highlight);
 }
-customSettingsBody.append(rendererControl.row, supersamplingControl.row, recursionControl.row, levelsRow, qualityDetails);
+customSettingsBody.append(
+  widthControl.row,
+  heightControl.row,
+  rendererControl.row,
+  supersamplingControl.row,
+  recursionControl.row,
+  levelsRow,
+  qualityDetails,
+);
 customSettings.append(customSettingsSummary, customSettingsBody);
 
-// The quality select and the collapsed settings header both show what the
-// latest render actually used.
+// The collapsed settings header shows what the latest render actually used.
 const setSettingsTitle = (text: string) => {
-  qualityControl.row.title = text;
   customSettingsSummary.title = text;
+  qualityControl.select.title = text;
 };
 
-// Fast and High quality show their fixed settings read-only.
+// Presets show their fixed settings read-only.
 function syncQualityControls() {
   qualityControl.setValue(state.quality);
   const isCustom = state.quality === 'custom';
@@ -556,11 +626,29 @@ function syncQualityControls() {
   rendererControl.setValue(options.renderer);
   supersamplingControl.setValue(options.supersampling);
   recursionControl.setValue(options.recursionDepth);
+  const resolution = isCustom
+    ? outputResolution(state.scene, { width: canvas.width, height: canvas.height }, options)
+    : null;
+  widthControl.input.value = String(resolution?.requestedWidth ?? canvas.width);
+  heightControl.input.value = String(resolution?.requestedHeight ?? canvas.height);
+  const inferredWidth = isCustom && options.resolution.mode === 'fixed' && options.resolution.width === undefined;
+  const inferredHeight = isCustom && options.resolution.mode === 'fixed' && options.resolution.height === undefined;
+  widthControl.input.classList.toggle('inferred', inferredWidth);
+  heightControl.input.classList.toggle('inferred', inferredHeight);
+  widthControl.input.title = inferredWidth ? 'Calculated from height and the scene aspect' : 'Output width in pixels';
+  heightControl.input.title = inferredHeight ? 'Calculated from width and the scene aspect' : 'Output height in pixels';
   levelsSlider.value = String(options.levels === 'auto' ? AUTO_LEVELS_POSITION : options.levels);
   levelsValue.textContent = isAuto
     ? `Auto${state.resolvedLevels === null ? '' : ` (${state.resolvedLevels})`}`
     : String(options.levels);
-  for (const control of [rendererControl.select, supersamplingControl.select, recursionControl.select, levelsSlider]) {
+  for (const control of [
+    widthControl.input,
+    heightControl.input,
+    rendererControl.select,
+    supersamplingControl.select,
+    recursionControl.select,
+    levelsSlider,
+  ]) {
     control.disabled = !isCustom;
   }
   addLevelButton.disabled = !isCustom || options.levels === 'auto' || options.levels >= MAXIMUM_LEVELS;
@@ -674,6 +762,9 @@ guideBody.addEventListener('click', (event) => {
 const sceneEditor = createSceneEditor(DEFAULT_SCENE_TEXT, () => {
   exampleSelect.value = '';
 });
+// Input values from an invalid shared definition wait here until its text is
+// repaired. The visible controls continue to belong to the last valid scene.
+let pendingEditorInputValues: InputValues | null = null;
 
 const wrapRow = document.createElement('label');
 wrapRow.className = 'edit-mode-row';
@@ -698,7 +789,12 @@ sceneStatus.setAttribute('role', 'status');
 
 applySceneButton.addEventListener('click', () => {
   definitionLoadRevision += 1;
-  applyDefinition(sceneEditor.text(), { kind: 'custom' }, true, state.inputValues);
+  applyDefinition(
+    sceneEditor.text(),
+    { kind: 'custom' },
+    true,
+    pendingEditorInputValues ?? state.inputValues,
+  );
 });
 
 const labelRow = document.createElement('label');
@@ -711,6 +807,7 @@ labelToggle.checked = true;
 labelRow.append(labelToggle);
 labelToggle.addEventListener('change', () => {
   updateWallLabel();
+  render();
 });
 
 const shareButton = document.createElement('button');
@@ -867,7 +964,6 @@ window.addEventListener('keydown', (event) => {
 }, { capture: true });
 
 controls.append(
-  qualityControl.row,
   customSettings,
   exampleRow,
   sceneLabelRow,
@@ -885,8 +981,8 @@ app.append(shell);
 
 const baseScene = parseScene(DEFAULT_SCENE_TEXT);
 const state = {
-  quality: 'high' as QualityMode,
-  custom: null as RenderOptions | null,
+  quality: 'display' as QualityMode,
+  custom: null as QualityOptions | null,
   resolvedLevels: null as number | null,
   editMode: false,
   offsetX: 0,
@@ -918,6 +1014,7 @@ function applyDefinition(
   location: DefinitionLocation,
   updateUrl: boolean,
   inputValues: InputValues = new Map(),
+  keepInvalidText = false,
 ): boolean {
   try {
     const nextScene = parseScene(text, inputValues);
@@ -930,6 +1027,7 @@ function applyDefinition(
       return value !== undefined && typeof value === typeof input.value ? [[input.name, value]] : [];
     }));
     state.definitionLocation = location;
+    pendingEditorInputValues = null;
     sceneEditor.setText(text.trim());
 
     exampleSelect.value = location.kind === 'example' ? findExample(location.id)?.id ?? '' : '';
@@ -945,6 +1043,14 @@ function applyDefinition(
     }
     return true;
   } catch (error) {
+    if (keepInvalidText) {
+      pendingEditorInputValues = inputValues;
+      sceneEditor.setText(text.trim());
+      exampleSelect.value = '';
+      if (updateUrl) {
+        updateDefinitionUrl(location);
+      }
+    }
     showSceneStatus(error instanceof Error ? error.message : 'Invalid scene definition', true);
     return false;
   }
@@ -973,7 +1079,7 @@ async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: b
       if (revision !== definitionLoadRevision) {
         return;
       }
-      applyDefinition(text, location, updateUrl);
+      applyDefinition(text, location, updateUrl, new Map(), true);
     } catch (error) {
       if (revision !== definitionLoadRevision) {
         return;
@@ -998,7 +1104,7 @@ async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: b
         labelToggle.checked = settings.label;
         syncQualityControls();
       }
-      if (applyDefinition(text, location, updateUrl, inputs) && renderChanged) {
+      if (applyDefinition(text, location, updateUrl, inputs, true) && renderChanged) {
         render();
       }
     } catch (error) {
@@ -1032,7 +1138,7 @@ function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered)
     ...(scene.elements.some((element) => element.glow) ? ['glow'] : []),
     ...(scene.shading.mode === 'density' ? ['density shading'] : []),
   ];
-  const { width, height } = scene.view.resolution;
+  const { width, height } = canvas;
   return [
     ...(parts.length > 0 ? [parts.join(', ')] : []),
     `${width} × ${height} px`,
@@ -1082,7 +1188,7 @@ function updateWallLabel() {
   const hasInfo = Boolean(info.title || info.author || info.date || info.description || info.links.length > 0);
   wallLabel.hidden = !labelToggle.checked || !hasInfo;
   canvas.setAttribute('aria-label', [info.title ?? 'ZoomFract picture', info.description].filter(Boolean).join('. '));
-  resizeCanvas();
+  return resizeCanvas();
 }
 
 const formatInputNumber = (value: number) => String(Number(value.toPrecision(4)));
@@ -1223,7 +1329,7 @@ canvas.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   const { pixel, scene } = pointerPosition(event);
   const distance = (input: PointInput) => {
-    const at = scenePointToCanvas(input.value, state.scene);
+    const at = scenePointToCanvas(input.value, resolvedScene());
     return Math.hypot(at.x - pixel.x, at.y - pixel.y);
   };
   const nearest = pointInputs.reduce((best, input) => distance(input) < distance(best) ? input : best);
@@ -1250,11 +1356,116 @@ const endDrag = () => {
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
 
+const outputAspect = (scene: SceneDefinition) => {
+  const widthGrowth = Math.abs(
+    (scene.view.coordinates.x.to - scene.view.coordinates.x.from)
+    / (scene.view.declared.x.to - scene.view.declared.x.from),
+  );
+  const heightGrowth = Math.abs(
+    (scene.view.coordinates.y.to - scene.view.coordinates.y.from)
+    / (scene.view.declared.y.to - scene.view.declared.y.from),
+  );
+  return scene.view.aspect * widthGrowth / heightGrowth;
+};
+
+const fitAspect = (aspect: number, width: number, height: number) => {
+  const fittedWidth = Math.min(width, height * aspect);
+  return { width: Math.max(1, fittedWidth), height: Math.max(1, fittedWidth / aspect) };
+};
+
+let webglMaximumTextureSize: number | null | undefined;
+function maximumTextureSize() {
+  if (webglMaximumTextureSize !== undefined) {
+    return webglMaximumTextureSize;
+  }
+  const gl = document.createElement('canvas').getContext('webgl2');
+  webglMaximumTextureSize = gl
+    ? Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE))
+    : null;
+  gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  return webglMaximumTextureSize;
+}
+
+type OutputResolution = {
+  width: number;
+  height: number;
+  requestedWidth: number;
+  requestedHeight: number;
+  textureLimit: number | null;
+  workingPixelLimit: number;
+};
+
+function outputResolution(
+  scene: SceneDefinition,
+  display: { width: number; height: number },
+  options: QualityOptions,
+): OutputResolution {
+  const aspect = outputAspect(scene);
+  let requestedWidth: number;
+  let requestedHeight: number;
+  if (options.resolution.mode === 'display') {
+    const scale = options.resolution.scale * window.devicePixelRatio;
+    requestedWidth = Math.max(1, Math.round(display.width * scale));
+    requestedHeight = Math.max(1, Math.round(display.height * scale));
+    const displayLimit = Math.min(1, options.resolution.maxSide / Math.max(requestedWidth, requestedHeight));
+    requestedWidth = Math.max(1, Math.round(requestedWidth * displayLimit));
+    requestedHeight = Math.max(1, Math.round(requestedHeight * displayLimit));
+  } else {
+    const { width, height } = options.resolution;
+    if (width !== undefined) {
+      requestedWidth = width;
+      requestedHeight = Math.max(1, Math.round(width / aspect));
+    } else {
+      requestedHeight = height ?? 1200;
+      requestedWidth = Math.max(1, Math.round(requestedHeight * aspect));
+    }
+  }
+  const textureLimit = options.renderer === 'webgl' ? maximumTextureSize() : null;
+  const factor = options.supersampling;
+  const workingSide = Math.max(requestedWidth, requestedHeight) * factor;
+  const workingPixels = requestedWidth * requestedHeight * factor * factor;
+  const dimensionScale = textureLimit === null ? 1 : textureLimit / workingSide;
+  const areaScale = Math.sqrt(MAX_WEBGL_WORKING_PIXELS / workingPixels);
+  const scale = options.renderer === 'webgl' ? Math.min(1, dimensionScale, areaScale) : 1;
+  return {
+    width: Math.max(1, Math.floor(requestedWidth * scale)),
+    height: Math.max(1, Math.floor(requestedHeight * scale)),
+    requestedWidth,
+    requestedHeight,
+    textureLimit,
+    workingPixelLimit: MAX_WEBGL_WORKING_PIXELS,
+  };
+}
+
+function showTextureLimit(resolution: OutputResolution, options: QualityOptions) {
+  const constrained = resolution.width !== resolution.requestedWidth
+    || resolution.height !== resolution.requestedHeight;
+  textureLimitWarning.hidden = !constrained;
+  if (!constrained) {
+    textureLimitWarning.removeAttribute('aria-label');
+    textureLimitWarning.removeAttribute('title');
+    return;
+  }
+  const requested = `${resolution.requestedWidth} × ${resolution.requestedHeight}`;
+  const actual = `${resolution.width} × ${resolution.height}`;
+  const dimensionLimit = resolution.textureLimit === null
+    ? 'the available WebGL texture size'
+    : `${resolution.textureLimit}px`;
+  const message = `Requested ${requested} px output needs `
+    + `${Math.max(resolution.requestedWidth, resolution.requestedHeight) * options.supersampling}px textures and `
+    + `${Math.round(resolution.requestedWidth * resolution.requestedHeight * options.supersampling ** 2 / 1_000_000)} million working pixels. `
+    + `The limits are ${dimensionLimit} and ${Math.round(resolution.workingPixelLimit / 1_000_000)} million pixels. `
+    + `Output reduced to ${actual} px.`;
+  textureLimitWarning.setAttribute('aria-label', message);
+  textureLimitWarning.title = message;
+}
+
 // The picture takes the largest size that leaves room for the label and
 // inputs, which go beside it or, when that leaves a bigger picture, underneath.
+// The preset then chooses the independent bitmap resolution for that CSS size.
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
-  const resolution = state.scene.view.resolution;
+  const aspect = outputAspect(state.scene);
   // Alone, the picture drops its frame, margin and cards but keeps its background.
   const frame = pictureOnly
     ? { ...state.scene.frame, width: 0, padding: 0, margin: 0, radius: 0, wall: state.scene.frame.background }
@@ -1267,17 +1478,18 @@ function resizeCanvas() {
   const inset = (side: 'Top' | 'Right' | 'Bottom' | 'Left') => parseFloat(hostStyle[`padding${side}`]);
   const availableWidth = Math.max(1, host.width - inset('Left') - inset('Right') - frameSpace);
   const availableHeight = Math.max(1, host.height - inset('Top') - inset('Bottom') - frameSpace);
-  const scaleWithin = (width: number, height: number) =>
-    Math.max(0, Math.min(width / resolution.width, height / resolution.height));
   // Cards stack beside the picture and sit side by side underneath it.
   const cards = pictureOnly ? [] : [inputPanel, wallLabel].filter((card) => !card.hidden);
   artworkSide.hidden = cards.length === 0;
   const sideWidth = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetWidth)) + WALL_LABEL_GAP_PX;
   const sideHeight = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetHeight)) + WALL_LABEL_GAP_PX;
-  const besideScale = scaleWithin(availableWidth - sideWidth, availableHeight);
-  const belowScale = scaleWithin(availableWidth, availableHeight - sideHeight);
-  const labelBelow = belowScale > besideScale;
-  const displayScale = Math.max(Number.EPSILON, labelBelow ? belowScale : besideScale);
+  const beside = fitAspect(aspect, availableWidth - sideWidth, availableHeight);
+  const below = fitAspect(aspect, availableWidth, availableHeight - sideHeight);
+  const labelBelow = below.width * below.height > beside.width * beside.height;
+  const display = labelBelow ? below : beside;
+  const options = renderOptions();
+  const resolution = outputResolution(state.scene, display, options);
+  showTextureLimit(resolution, options);
   artwork.classList.toggle('label-below', labelBelow);
 
   canvasHost.style.backgroundColor = frame.wall;
@@ -1288,13 +1500,18 @@ function resizeCanvas() {
   canvasFrame.style.borderRadius = `${frame.radius}px`;
   canvasFrame.style.backgroundColor = frame.background;
 
-  if (canvas.width !== resolution.width || canvas.height !== resolution.height) {
+  const resolutionChanged = canvas.width !== resolution.width || canvas.height !== resolution.height;
+  if (resolutionChanged) {
     canvas.width = resolution.width;
     canvas.height = resolution.height;
   }
-  canvas.style.width = `${resolution.width * displayScale}px`;
-  canvas.style.height = `${resolution.height * displayScale}px`;
+  canvas.style.width = `${display.width}px`;
+  canvas.style.height = `${display.height}px`;
+  return resolutionChanged;
 }
+
+const resolvedScene = (): ResolvedSceneDefinition =>
+  withResolution(state.scene, { width: canvas.width, height: canvas.height });
 function tracePolygon(points: { x: number; y: number }[]) {
   displayContext.beginPath();
   displayContext.moveTo(points[0].x, points[0].y);
@@ -1302,7 +1519,7 @@ function tracePolygon(points: { x: number; y: number }[]) {
   displayContext.closePath();
 }
 
-function drawZoomOutlines(scene: SceneDefinition) {
+function drawZoomOutlines(scene: ResolvedSceneDefinition) {
   const cssWidth = canvas.getBoundingClientRect().width;
   const pixelsPerCssPixel = cssWidth > 0 ? canvas.width / cssWidth : 1;
   const lineWidth = EDIT_MODE_OUTLINE_CSS_PIXELS * pixelsPerCssPixel;
@@ -1367,7 +1584,7 @@ const PROGRESS_DELAY_MS = 150;
 
 type DisplayedFrame = {
   bitmap: ImageBitmap;
-  scene: SceneDefinition;
+  scene: ResolvedSceneDefinition;
   editMode: boolean;
   // Previews are reduced, so they are never downloaded.
   preview: boolean;
@@ -1407,6 +1624,7 @@ function setRenderProgress(progress: number | null) {
 function describeSettings(renderer: RendererName, settings: RenderSettings) {
   return [
     RENDERER_LABELS[renderer],
+    `${canvas.width} × ${canvas.height} px`,
     `${settings.supersampling}× supersampling`,
     `Recursion ${settings.recursionDepth}`,
     `Levels ${settings.autoLevels ? `Auto (${settings.levels})` : settings.levels}`,
@@ -1462,14 +1680,19 @@ let progressTimer = 0;
 // without restarting the renderer. Once the values settle, the selected
 // quality is rendered.
 const SETTLE_DELAY_MS = 400;
-const PREVIEW_OPTIONS: RenderOptions = { ...QUALITY_MODES.fast, supersampling: 1 };
+const PREVIEW_OPTIONS: RenderOptions = {
+  renderer: QUALITY_MODES.fast.renderer,
+  supersampling: 1,
+  recursionDepth: QUALITY_MODES.fast.recursionDepth,
+  levels: QUALITY_MODES.fast.levels,
+};
 // Previews render at a reduced resolution, scaled up for display. Each
 // preview request maps to the full scene, which edit-mode outlines use.
 const PREVIEW_MAX_PIXELS = 500_000;
-const previewRequests = new WeakMap<RenderRequest, SceneDefinition>();
+const previewRequests = new WeakMap<RenderRequest, ResolvedSceneDefinition>();
 let settleTimer = 0;
 
-function previewScene(scene: SceneDefinition): SceneDefinition {
+function previewScene(scene: ResolvedSceneDefinition): ResolvedSceneDefinition {
   const { width, height } = scene.view.resolution;
   const scale = Math.min(1, Math.sqrt(PREVIEW_MAX_PIXELS / (width * height)));
   const resolution = { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
@@ -1484,13 +1707,15 @@ function scheduleSettledRender() {
 function renderPreview(settle: boolean) {
   window.clearTimeout(settleTimer);
   showLevelLimit(false);
+  resizeCanvas();
+  const scene = resolvedScene();
   const request: RenderRequest = {
-    scene: previewScene(state.scene),
+    scene: previewScene(scene),
     options: PREVIEW_OPTIONS,
     editMode: state.editMode,
     webglDisabled,
   };
-  previewRequests.set(request, state.scene);
+  previewRequests.set(request, scene);
   if (activeRequest && previewRequests.has(activeRequest)) {
     pendingRequest = request;
   } else {
@@ -1518,8 +1743,9 @@ function stopActiveRender(terminate: boolean) {
 
 function render() {
   window.clearTimeout(settleTimer);
+  resizeCanvas();
   const baseRequest: RenderRequest = {
-    scene: state.scene,
+    scene: resolvedScene(),
     options: renderOptions(),
     editMode: state.editMode,
     webglDisabled,
@@ -1620,9 +1846,10 @@ function startRender(request: RenderRequest) {
           setSettingsTitle(`${describeSettings(started.renderer, settings)} · ${time}${step}`);
         }
         state.resolvedLevels = message.levels;
+        let labelChangedResolution = false;
         if (started) {
           state.rendered = { renderer: started.renderer, levels: message.levels };
-          updateWallLabel();
+          labelChangedResolution = updateWallLabel();
         }
         syncQualityControls();
         const limitReached = started !== null && started.settings.autoLevels
@@ -1635,6 +1862,10 @@ function startRender(request: RenderRequest) {
           `${time}${step}`,
         ], limitReached ? `stopped at ${message.levels} levels; more detail may be visible` : null);
         finish(false);
+        if (labelChangedResolution) {
+          render();
+          break;
+        }
         if (!activeRequest) {
           showLevelLimit(limitReached, message.levels);
         }
@@ -1657,9 +1888,14 @@ function startRender(request: RenderRequest) {
   worker.postMessage(request);
 }
 
+let resizeRenderTimer = 0;
 window.addEventListener('resize', () => {
-  resizeCanvas();
+  const resolutionChanged = resizeCanvas();
   drawDisplay();
+  if (resolutionChanged) {
+    window.clearTimeout(resizeRenderTimer);
+    resizeRenderTimer = window.setTimeout(render, 150);
+  }
 });
 
 window.addEventListener('popstate', () => {

@@ -3,7 +3,7 @@ import {
   subtract,
   vectorLength,
   type RectElement,
-  type SceneDefinition,
+  type ResolvedSceneDefinition,
   type Vec2,
   type ZoomElement,
 } from '../scene';
@@ -37,7 +37,7 @@ function tracePolygon(points: Vec2[]) {
   ctx.closePath();
 }
 
-function drawRectElement(element: RectElement, scene: SceneDefinition) {
+function drawRectElement(element: RectElement, scene: ResolvedSceneDefinition) {
   const corners = elementCorners(element, scene);
 
   ctx.save();
@@ -48,7 +48,7 @@ function drawRectElement(element: RectElement, scene: SceneDefinition) {
   ctx.restore();
 }
 
-function drawSeedElement(element: ZoomElement, scene: SceneDefinition) {
+function drawSeedElement(element: ZoomElement, scene: ResolvedSceneDefinition) {
   ctx.save();
   ctx.globalAlpha *= scene.seed.opacity * element.opacity;
   ctx.fillStyle = scene.seed.color;
@@ -59,7 +59,7 @@ function drawSeedElement(element: ZoomElement, scene: SceneDefinition) {
 
 function drawCapturedElement(
   element: ZoomElement,
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   capturedScene: CapturedScene,
 ) {
   const [topLeft, topRight, bottomRight, bottomLeft] = elementCorners(element, scene);
@@ -158,7 +158,7 @@ function drawCapturedElement(
 
 function drawZoomElement(
   element: ZoomElement,
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   depth: number,
   recursionLevel: number,
   capturedScene: CapturedScene | null,
@@ -184,7 +184,7 @@ function drawZoomElement(
 }
 
 function drawScene(
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   depth: number,
   recursionLevel: number,
   capturedScene: CapturedScene | null,
@@ -283,7 +283,7 @@ function captureCanvas(source: OffscreenCanvas, onLevel: () => void): CapturedSc
 
 function renderPass(
   target: OffscreenCanvas,
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   depth: number,
   capturedScene: CapturedScene | null,
@@ -305,7 +305,7 @@ function mipLevelCount(width: number, height: number): number {
 }
 
 export function renderCanvas2d(
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,

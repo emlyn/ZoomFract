@@ -1,5 +1,6 @@
-import { MAXIMUM_DENSITY_COLORS, type SceneDefinition, type Vec2 } from '../scene';
+import { MAXIMUM_DENSITY_COLORS, type ResolvedSceneDefinition, type Vec2 } from '../scene';
 import {
+  MAX_WEBGL_WORKING_PIXELS,
   EDIT_MODE_ZOOM_OPACITY,
   GPU_LOST_MESSAGE,
   type FrameCallbacks,
@@ -390,7 +391,7 @@ function countPercentile(values: Float32Array, fraction: number): number {
 }
 
 export function renderWebgl(
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,
@@ -420,7 +421,7 @@ export function renderWebgl(
 function drawWebgl(
   gl: WebGL2RenderingContext,
   output: OffscreenCanvas,
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,
@@ -445,6 +446,12 @@ function drawWebgl(
   );
   if (width > maximumSize || height > maximumSize) {
     throw new Error(`WebGL2 is limited to ${maximumSize}px textures; this render needs ${Math.max(width, height)}px`);
+  }
+  if (width * height > MAX_WEBGL_WORKING_PIXELS) {
+    throw new Error(
+      `WebGL2 working images are limited to ${Math.round(MAX_WEBGL_WORKING_PIXELS / 1_000_000)} million pixels; `
+      + `this render needs ${Math.round(width * height / 1_000_000)} million`,
+    );
   }
 
   const shading = scene.shading;

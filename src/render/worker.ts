@@ -2,6 +2,7 @@ import { renderCanvas2d } from './canvas2d';
 import {
   changedFraction,
   continuationKey,
+  MAX_CANVAS_FALLBACK_PIXELS,
   resolveRenderSettings,
   type FrameCallbacks,
   type RenderMessage,
@@ -131,11 +132,24 @@ function render(request: RenderRequest) {
     post({ type: 'error', message: `Glows need the WebGL2 renderer${disabled}` });
     return;
   }
-  const candidates: RendererName[] = density || glow
-    ? ['webgl']
-    : webgl
-      ? ['webgl', 'canvas2d']
-      : ['canvas2d'];
+  const canvasFallbackSafe = width * height * request.options.supersampling ** 2
+    <= MAX_CANVAS_FALLBACK_PIXELS;
+  if (request.options.renderer === 'webgl' && !webgl && !canvasFallbackSafe) {
+    post({
+      type: 'error',
+      message: `${request.webglDisabled ?? 'WebGL2 is unavailable'}. `
+        + 'The output is too large for an automatic Canvas 2D fallback.',
+    });
+    return;
+  }
+  let candidates: RendererName[];
+  if (density || glow) {
+    candidates = ['webgl'];
+  } else if (webgl) {
+    candidates = canvasFallbackSafe ? ['webgl', 'canvas2d'] : ['webgl'];
+  } else {
+    candidates = ['canvas2d'];
+  }
   let fallbackReason = request.options.renderer === 'webgl' ? request.webglDisabled : undefined;
 
   for (const renderer of candidates) {

@@ -17,8 +17,6 @@ frame:
 
 view:
   aspect: 4/3
-  resolution:
-    height: 1200
   coordinates:
     x: [0, 4]
     y: [0, 3]

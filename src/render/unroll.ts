@@ -1,4 +1,4 @@
-import type { SceneDefinition, Vec2 } from '../scene';
+import type { ResolvedSceneDefinition, Vec2 } from '../scene';
 import { elementCorners } from './common';
 
 // x' = a x + c y + e, y' = b x + d y + f
@@ -156,7 +156,7 @@ function heapPop(heap: ZoomNode[]): ZoomNode | undefined {
  * rendered texture.
  */
 export function unrollScene(
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   factor: number,
   options: UnrollOptions,
 ): { items: UnrolledItem[]; expandedZooms: number; shallowestLeaf: number } {

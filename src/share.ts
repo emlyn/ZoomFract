@@ -7,7 +7,7 @@ import {
   RENDERER_LABELS,
   SUPERSAMPLING_CHOICES,
   type QualityMode,
-  type RenderOptions,
+  type QualityOptions,
 } from './render/common';
 import type { InputValue, InputValues } from './scene';
 
@@ -18,13 +18,13 @@ import type { InputValue, InputValues } from './scene';
 //
 // Input values and app settings follow the text after a NUL, as a JSON object
 // with short keys: `i` input values, `q` quality mode, `r` custom render
-// settings as [renderer, supersampling, recursionDepth, levels], and `l`
+// settings as [renderer, supersampling, recursionDepth, levels, width, height], and `l`
 // whether the label is shown.
 const DICTIONARIES: Record<string, string> = { 1: dictionary1 };
 const CURRENT_VERSION = '1';
 const EXTRAS_SEPARATOR = '\0';
 
-export type SharedSettings = { quality: QualityMode; custom: RenderOptions | null; label: boolean };
+export type SharedSettings = { quality: QualityMode; custom: QualityOptions | null; label: boolean };
 
 export type SharedDefinition = { text: string; inputs: InputValues; settings: SharedSettings | null };
 
@@ -74,20 +74,30 @@ function parseInputs(values: unknown): InputValues {
   }));
 }
 
-function parseRenderOptions(value: unknown): RenderOptions {
-  if (!Array.isArray(value) || value.length !== 4) {
+function parseRenderOptions(value: unknown): QualityOptions {
+  if (!Array.isArray(value) || value.length !== 6) {
     invalid('render settings');
   }
-  const [renderer, supersampling, recursionDepth, levels] = value;
+  const [renderer, supersampling, recursionDepth, levels, width, height] = value;
   if (
     !Object.hasOwn(RENDERER_LABELS, renderer)
     || !SUPERSAMPLING_CHOICES.includes(supersampling)
     || !isIntegerIn(recursionDepth, 0, MAXIMUM_RECURSION_CHOICE)
     || !(levels === 'auto' || isIntegerIn(levels, 1, MAXIMUM_LEVELS))
+    || !(
+      (isIntegerIn(width, 1, 100000) && height === null)
+      || (width === null && isIntegerIn(height, 1, 100000))
+    )
   ) {
     invalid('render settings');
   }
-  return { renderer, supersampling, recursionDepth, levels };
+  return {
+    renderer,
+    supersampling,
+    recursionDepth,
+    levels,
+    resolution: { mode: 'fixed', width: width ?? undefined, height: height ?? undefined },
+  };
 }
 
 function parseSettings(extras: Record<string, unknown>): SharedSettings | null {
@@ -110,7 +120,16 @@ function extrasJson(inputs: InputValues, settings: SharedSettings | null) {
   return {
     ...(inputs.size > 0 ? { i: Object.fromEntries([...inputs].map(([name, value]) => [name, inputJson(value)])) } : {}),
     ...(settings ? { q: settings.quality, l: settings.label } : {}),
-    ...(custom ? { r: [custom.renderer, custom.supersampling, custom.recursionDepth, custom.levels] } : {}),
+    ...(custom ? {
+      r: [
+        custom.renderer,
+        custom.supersampling,
+        custom.recursionDepth,
+        custom.levels,
+        custom.resolution.mode === 'fixed' ? custom.resolution.width ?? null : null,
+        custom.resolution.mode === 'fixed' ? custom.resolution.height ?? null : 1200,
+      ],
+    } : {}),
   };
 }
 

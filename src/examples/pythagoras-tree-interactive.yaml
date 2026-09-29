@@ -18,8 +18,6 @@ frame:
 view:
   aspect: 4/3
   overflow: auto
-  resolution:
-    height: 1200
   coordinates:
     x: [0, 4]
     y: [0, 3]

@@ -192,25 +192,31 @@ const glowXml = (glow: Glow | undefined, mapping: ReturnType<typeof slideMapping
 // The seed needs nothing: the zooms bottom out in the rendered picture.
 export type PowerPointLimit = { text: string; color?: string };
 
-export function powerPointLimits(scene: SceneDefinition): PowerPointLimit[] {
+function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
   const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
   const drawsItself = scene.elements.some((element) =>
     (element.kind === 'rect' && visible(element.color, element.opacity))
     || (element.glow !== undefined && visible(element.glow.color, element.glow.opacity)));
+  if (drawsItself || zooms.length === 0 || !visible(scene.seed.color, scene.seed.opacity)) {
+    return null;
+  }
   const seed = `#${rgba(scene.seed.color).hex}`;
+  return {
+    text: 'Only the seed draws anything, so PowerPoint may fade the picture to nothing as it updates the zooms. '
+      + `Covering the slide with a rectangle in the seed colour, ${seed}, and then deleting it brings it back for a while`,
+    color: seed,
+  };
+}
+
+export function powerPointLimits(scene: SceneDefinition): PowerPointLimit[] {
+  const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
   return [
     scene.shading.mode === 'density' ? { text: 'Density shading is not available, so shapes are drawn in black' } : null,
     zooms.some((zoom) => zoom.opacity < 1) ? { text: 'Zoom opacity is ignored' } : null,
     scene.elements.some((element) => element.glow)
       ? { text: 'Glows use PowerPoint\u2019s own soft edge, so their softness is ignored' }
       : null,
-    !drawsItself && zooms.length > 0 && visible(scene.seed.color, scene.seed.opacity)
-      ? {
-        text: 'Only the seed draws anything, so PowerPoint may fade the picture to nothing as it updates the zooms. '
-          + `Covering the slide with a rectangle in the seed colour, ${seed}, and then deleting it brings it back for a while`,
-        color: seed,
-      }
-      : null,
+    powerPointFadeWarning(scene),
   ].filter((limit): limit is PowerPointLimit => limit !== null);
 }
 
@@ -268,6 +274,7 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
   const rels = (body: string) => xml(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`);
   const relation = (id: number, type: string, target: string) => `<Relationship Id="rId${id}" Type="${REL}/${type}" Target="${target}"/>`;
   const title = scene.info.title ? ` name="${escapeXml(scene.info.title)}"` : '';
+  const fadeWarning = powerPointFadeWarning(scene);
 
   const slide = xml(`<p:sld ${roots}><p:cSld${title}>`
     + `<p:bg><p:bgPr><a:solidFill>${colorXml(scene.frame.background, 1)}</a:solidFill><a:effectLst/></p:bgPr></p:bg>`
@@ -300,8 +307,23 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
 
   const presentation = xml(`<p:presentation ${roots}>`
     + '<p:sldMasterIdLst><p:sldMasterId id="2147483660" r:id="rId1"/></p:sldMasterIdLst>'
+    + (fadeWarning ? '<p:notesMasterIdLst><p:notesMasterId r:id="rId4"/></p:notesMasterIdLst>' : '')
     + `<p:sldIdLst><p:sldId id="${SLIDE_ID}" r:id="rId2"/></p:sldIdLst>`
     + `<p:sldSz cx="${Math.round(width)}" cy="${Math.round(height)}"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>`);
+
+  const notesMaster = fadeWarning
+    ? xml(`<p:notesMaster ${roots}><p:cSld>${EMPTY_TREE}</p:spTree></p:cSld>`
+      + '<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" '
+      + 'accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:notesMaster>')
+    : null;
+  const notesSlide = fadeWarning
+    ? xml(`<p:notes ${roots}><p:cSld><p:spTree>${EMPTY_TREE.slice('<p:spTree>'.length)}`
+      + '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder 1"/><p:cNvSpPr txBox="1"/>'
+      + '<p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>'
+      + `<a:p><a:r><a:rPr lang="en-US"/><a:t>${escapeXml(`Warning: ${fadeWarning.text}.`)}</a:t></a:r>`
+      + '<a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp></p:spTree></p:cSld>'
+      + '<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>')
+    : null;
 
   const override = (part: string, type: string) => `<Override PartName="/ppt/${part}" ContentType="${type}"/>`;
   const contentTypes = xml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -313,9 +335,13 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
     + override('slideLayouts/slideLayout1.xml', `${PML}.slideLayout+xml`)
     + override('slides/slide1.xml', `${PML}.slide+xml`)
     + override('theme/theme1.xml', 'application/vnd.openxmlformats-officedocument.theme+xml')
+    + (fadeWarning
+      ? override('notesMasters/notesMaster1.xml', `${PML}.notesMaster+xml`)
+        + override('notesSlides/notesSlide1.xml', `${PML}.notesSlide+xml`)
+      : '')
     + '</Types>');
 
-  return zip([
+  const entries: ZipEntry[] = [
     { name: '[Content_Types].xml', data: contentTypes },
     { name: '_rels/.rels', data: rels(relation(1, 'officeDocument', 'ppt/presentation.xml')) },
     { name: 'ppt/presentation.xml', data: presentation },
@@ -323,7 +349,8 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
       name: 'ppt/_rels/presentation.xml.rels',
       data: rels(relation(1, 'slideMaster', 'slideMasters/slideMaster1.xml')
         + relation(2, 'slide', 'slides/slide1.xml')
-        + relation(3, 'theme', 'theme/theme1.xml')),
+        + relation(3, 'theme', 'theme/theme1.xml')
+        + (fadeWarning ? relation(4, 'notesMaster', 'notesMasters/notesMaster1.xml') : '')),
     },
     { name: 'ppt/slideMasters/slideMaster1.xml', data: master },
     {
@@ -338,8 +365,22 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
       name: 'ppt/slides/_rels/slide1.xml.rels',
       data: rels(relation(1, 'slideLayout', '../slideLayouts/slideLayout1.xml')
         + relation(2, 'image', '../media/image1.png')
-        + relation(3, 'slide', 'slide1.xml')),
+        + relation(3, 'slide', 'slide1.xml')
+        + (fadeWarning ? relation(4, 'notesSlide', '../notesSlides/notesSlide1.xml') : '')),
     },
     { name: 'ppt/media/image1.png', data: picture },
-  ]);
+  ];
+  if (fadeWarning && notesMaster && notesSlide) {
+    entries.push(
+      { name: 'ppt/notesMasters/notesMaster1.xml', data: notesMaster },
+      { name: 'ppt/notesMasters/_rels/notesMaster1.xml.rels', data: rels(relation(1, 'theme', '../theme/theme1.xml')) },
+      { name: 'ppt/notesSlides/notesSlide1.xml', data: notesSlide },
+      {
+        name: 'ppt/notesSlides/_rels/notesSlide1.xml.rels',
+        data: rels(relation(1, 'notesMaster', '../notesMasters/notesMaster1.xml')
+          + relation(2, 'slide', '../slides/slide1.xml')),
+      },
+    );
+  }
+  return zip(entries);
 }

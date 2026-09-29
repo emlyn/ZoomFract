@@ -2,12 +2,12 @@ import {
   rectCorner,
   type CornerName,
   type RectGeometry,
-  type SceneDefinition,
+  type ResolvedSceneDefinition,
   type Vec2,
   type ZoomElement,
 } from '../scene';
 
-export type QualityMode = 'fast' | 'high' | 'custom';
+export type QualityMode = 'fast' | 'display' | 'high' | 'print' | 'custom';
 
 export type RendererName = 'webgl' | 'canvas2d';
 
@@ -20,6 +20,14 @@ export type RenderOptions = {
   levels: number | 'auto';
 };
 
+export type ResolutionSetting =
+  | { mode: 'display'; scale: number; maxSide: number }
+  | { mode: 'fixed'; width?: number; height?: number };
+
+export type QualityOptions = RenderOptions & {
+  resolution: ResolutionSetting;
+};
+
 export type RenderSettings = {
   recursionDepth: number;
   levels: number;
@@ -30,7 +38,7 @@ export type RenderSettings = {
 };
 
 export type RenderRequest = {
-  scene: SceneDefinition;
+  scene: ResolvedSceneDefinition;
   options: RenderOptions;
   editMode: boolean;
   // Extra generations requested after automatic levels hit their limit.
@@ -42,6 +50,12 @@ export type RenderRequest = {
 // Retrying WebGL2 after a GPU reset tends to reset it again, and Chrome turns
 // the GPU off for every page after a few resets.
 export const GPU_LOST_MESSAGE = 'The GPU stopped responding, so WebGL2 is off until the page is reloaded';
+// About an 8000 x 6000 working image. WebGL uses several full-size buffers,
+// so a dimension-only limit can still request far too much GPU memory.
+export const MAX_WEBGL_WORKING_PIXELS = 48_000_000;
+// An automatic WebGL failure must not start an enormous CPU render. Canvas
+// 2D remains available when the user explicitly chooses it.
+export const MAX_CANVAS_FALLBACK_PIXELS = 4_000_000;
 
 // Fraction of pixels that changed between two images, and how many levels
 // apart they were.
@@ -152,19 +166,35 @@ const CANVAS2D_MAXIMUM_LEAVES = 10000;
 
 export const QUALITY_LABELS: Record<QualityMode, string> = {
   fast: 'Fast',
+  display: 'Display',
   high: 'High quality',
+  print: 'Print',
   custom: 'Custom',
 };
 
-export const QUALITY_MODES: Record<Exclude<QualityMode, 'custom'>, RenderOptions> = {
-  fast: { renderer: 'webgl', supersampling: 2, recursionDepth: 1, levels: 'auto' },
-  high: { renderer: 'webgl', supersampling: 4, recursionDepth: 14, levels: 'auto' },
+export const QUALITY_MODES: Record<Exclude<QualityMode, 'custom'>, QualityOptions> = {
+  fast: {
+    renderer: 'webgl', supersampling: 2, recursionDepth: 1, levels: 'auto',
+    resolution: { mode: 'display', scale: 0.5, maxSide: 1500 },
+  },
+  display: {
+    renderer: 'webgl', supersampling: 2, recursionDepth: 8, levels: 'auto',
+    resolution: { mode: 'display', scale: 1, maxSide: 3000 },
+  },
+  high: {
+    renderer: 'webgl', supersampling: 4, recursionDepth: 14, levels: 'auto',
+    resolution: { mode: 'fixed', height: 1200 },
+  },
+  print: {
+    renderer: 'webgl', supersampling: 2, recursionDepth: 16, levels: 'auto',
+    resolution: { mode: 'fixed', height: 3000 },
+  },
 };
 
 export const SUPERSAMPLING_CHOICES = [1, 2, 3, 4];
 export const MAXIMUM_RECURSION_CHOICE = 16;
 
-export function scenePointToCanvas(point: Vec2, scene: SceneDefinition): Vec2 {
+export function scenePointToCanvas(point: Vec2, scene: ResolvedSceneDefinition): Vec2 {
   const view = scene.view;
   const width = view.resolution.width;
   const height = view.resolution.height;
@@ -176,7 +206,7 @@ export function scenePointToCanvas(point: Vec2, scene: SceneDefinition): Vec2 {
   };
 }
 
-export function elementCorners(element: RectGeometry, scene: SceneDefinition): Vec2[] {
+export function elementCorners(element: RectGeometry, scene: ResolvedSceneDefinition): Vec2[] {
   return (['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as CornerName[])
     .map((name) => scenePointToCanvas(rectCorner(element, name), scene));
 }
@@ -187,7 +217,7 @@ export function elementCorners(element: RectGeometry, scene: SceneDefinition): V
 // largest zoom is below half a working pixel. Canvas 2D treats that as an upper
 // bound and stops sooner once a pass barely changes its captured pixels.
 export function resolveRenderSettings(
-  scene: SceneDefinition,
+  scene: ResolvedSceneDefinition,
   options: RenderOptions,
   renderer: RendererName,
   additionalLevels = 0,

@@ -112,7 +112,6 @@ const DEFINITION: Shape = {
       keys: {
         aspect: LEAF,
         overflow: LEAF,
-        resolution: { keys: leaves('width', 'height') },
         coordinates: { keys: { x: AXIS, y: AXIS } },
       },
     },
@@ -356,10 +355,6 @@ export type SceneDefinition = {
   };
   view: {
     aspect: number;
-    resolution: {
-      width: number;
-      height: number;
-    };
     // The whole picture, including any overflow. Zooms copy this area.
     coordinates: ViewRanges;
     // The coordinates as written, which set the zoom transforms.
@@ -367,6 +362,22 @@ export type SceneDefinition = {
   };
   elements: DrawableElement[];
 };
+
+export type ResolvedSceneDefinition = SceneDefinition & {
+  view: SceneDefinition['view'] & {
+    resolution: {
+      width: number;
+      height: number;
+    };
+  };
+};
+
+export function withResolution(
+  scene: SceneDefinition,
+  resolution: ResolvedSceneDefinition['view']['resolution'],
+): ResolvedSceneDefinition {
+  return { ...scene, view: { ...scene.view, resolution } };
+}
 
 export const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
@@ -412,47 +423,6 @@ function asPositiveNumber(value: unknown, variables: Variables): number | undefi
 function asNonNegativeNumber(value: unknown, fallback: number, variables: Variables): number {
   const number = asNumber(value, fallback, variables);
   return number >= 0 ? number : fallback;
-}
-
-// The resolution covers the whole image, including any overflow. `growth`
-// is the whole image size divided by the view size along each axis, so the
-// aspect always describes the view itself.
-function resolveView(view: Record<string, unknown>, variables: Variables, growth: Vec2) {
-  const resolutionNode = view.resolution && typeof view.resolution === 'object' && !Array.isArray(view.resolution)
-    ? (view.resolution as Record<string, unknown>)
-    : {};
-  const requestedWidth = atPath(['view', 'resolution', 'width'], () => asPositiveNumber(resolutionNode.width, variables));
-  const requestedHeight = atPath(['view', 'resolution', 'height'], () => asPositiveNumber(resolutionNode.height, variables));
-  const requestedAspect = atPath(['view', 'aspect'], () => parseAspectRatio(view.aspect, variables));
-
-  if (requestedWidth && requestedHeight) {
-    return {
-      aspect: (requestedWidth / growth.x) / (requestedHeight / growth.y),
-      resolution: {
-        width: Math.round(requestedWidth),
-        height: Math.round(requestedHeight),
-      },
-    };
-  }
-
-  if (requestedWidth) {
-    return {
-      aspect: requestedAspect,
-      resolution: {
-        width: Math.round(requestedWidth),
-        height: Math.max(1, Math.round(requestedWidth / growth.x / requestedAspect * growth.y)),
-      },
-    };
-  }
-
-  const height = requestedHeight ?? 1200;
-  return {
-    aspect: requestedAspect,
-    resolution: {
-      width: Math.max(1, Math.round(height / growth.y * requestedAspect * growth.x)),
-      height: Math.round(height),
-    },
-  };
 }
 
 // Grows an axis by the overflow on both sides, keeping its direction.
@@ -1564,7 +1534,6 @@ const fallback = {
     },
     view: {
       aspect: 1,
-      resolution: { width: 1200, height: 1200 },
       coordinates: {
         x: { from: -100, to: 100 },
         y: { from: -100, to: 100 },
@@ -1703,7 +1672,8 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
   // may refer to the others as long as there is no loop.
   const cells = new Map<string, () => number>();
   const variables: Variables = (name) => cells.get(name)?.();
-  const resolvedView = lazy('view.resolution', () => atPath(['view'], () => resolveView(viewNode, variables, growth())));
+  const resolvedAspect = lazy('view.aspect', () =>
+    atPath(['view', 'aspect'], () => parseAspectRatio(viewNode.aspect, variables)));
   const axis = (key: 'x' | 'y') => {
     const path = ['view', 'coordinates', key];
     return lazy(`view.coordinates.${key}`, () => atPath(path, () =>
@@ -1723,10 +1693,6 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
   const shown = (): ViewRanges => autoOverflow
     ? fitted ?? declared()
     : { x: growAxis(xRange(), overflow()), y: growAxis(yRange(), overflow()) };
-  const growth = (): Vec2 => ({
-    x: (shown().x.to - shown().x.from) / (xRange().to - xRange().from),
-    y: (shown().y.to - shown().y.from) / (yRange().to - yRange().from),
-  });
   const viewValues: Record<string, () => number> = {
     'view.left': () => xRange().from,
     'view.right': () => xRange().to,
@@ -1738,12 +1704,8 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
     'view.centre.y': () => (yRange().from + yRange().to) / 2,
     'view.center.x': () => (xRange().from + xRange().to) / 2,
     'view.center.y': () => (yRange().from + yRange().to) / 2,
-    'view.aspect': () => resolvedView().aspect,
+    'view.aspect': resolvedAspect,
     ...(autoOverflow ? {} : { 'view.overflow': overflow }),
-    'view.pixels.width': () => resolvedView().resolution.width,
-    'view.pixels.height': () => resolvedView().resolution.height,
-    'view.pixel.width': () => (shown().x.to - shown().x.from) / resolvedView().resolution.width,
-    'view.pixel.height': () => (shown().y.to - shown().y.from) / resolvedView().resolution.height,
   };
   Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
   const inputBuilders = [...atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))]
@@ -1792,7 +1754,7 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
       : {};
     const elements = resolveSceneElements(
       parseSceneItems(sceneRoot.scene),
-      resolvedView().aspect,
+      resolvedAspect(),
       viewFrame(coordinates),
       variables,
       density,
@@ -1812,7 +1774,7 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
         opacity: clamp(atPath(['seed', 'opacity'], () => asNumber(seedNode.opacity, fallback.seed.opacity, variables)), 0, 1),
       },
       view: {
-        ...resolvedView(),
+        aspect: resolvedAspect(),
         coordinates: shown(),
         declared: declared(),
       },

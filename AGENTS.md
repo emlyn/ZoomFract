@@ -86,10 +86,7 @@ files unless extracting a module clearly reduces complexity.
   border `colour`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
 - `view.aspect` is width divided by height of the view, excluding overflow.
-- Resolution may specify `width`, `height`, or both. It is the whole image,
-  including overflow. Infer the missing dimension from `aspect`; infer
-  `aspect` when both dimensions are present.
-- If resolution is omitted, default to height `1200` and infer width.
+- Pixel resolution is an application quality setting, not scene syntax.
 - Optional `view.overflow` (scene units, default 0, non-negative) adds a
   border on every side that catches anything drawn past the view edge, such
   as glows. After all geometry and references resolve, `buildScene` sets the
@@ -138,6 +135,12 @@ files unless extracting a module clearly reduces complexity.
   `src/examples.ts` only lists IDs and imports.
 - `?example=<id>` loads a built-in definition. `?source=<http-url>` loads a
   remote YAML definition; never add credentials or a server-side proxy.
+- If a remote or encoded shared definition is readable but invalid, put its
+  text in the editor, clear the example selection, open the panel and show
+  the parse error while keeping the last valid picture. This lets the user
+  repair definitions made with old or mistaken syntax. Shared app settings
+  take effect immediately; shared input values wait separately from the
+  visible scene and are applied when the repaired definition succeeds.
 - `#<code>` (made by the Share dialog) or `?q=<code>` loads a shared link: a
   version character, then base64url of deflate (fflate) of the definition
   text. When there are extras, the text is followed by `\0` and a JSON object
@@ -176,11 +179,7 @@ files unless extracting a module clearly reduces complexity.
 - Expressions may also use dotted view values: `view.left`, `view.right`
   (x), `view.bottom`, `view.top` (y), `view.width`, `view.height`,
   `view.centre.x`, `view.centre.y` (coordinate units), `view.aspect`,
-  `view.overflow` (numeric overflow only), `view.pixels.width`, `view.pixels.height` (resolved
-  whole-image resolution), and
-  `view.pixel.width`, `view.pixel.height` (size of one pixel in coordinate
-  units; they differ when the axes are scaled differently). Variables and
-  view values
+  and `view.overflow` (numeric overflow only). Variables and view values
   resolve lazily through one lookup, so the x range can use `view.aspect`
   but not `view.width`. Dotted names are reserved for scene values; future
   element references should follow the same `name.property` form.
@@ -211,8 +210,8 @@ files unless extracting a module clearly reduces complexity.
 - Terminal zoom leaves use top-level `seed`; the seed may be a colour string
   or an object containing colour and opacity. Without a seed colour, terminal
   leaves are transparent.
-- Keep quality controls out of the scene definition. Renderer, max
-  recursion, levels, and supersampling are application quality settings.
+- Keep quality controls out of the scene definition. Resolution, renderer,
+  max recursion, levels, and supersampling are application quality settings.
 
 ### Density shading
 
@@ -257,8 +256,9 @@ files unless extracting a module clearly reduces complexity.
 
 ## Rendering invariants
 
-- The visible canvas backing resolution must exactly match `view.resolution`.
-  Scale it with CSS to fit the window without changing intrinsic pixel size.
+- The visible canvas backing resolution must exactly match the selected
+  quality output. Scale it with CSS to fit the window without changing its
+  aspect.
 - The framed canvas and wall label are centred together as one group,
   independent of the overlay panel width. The label sits beside the frame,
   bottom-aligned, or below it, right-aligned, when that gives a larger picture.
@@ -273,13 +273,24 @@ files unless extracting a module clearly reduces complexity.
 - Rendering runs in a Web Worker on `OffscreenCanvas`, so the UI thread only
   displays finished frames. Each render uses a fresh worker; starting a new
   render terminates the old one, which cancels obsolete work immediately.
-- Quality is an application setting with three modes. Fast (one exact
-  recursion, 2x supersampling) and High quality (up to 14 exact recursions,
-  4x) always use WebGL2 with automatic levels. A collapsible Render settings
-  section shows renderer (WebGL2 or Canvas 2D), supersampling, max recursion
-  and a levels slider whose rightmost position is Auto; they are read-only
-  except in Custom. Custom is initialised from the first mode it is opened
-  from, then remembered.
+- Quality is an application setting with five modes. Fast renders at half
+  the display's physical resolution (one exact recursion, 2x supersampling);
+  Display matches physical resolution (up to 8 exact recursions, 2x); High
+  is 1200 px high (up to 14, 4x); Print is 3000 px high (up to 16, 2x).
+  They use WebGL2 with automatic levels. Display modes are capped at 1500
+  and 3000 px on the longest side respectively. A collapsible Render
+  settings section also shows width, height, renderer, supersampling, max
+  recursion and a levels slider whose rightmost position is Auto; they are
+  read-only except in Custom. Custom accepts either width or height and
+  infers the other from the full output aspect, showing that calculated value
+  in grey; editing it swaps the controlling dimension. The quality select
+  sits on the right of the Render quality summary, whose disclosure triangle
+  opens the full settings. Custom is initialised from the first mode it is
+  opened from, then remembered.
+  When a WebGL working dimension (`output * supersampling`) exceeds the
+  smaller of `MAX_TEXTURE_SIZE` and `MAX_RENDERBUFFER_SIZE`, both output
+  dimensions shrink proportionally. A warning beside Render quality reports
+  the requested size, actual size and device limit.
   WebGL2 falls back to Canvas 2D only if it is unavailable or fails.
 - Windows resets a GPU that spends about two seconds on one submission, and
   Chrome disables the GPU for every page after a few resets. WebGL scene
@@ -347,7 +358,10 @@ files unless extracting a module clearly reduces complexity.
   quality threshold.
 - Be mindful of multiplicative cost: zoom count, recursion depth, passes,
   supersampling, mip generation, and temporary canvas size all compound.
-  WebGL2 working textures are limited by `MAX_TEXTURE_SIZE`.
+  WebGL2 working images are limited by both the device texture size and a
+  48-million-pixel practical allocation budget. Automatic Canvas 2D fallback
+  is allowed only for small working images; explicit Canvas 2D remains
+  available for larger output.
 - Edit mode is an application setting, not scene syntax. It fades top-level
   zoom contents and outlines each zoom, marking its top-left corner and any
   `align` target points. Levels used for recursion must stay unfaded, so only
@@ -409,6 +423,8 @@ files unless extracting a module clearly reduces complexity.
   render has finished. Ctrl+C copies whatever the open tab shows, unless text is
   selected, in which case the browser's own copy is left alone. Clicking either
   preview enlarges it and widens the dialog; clicking again goes back.
+  A seed-only scene that may fade while PowerPoint updates its Slide Zooms
+  also carries the same warning in the slide's speaker notes.
   QR codes use `qrcode-generator`, loaded on demand, with
   error correction H when the preview covers the middle (at most 30% of the
   width) and M otherwise. The QR square size is rounded up to a multiple of 4
@@ -472,12 +488,13 @@ For every code change:
 
 For rendering changes, also check as applicable:
 
-- Canvas intrinsic dimensions match the resolved view resolution.
+- Canvas intrinsic dimensions match the selected quality resolution.
 - Transparent areas still have zero alpha.
 - Progressive Canvas 2D passes visibly differ and the final pass remains
   displayed.
 - Progress appears during slow work and disappears after completion.
-- Fast and High quality resolve automatic levels at the fixed point.
+- Fast, Display, High and Print quality resolve automatic levels at the
+  fixed point.
 - WebGL2 and Canvas 2D output agree closely with equal Custom settings;
   compare pixel differences and timings when changing either.
 - Rotated and asymmetric zooms render without clipping or allocation errors.
