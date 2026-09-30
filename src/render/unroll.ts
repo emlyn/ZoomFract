@@ -1,4 +1,4 @@
-import type { ResolvedSceneDefinition, Vec2 } from '../scene';
+import type { BlendMode, ResolvedSceneDefinition, Vec2 } from '../scene';
 import { elementCorners } from './common';
 
 // x' = a x + c y + e, y' = b x + d y + f
@@ -18,7 +18,7 @@ type ZoomNode = {
 // carries source view coordinates, which extend beyond 0 to 1 by the glow.
 export type UnrolledItem =
   | { kind: 'rect'; polygon: Vec2[]; elementIndex: number; alpha: number }
-  | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; alpha: number }
+  | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; alpha: number; blend: BlendMode }
   | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'zoomGlow'; polygon: Vec2[]; texCoords: Vec2[]; elementIndex: number; alpha: number };
 
@@ -334,6 +334,7 @@ export function unrollScene(
         polygon: child.clip,
         texCoords: child.clip.map(toViewCoordinates(invertAffine(child.transform))),
         alpha: child.alpha,
+        blend: element.blend,
       });
     });
   };

@@ -1,4 +1,4 @@
-import { MAXIMUM_DENSITY_COLORS, type ResolvedSceneDefinition, type Vec2 } from '../scene';
+import { BLEND_MODES, MAXIMUM_DENSITY_COLORS, type ResolvedSceneDefinition, type Vec2 } from '../scene';
 import {
   MAX_WEBGL_WORKING_PIXELS,
   EDIT_MODE_ZOOM_OPACITY,
@@ -65,12 +65,17 @@ const MAXIMUM_BATCH_PIXELS = 8_000_000;
 
 // Ranges of whole triangles, as [first vertex, vertex count], that each fill
 // at most the batch size. A triangle larger than that is drawn on its own.
-function fillBatches(vertices: Float32Array, width: number, height: number): [number, number][] {
-  const count = vertices.length / FLOATS_PER_VERTEX;
+function fillBatches(
+  vertices: Float32Array,
+  start: number,
+  end: number,
+  width: number,
+  height: number,
+): [number, number][] {
   const batches: [number, number][] = [];
-  let first = 0;
+  let first = start;
   let fill = 0;
-  for (let vertex = 0; vertex < count; vertex += 3) {
+  for (let vertex = start; vertex < end; vertex += 3) {
     const [ax, ay, bx, by, cx, cy] = [0, 1, 2].flatMap((corner) => {
       const offset = (vertex + corner) * FLOATS_PER_VERTEX;
       return [vertices[offset], vertices[offset + 1]];
@@ -83,8 +88,8 @@ function fillBatches(vertices: Float32Array, width: number, height: number): [nu
     }
     fill += area;
   }
-  if (count > first) {
-    batches.push([first, count - first]);
+  if (end > first) {
+    batches.push([first, end - first]);
   }
   return batches;
 }
@@ -114,6 +119,8 @@ void main() {
 }`;
 
 const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, index) => index);
+// Blended copies read what is below them from this texture unit.
+const BACKDROP_UNIT = MAXIMUM_ZOOM_GLOW_FIELDS + 1;
 
 // Rectangle glows are worked out from the distance to the rectangle: the
 // shape is grown, then blurred over the rest of the glow size. Full softness
@@ -123,6 +130,8 @@ const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, in
 const SCENE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
+uniform sampler2D backdrop;
+uniform int blendMode;
 ${glowFieldIndexes.map((index) => `uniform sampler2D glow${index};`).join('\n')}
 in vec2 uv;
 in vec4 tint;
@@ -138,13 +147,27 @@ float rectGlow(vec2 local, vec2 halfSize, float size, float softness) {
 float zoomGlow(int field, vec2 coords) {
   return ${glowFieldIndexes.map((index) => `field == ${index} ? textureLod(glow${index}, coords, 0.0).r : `).join('')}0.0;
 }
+// Blend modes on premultiplied colours, in the order of BLEND_MODES, drawn
+// over a copy of what is below. Normal draws use fixed-function blending.
+vec4 blendOver(vec4 s, vec4 d) {
+  if (blendMode == 3) {
+    return min(s + d, vec4(1.0));
+  }
+  vec3 sides = s.rgb * (1.0 - d.a) + d.rgb * (1.0 - s.a);
+  vec3 color = blendMode == 1 ? sides + s.rgb * d.rgb
+    : blendMode == 2 ? s.rgb + d.rgb - s.rgb * d.rgb
+    : blendMode == 4 ? sides + min(s.rgb * d.a, d.rgb * s.a)
+    : sides + max(s.rgb * d.a, d.rgb * s.a);
+  return vec4(color, s.a + d.a - s.a * d.a);
+}
 void main() {
   vec4 sampled = texture(source, uv);
-  outColor = drawMode < 1.5
+  vec4 color = drawMode < 1.5
     ? tint * mix(vec4(1.0), sampled, drawMode)
     : drawMode < 2.5
       ? tint * rectGlow(uv, shapeData.xy, shapeData.z, shapeData.w)
       : tint * zoomGlow(int(shapeData.x + 0.5), uv);
+  outColor = blendMode == 0 ? color : blendOver(color, texelFetch(backdrop, ivec2(gl_FragCoord.xy), 0));
 }`;
 
 // Grows the source's visible parts by an ellipse, measured in texels of the
@@ -213,27 +236,33 @@ void main() {
   gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// Alpha-weighted colour with maximum alpha keeps fine recursive details from
-// fading out as the mip chain shrinks. Texels are stored premultiplied.
+// Texels are stored premultiplied, so a plain average is ordinary scaling.
+// Detail moves each block's alpha from that average towards its minimum (-1)
+// or maximum (1), keeping the alpha-weighted colour.
 const MIP_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
+uniform float detail;
 out vec4 outColor;
 void main() {
   ivec2 size = textureSize(source, 0);
   ivec2 origin = ivec2(gl_FragCoord.xy) * 2;
   vec3 colorTotal = vec3(0.0);
   float alphaTotal = 0.0;
+  float minAlpha = 1.0;
   float maxAlpha = 0.0;
   for (int y = 0; y < 2; y++) {
     for (int x = 0; x < 2; x++) {
       vec4 texel = texelFetch(source, min(origin + ivec2(x, y), size - 1), 0);
       colorTotal += texel.rgb;
       alphaTotal += texel.a;
+      minAlpha = min(minAlpha, texel.a);
       maxAlpha = max(maxAlpha, texel.a);
     }
   }
-  outColor = alphaTotal > 0.0 ? vec4(colorTotal / alphaTotal * maxAlpha, maxAlpha) : vec4(0.0);
+  float average = alphaTotal * 0.25;
+  float alpha = mix(average, detail < 0.0 ? minAlpha : maxAlpha, abs(detail));
+  outColor = alphaTotal > 0.0 ? vec4(colorTotal / alphaTotal * alpha, alpha) : vec4(0.0);
 }`;
 
 const RESOLVE_FRAGMENT_SHADER = `#version 300 es
@@ -468,6 +497,8 @@ function drawWebgl(
   gl.useProgram(sceneProgram);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'source'), 0);
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
+  gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
+  const blendModeLocation = gl.getUniformLocation(sceneProgram, 'blendMode');
   const textures = [createLevelTexture(gl, width, height, format), createLevelTexture(gl, width, height, format)];
   // Zoom glows spread from what a copy shows, not from its glows, so scenes
   // with zoom glows also build a mask of the shapes' coverage.
@@ -489,6 +520,18 @@ function drawWebgl(
     gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
     gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
     gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, drawRenderbuffer);
+  }
+
+  // Blended copies need what is below them, which is copied here first.
+  const blended = scene.elements.some((element) => element.kind === 'zoom' && element.blend !== 'normal');
+  const backdropFramebuffer = blended ? gl.createFramebuffer()! : null;
+  if (backdropFramebuffer) {
+    const backdrop = createFieldTexture(gl, width, height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFramebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, backdrop, 0);
+    gl.activeTexture(gl.TEXTURE0 + BACKDROP_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, backdrop);
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   const vertexBuffer = gl.createBuffer()!;
@@ -670,48 +713,77 @@ function drawWebgl(
     return new Float32Array(vertices);
   };
 
-  const sceneVertices = (items: UnrolledItem[], sampleSource: boolean) => {
+  // Vertices in runs of one blend mode, the index into BLEND_MODES. Normal
+  // items share runs; each blended copy has its own, drawn over a backdrop.
+  const sceneVertices = (items: UnrolledItem[], sampleSource: boolean): SceneVertices => {
     if (density) {
-      return densityVertices(items, sampleSource);
+      return normalRun(densityVertices(items, sampleSource));
     }
     const vertices: number[] = [];
+    const runs: { blend: number; first: number; count: number }[] = [];
     for (const item of items) {
-      if (item.kind === 'rect') {
-        pushPolygon(vertices, item.polygon, null, premultiplied(rectColors[item.elementIndex]!, item.alpha));
-      } else if (item.kind === 'rectGlow') {
-        const element = scene.elements[item.elementIndex];
-        const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
-        pushPolygon(vertices, item.polygon, item.local, color, MODE_RECT_GLOW, [
-          element.width / 2,
-          element.height / 2,
-          element.glow!.size,
-          element.glow!.softness,
-        ]);
-      } else if (item.kind === 'zoomGlow') {
-        const field = glowFields.forElement(item.elementIndex)!;
-        const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
-        const coords = item.texCoords.map((point) => ({
-          x: (point.x + field.margin.x) / (1 + 2 * field.margin.x),
-          y: (point.y + field.margin.y) / (1 + 2 * field.margin.y),
-        }));
-        pushPolygon(vertices, item.polygon, coords, color, MODE_ZOOM_GLOW, [field.index, 0, 0, 0]);
-      } else if (sampleSource) {
-        pushPolygon(vertices, item.polygon, item.texCoords, premultiplied([1, 1, 1, 1], item.alpha));
+      const first = vertices.length / FLOATS_PER_VERTEX;
+      pushItem(vertices, item, sampleSource);
+      const count = vertices.length / FLOATS_PER_VERTEX - first;
+      const blend = item.kind === 'leaf' ? BLEND_MODES.indexOf(item.blend) : 0;
+      const last = runs.at(-1);
+      if (last && blend === 0 && last.blend === 0) {
+        last.count += count;
       } else {
-        pushPolygon(vertices, item.polygon, null, premultiplied(seedColor, scene.seed.opacity * item.alpha));
+        runs.push({ blend, first, count });
       }
     }
-    return new Float32Array(vertices);
+    return withBatches(new Float32Array(vertices), runs);
   };
 
+  const pushItem = (vertices: number[], item: UnrolledItem, sampleSource: boolean) => {
+    if (item.kind === 'rect') {
+      pushPolygon(vertices, item.polygon, null, premultiplied(rectColors[item.elementIndex]!, item.alpha));
+    } else if (item.kind === 'rectGlow') {
+      const element = scene.elements[item.elementIndex];
+      const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
+      pushPolygon(vertices, item.polygon, item.local, color, MODE_RECT_GLOW, [
+        element.width / 2,
+        element.height / 2,
+        element.glow!.size,
+        element.glow!.softness,
+      ]);
+    } else if (item.kind === 'zoomGlow') {
+      const field = glowFields.forElement(item.elementIndex)!;
+      const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
+      const coords = item.texCoords.map((point) => ({
+        x: (point.x + field.margin.x) / (1 + 2 * field.margin.x),
+        y: (point.y + field.margin.y) / (1 + 2 * field.margin.y),
+      }));
+      pushPolygon(vertices, item.polygon, coords, color, MODE_ZOOM_GLOW, [field.index, 0, 0, 0]);
+    } else if (sampleSource) {
+      pushPolygon(vertices, item.polygon, item.texCoords, premultiplied([1, 1, 1, 1], item.alpha));
+    } else {
+      pushPolygon(vertices, item.polygon, null, premultiplied(seedColor, scene.seed.opacity * item.alpha));
+    }
+  };
+
+  const withBatches = (vertices: Float32Array, runs: { blend: number; first: number; count: number }[]) => ({
+    vertices,
+    runs: runs.map(({ blend, first, count }) => ({
+      blend,
+      batches: fillBatches(vertices, first, first + count, width, height),
+    })),
+  });
+  const normalRun = (vertices: Float32Array) => withBatches(vertices, [
+    { blend: 0, first: 0, count: vertices.length / FLOATS_PER_VERTEX },
+  ]);
+  type SceneVertices = ReturnType<typeof withBatches>;
+
   // Continuations redraw the same items, so their vertices are built once.
-  const vertexCache = new Map<UnrolledItem[], Map<string, Float32Array>>();
-  const batchCache = new WeakMap<Float32Array, [number, number][]>();
+  const vertexCache = new Map<UnrolledItem[], Map<string, SceneVertices>>();
   const cachedVertices = (items: UnrolledItem[], sampleSource: boolean, mask: boolean) => {
-    const byMode = vertexCache.get(items) ?? new Map<string, Float32Array>();
+    const byMode = vertexCache.get(items) ?? new Map<string, SceneVertices>();
     vertexCache.set(items, byMode);
     const key = `${sampleSource} ${mask}`;
-    const vertices = byMode.get(key) ?? (mask ? maskVertices : sceneVertices)(items, sampleSource);
+    const vertices = byMode.get(key) ?? (mask
+      ? normalRun(maskVertices(items, sampleSource))
+      : sceneVertices(items, sampleSource));
     byMode.set(key, vertices);
     return vertices;
   };
@@ -723,8 +795,10 @@ function drawWebgl(
     minimumZoomPixels: Infinity,
     topLevelZoomOpacity: 1,
   }).items;
+  // Exact geometry draws copies item by item, which only matches feedback for
+  // normal blending, so blended scenes recurse by feedback alone.
   const finalUnroll = unrollScene(scene, factor, {
-    maximumDepth: settings.recursionDepth,
+    maximumDepth: blended ? 0 : settings.recursionDepth,
     uniform: !settings.autoLevels,
     budget: UNROLL_BUDGET,
     minimumZoomPixels: settings.autoLevels ? UNROLL_MINIMUM_ZOOM_PIXELS : 0,
@@ -735,7 +809,8 @@ function drawWebgl(
   // with seed zooms at generation g + F, so the shallowest leaf sets F.
   const feedbackLevelsFor = (levels: number) => Math.max(0, levels - finalUnroll.shallowestLeaf);
 
-  const generateMips = ({ texture, levels }: LevelTexture) => {
+  const paintDetail = shading.mode === 'paint' ? shading.detail : 0;
+  const generateMips = ({ texture, levels }: LevelTexture, detail = paintDetail) => {
     if (density) {
       // Plain averages keep the mean count over each texel.
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -743,6 +818,7 @@ function drawWebgl(
       return;
     }
     gl.useProgram(mipProgram);
+    gl.uniform1f(gl.getUniformLocation(mipProgram, 'detail'), detail);
     gl.bindVertexArray(emptyVertexArray);
     gl.disable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -757,6 +833,14 @@ function drawWebgl(
     }
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, 0);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, levels - 1);
+  };
+
+  // Copies what has been drawn so far for a blended copy to read.
+  const copyBackdrop = (framebuffer: WebGLFramebuffer) => {
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, backdropFramebuffer);
+    gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
   };
 
   const drawLevel = (
@@ -781,16 +865,25 @@ function drawWebgl(
     gl.enable(gl.BLEND);
     // Painting composites over what is below; density adds up hits.
     gl.blendFunc(gl.ONE, density ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
-    const vertices = cachedVertices(items, source !== null, mask);
+    const { vertices, runs } = cachedVertices(items, source !== null, mask);
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
-    const batches = batchCache.get(vertices) ?? fillBatches(vertices, width, height);
-    batchCache.set(vertices, batches);
-    for (const [first, count] of batches) {
-      gl.drawArrays(gl.TRIANGLES, first, count);
-      waitForGpu();
+    for (const { blend, batches } of runs) {
+      if (blend > 0) {
+        copyBackdrop(drawFramebuffer ?? levelFramebuffer);
+        gl.disable(gl.BLEND);
+      }
+      gl.uniform1i(blendModeLocation, blend);
+      for (const [first, count] of batches) {
+        gl.drawArrays(gl.TRIANGLES, first, count);
+        waitForGpu();
+      }
+      if (blend > 0) {
+        gl.enable(gl.BLEND);
+      }
     }
+    gl.uniform1i(blendModeLocation, 0);
     if (!drawFramebuffer) {
       return;
     }
@@ -831,7 +924,8 @@ function drawWebgl(
     for (; maskLevels < levels; maskLevels += 1) {
       const target = lastMask === masks[0] ? masks[1] : masks[0];
       drawLevel(target, lastMask, levelItems, true);
-      generateMips(target);
+      // Any visible detail should glow, however small.
+      generateMips(target, 1);
       waitForGpu();
       lastMask = target;
     }
@@ -899,9 +993,9 @@ function drawWebgl(
 
   const details = () => {
     const exactGenerations = finalUnroll.shallowestLeaf - 1;
-    const budgetLimited = !settings.autoLevels && exactGenerations < settings.recursionDepth;
+    const budgetLimited = !blended && !settings.autoLevels && exactGenerations < settings.recursionDepth;
     return [
-      `${finalUnroll.expandedZooms.toLocaleString('en-GB')} exact zooms`,
+      blended ? 'blend modes skip exact recursion' : `${finalUnroll.expandedZooms.toLocaleString('en-GB')} exact zooms`,
       ...(budgetLimited ? [`recursion capped at ${exactGenerations}`] : []),
     ];
   };

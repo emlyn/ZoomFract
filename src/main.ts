@@ -358,8 +358,108 @@ const TOGGLE_REVEAL_MS = 3000;
 let toggleHideTimer: number | undefined;
 let pictureOnly = false;
 
+// Alone, the picture can be pinched to zoom and dragged to pan, so details
+// are visible on small screens. A tap without a gesture still exits.
+type PictureZoom = { scale: number; x: number; y: number };
+const IDENTITY_ZOOM: PictureZoom = { scale: 1, x: 0, y: 0 };
+const MAXIMUM_PICTURE_ZOOM = 8;
+const TAP_SLOP_PX = 8;
+let pictureZoom = IDENTITY_ZOOM;
+let pictureGestured = false;
+const picturePointers = new Map<number, Vec2>();
+let pictureGesture: { zoom: PictureZoom; origin: Vec2; centre: Vec2; spread: number } | null = null;
+
+const midpoint = (points: Vec2[]): Vec2 => ({
+  x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+  y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+});
+const spread = (points: Vec2[]) =>
+  points.length < 2 ? 0 : Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+
+function setPictureZoom(zoom: PictureZoom) {
+  pictureZoom = zoom;
+  canvasFrame.style.transform = zoom.scale === 1 ? '' : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`;
+}
+
+// The untransformed top-left corner of the frame, in client pixels.
+function frameOrigin(): Vec2 {
+  const rect = canvasFrame.getBoundingClientRect();
+  return { x: rect.left - pictureZoom.x, y: rect.top - pictureZoom.y };
+}
+
+// A picture larger than the screen must cover it; a smaller one stays inside.
+function clampPictureZoom(zoom: PictureZoom, origin: Vec2): PictureZoom {
+  if (zoom.scale <= 1) {
+    return IDENTITY_ZOOM;
+  }
+  const host = canvasHost.getBoundingClientRect();
+  const axis = (offset: number, start: number, size: number, hostStart: number, hostSize: number) => {
+    const low = hostStart - start;
+    const high = hostStart + hostSize - size * zoom.scale - start;
+    return clamp(offset, Math.min(low, high), Math.max(low, high));
+  };
+  return {
+    scale: zoom.scale,
+    x: axis(zoom.x, origin.x, canvasFrame.offsetWidth, host.left, host.width),
+    y: axis(zoom.y, origin.y, canvasFrame.offsetHeight, host.top, host.height),
+  };
+}
+
+function startPictureGesture() {
+  const points = [...picturePointers.values()];
+  pictureGesture = points.length === 0
+    ? null
+    : { zoom: pictureZoom, origin: frameOrigin(), centre: midpoint(points), spread: spread(points) };
+}
+
+canvasHost.addEventListener('pointerdown', (event) => {
+  if (!pictureOnly || event.pointerType === 'mouse') {
+    return;
+  }
+  if (picturePointers.size === 0) {
+    pictureGestured = false;
+  }
+  picturePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  canvasHost.setPointerCapture(event.pointerId);
+  startPictureGesture();
+});
+
+canvasHost.addEventListener('pointermove', (event) => {
+  if (!pictureGesture || !picturePointers.has(event.pointerId)) {
+    return;
+  }
+  picturePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+  const points = [...picturePointers.values()];
+  const centre = midpoint(points);
+  const { zoom, origin } = pictureGesture;
+  const moved = Math.hypot(centre.x - pictureGesture.centre.x, centre.y - pictureGesture.centre.y);
+  pictureGestured ||= points.length > 1 || moved > TAP_SLOP_PX;
+  if (!pictureGestured) {
+    return;
+  }
+  const scale = pictureGesture.spread > 0
+    ? clamp(zoom.scale * spread(points) / pictureGesture.spread, 1, MAXIMUM_PICTURE_ZOOM)
+    : zoom.scale;
+  // The picture point that started under the fingers stays under them.
+  const ratio = scale / zoom.scale;
+  setPictureZoom(clampPictureZoom({
+    scale,
+    x: centre.x - origin.x - (pictureGesture.centre.x - origin.x - zoom.x) * ratio,
+    y: centre.y - origin.y - (pictureGesture.centre.y - origin.y - zoom.y) * ratio,
+  }, origin));
+});
+
+const endPicturePointer = (event: PointerEvent) => {
+  if (picturePointers.delete(event.pointerId)) {
+    startPictureGesture();
+  }
+};
+canvasHost.addEventListener('pointerup', endPicturePointer);
+canvasHost.addEventListener('pointercancel', endPicturePointer);
+
 function setPictureOnly(on: boolean) {
   pictureOnly = on;
+  setPictureZoom(IDENTITY_ZOOM);
   if (on) {
     setPanelOpen(false);
   }
@@ -389,7 +489,9 @@ canvasHost.addEventListener('click', (event) => {
     return;
   }
   if (pictureOnly) {
-    setPictureOnly(false);
+    if (!pictureGestured) {
+      setPictureOnly(false);
+    }
     return;
   }
   const target = event.target instanceof Element ? event.target : null;
@@ -1890,6 +1992,7 @@ function startRender(request: RenderRequest) {
 
 let resizeRenderTimer = 0;
 window.addEventListener('resize', () => {
+  setPictureZoom(IDENTITY_ZOOM);
   const resolutionChanged = resizeCanvas();
   drawDisplay();
   if (resolutionChanged) {

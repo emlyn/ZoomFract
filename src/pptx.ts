@@ -213,6 +213,12 @@ export function powerPointLimits(scene: SceneDefinition): PowerPointLimit[] {
   return [
     scene.shading.mode === 'density' ? { text: 'Density shading is not available, so shapes are drawn in black' } : null,
     zooms.some((zoom) => zoom.opacity < 1) ? { text: 'Zoom opacity is ignored' } : null,
+    zooms.some((zoom) => zoom.kind === 'zoom' && zoom.blend !== 'normal')
+      ? { text: 'Zoom blend modes are ignored' }
+      : null,
+    scene.shading.mode === 'paint' && scene.shading.detail !== 0
+      ? { text: 'Shading detail is ignored; PowerPoint shrinks copies like detail: average' }
+      : null,
     scene.elements.some((element) => element.glow)
       ? { text: 'Glows use PowerPoint\u2019s own soft edge, so their softness is ignored' }
       : null,

@@ -86,8 +86,8 @@ const POINT: Shape = { keys: leaves('x', 'y') };
 const ROTATION: Shape = { keys: leaves('degrees', 'deg', 'radians', 'rad') };
 const AXIS: Shape = { keys: leaves('from', 'to', 'min', 'max') };
 const GEOMETRY: Record<string, Shape> = {
-  ...leaves('type', 'name', 'width', 'height', 'opacity'),
-  glow: { keys: leaves('colour', 'opacity', 'size', 'softness') },
+  ...leaves('type', 'name', 'width', 'height', 'opacity', 'transparency'),
+  glow: { keys: leaves('colour', 'opacity', 'transparency', 'size', 'softness') },
   centre: POINT,
   topLeft: POINT,
   topRight: POINT,
@@ -120,14 +120,14 @@ const DEFINITION: Shape = {
         keys: { ...leaves('name', 'value'), input: { keys: leaves('type', 'label', 'min', 'max', 'step') } },
       },
     },
-    shading: { keys: { ...leaves('mode', 'scale'), colours: LEAF } },
-    seed: { keys: leaves('colour', 'opacity') },
+    shading: { keys: { ...leaves('mode', 'scale', 'detail'), colours: LEAF } },
+    seed: { keys: leaves('colour', 'opacity', 'transparency') },
     scene: {
       items: {
         byType: {
           // Scale and align are listed so rectangles get a specific error.
           rect: { keys: { ...GEOMETRY, ...leaves('colour', 'weight', 'scale', 'align') } },
-          zoom: { keys: { ...GEOMETRY, scale: LEAF, align: ALIGN } },
+          zoom: { keys: { ...GEOMETRY, ...leaves('scale', 'blend'), align: ALIGN } },
         },
       },
     },
@@ -230,6 +230,7 @@ export type ZoomElement = SceneElement & {
   height: number;
   rotation: number;
   opacity: number;
+  blend: BlendMode;
   alignTargets: Vec2[];
 };
 
@@ -267,8 +268,17 @@ export type ColorStop = {
 // Paint draws coloured shapes. Density counts how many copies of the shapes
 // cover each pixel and colours pixels by that count.
 export type Shading =
-  | { mode: 'paint' }
+  | { mode: 'paint'; detail: number }
   | { mode: 'density'; scale: DensityScale; colors: ColorStop[] };
+
+// How small copies are shrunk, from -1 to 1. Each shrunk block takes the
+// average alpha of its pixels at 0 (ordinary image scaling), moving towards
+// the minimum alpha at -1 and the maximum at 1 (`preserve`).
+const DETAIL_NAMES: Record<string, number> = { average: 0, preserve: 1 };
+
+// How a zoom's copy combines with what is already drawn under it.
+export const BLEND_MODES = ['normal', 'multiply', 'screen', 'add', 'darken', 'lighten'] as const;
+export type BlendMode = typeof BLEND_MODES[number];
 
 export const MAXIMUM_DENSITY_COLORS = 8;
 const DEFAULT_DENSITY_COLORS = ['#fef3c7', '#c2410c', '#1c1917'];
@@ -303,6 +313,7 @@ function parseColorStops(colors: unknown): ColorStop[] {
     if (colors.length < 2 || colors.length > MAXIMUM_DENSITY_COLORS || !colors.every((color) => typeof color === 'string')) {
       throw new Error(`shading colours must be a list of ${range} colours`);
     }
+    colors.forEach((color, index) => atPath([...path, index], () => asColour(color, '')));
     return evenStops(colors);
   }
   if (!colors || typeof colors !== 'object') {
@@ -316,7 +327,7 @@ function parseColorStops(colors: unknown): ColorStop[] {
     if (typeof color !== 'string') {
       throw new Error(`shading colours position "${key}" must have a colour`);
     }
-    return { at: parseStopPosition(key), color };
+    return { at: parseStopPosition(key), color: asColour(color, '') };
   }));
 }
 
@@ -423,6 +434,67 @@ function asPositiveNumber(value: unknown, variables: Variables): number | undefi
 function asNonNegativeNumber(value: unknown, fallback: number, variables: Variables): number {
   const number = asNumber(value, fallback, variables);
   return number >= 0 ? number : fallback;
+}
+
+// A fraction from 0 to 1, or a percentage such as `40%`, whose number may be
+// an expression. Results outside the range are clamped.
+function asFraction(value: unknown, variables: Variables): number {
+  const percent = typeof value === 'string' ? /^(.*)%\s*$/s.exec(value) : null;
+  const fraction = percent
+    ? evaluateExpression(percent[1], variables) / 100
+    : asNumber(value, Number.NaN, variables);
+  if (Number.isNaN(fraction)) {
+    throw new Error('must be a number from 0 to 1 or a percentage');
+  }
+  return clamp(fraction, 0, 1);
+}
+
+// Items may set `opacity` or `transparency` (1 - opacity), but not both.
+function parseOpacity(
+  record: Record<string, unknown>,
+  fallback: number,
+  variables: Variables,
+  path: ScenePath,
+): number {
+  if (record.opacity !== undefined && record.transparency !== undefined) {
+    throw new PathError('Use either "opacity" or "transparency", not both', [...path, 'transparency']);
+  }
+  if (record.transparency !== undefined) {
+    return 1 - atPath([...path, 'transparency'], () => asFraction(record.transparency, variables));
+  }
+  return record.opacity === undefined
+    ? fallback
+    : atPath([...path, 'opacity'], () => asFraction(record.opacity, variables));
+}
+
+let colourContext: OffscreenCanvasRenderingContext2D | null = null;
+
+// Any colour the canvas understands: names, #rgb, #rgba, #rrggbb, #rrggbbaa,
+// and functions such as rgb(), hsl(), hwb(), lab() and oklch(). A colour the
+// canvas rejects leaves its fill unchanged, so two different starting fills
+// reveal it.
+function isColour(value: string): boolean {
+  colourContext ??= new OffscreenCanvas(1, 1).getContext('2d');
+  if (!colourContext) {
+    throw new Error('Could not create a canvas to check colours');
+  }
+  const context = colourContext;
+  const parsed = (start: string) => {
+    context.fillStyle = start;
+    context.fillStyle = value;
+    return context.fillStyle;
+  };
+  return parsed('#000') === parsed('#fff');
+}
+
+function asColour(value: unknown, fallback: string): string {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== 'string' || !isColour(value)) {
+    throw new Error(`${JSON.stringify(value)} is not a colour; use a name, #rgb, #rrggbbaa, rgb(), hsl() or similar`);
+  }
+  return value;
 }
 
 // Grows an axis by the overflow on both sides, keeping its direction.
@@ -1107,16 +1179,16 @@ function parseGlow(
     throw new PathError(`${elementName} glow size must be a positive number`, value.size === undefined ? path : [...path, 'size']);
   }
   const colour = value.colour;
-  if (typeof colour !== 'string') {
-    throw new PathError(`${elementName} glow needs a colour`, value.colour === undefined ? path : [...path, 'colour']);
+  if (colour === undefined) {
+    throw new PathError(`${elementName} glow needs a colour`, path);
   }
   const softness = atPath([...path, 'softness'], () => asNumber(value.softness, DEFAULT_GLOW_SOFTNESS, variables));
   if (softness < 0 || softness > 1) {
     throw new PathError(`${elementName} glow softness must be from 0 to 1`, [...path, 'softness']);
   }
   return {
-    color: colour,
-    opacity: clamp(atPath([...path, 'opacity'], () => asNumber(value.opacity, DEFAULT_GLOW_OPACITY, variables)), 0, 1),
+    color: atPath([...path, 'colour'], () => asColour(colour, '')),
+    opacity: parseOpacity(value, DEFAULT_GLOW_OPACITY, variables, path),
     size,
     softness,
   };
@@ -1135,10 +1207,11 @@ function parseRectElement(
   if (rect.scale !== undefined || rect.align !== undefined) {
     throw new PathError(`${elementName}: scale and align are only supported on zooms`, [...path, rect.scale !== undefined ? 'scale' : 'align']);
   }
-  if (density && (rect.colour !== undefined || rect.opacity !== undefined)) {
+  if (density && (rect.colour !== undefined || rect.opacity !== undefined || rect.transparency !== undefined)) {
+    const key = rect.colour !== undefined ? 'colour' : rect.opacity !== undefined ? 'opacity' : 'transparency';
     throw new PathError(
-      `${elementName}: colour and opacity are not used with density shading; use weight instead`,
-      [...path, rect.colour !== undefined ? 'colour' : 'opacity'],
+      `${elementName}: ${key} is not used with density shading; use weight instead`,
+      [...path, key],
     );
   }
   if (!density && rect.weight !== undefined) {
@@ -1149,8 +1222,8 @@ function parseRectElement(
     throw new PathError(`${elementName} weight must be a positive number`, [...path, 'weight']);
   }
   const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables, path);
-  const opacity = clamp(at('opacity', () => asNumber(rect.opacity, 1, variables)), 0, 1);
-  const color = typeof rect.colour === 'string' ? rect.colour : '#000';
+  const opacity = parseOpacity(rect, 1, variables, path);
+  const color = at('colour', () => asColour(rect.colour, '#000'));
 
   return {
     kind: 'rect',
@@ -1175,8 +1248,15 @@ function parseZoomElement(
   path: ScenePath,
 ): ZoomElement {
   const alignPath = [...path, 'align'];
-  if (density && zoom.opacity !== undefined) {
-    throw new PathError(`${elementName}: opacity is not used with density shading`, [...path, 'opacity']);
+  if (density && (zoom.opacity !== undefined || zoom.transparency !== undefined)) {
+    const key = zoom.opacity !== undefined ? 'opacity' : 'transparency';
+    throw new PathError(`${elementName}: ${key} is not used with density shading`, [...path, key]);
+  }
+  if (zoom.blend !== undefined && density) {
+    throw new PathError(`${elementName}: blend is not used with density shading`, [...path, 'blend']);
+  }
+  if (zoom.blend !== undefined && !BLEND_MODES.includes(zoom.blend as BlendMode)) {
+    throw new PathError(`${elementName} blend must be ${BLEND_MODES.slice(0, -1).join(', ')}, or ${BLEND_MODES.at(-1)}`, [...path, 'blend']);
   }
   const align = zoom.align === undefined
     ? []
@@ -1186,7 +1266,8 @@ function parseZoomElement(
     name,
     glow: atPath([...path, 'glow'], () => parseGlow(zoom.glow, elementName, variables, density, [...path, 'glow'])),
     ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, path, { aspect, view, align }),
-    opacity: clamp(atPath([...path, 'opacity'], () => asNumber(zoom.opacity, 1, variables)), 0, 1),
+    opacity: parseOpacity(zoom, 1, variables, path),
+    blend: (zoom.blend as BlendMode | undefined) ?? 'normal',
     alignTargets: align.map((pair) => pair.to),
   };
 }
@@ -1415,22 +1496,43 @@ function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition
   return definitions;
 }
 
-function parseShading(node: unknown): Shading {
+function parseDetail(value: unknown, variables: Variables): number {
+  if (value === undefined) {
+    return 0;
+  }
+  const named = typeof value === 'string' ? DETAIL_NAMES[value.trim()] : undefined;
+  if (named !== undefined) {
+    return named;
+  }
+  const percent = typeof value === 'string' ? /^(.*)%\s*$/s.exec(value) : null;
+  const detail = percent
+    ? evaluateExpression(percent[1], variables) / 100
+    : asNumber(value, Number.NaN, variables);
+  if (!(detail >= -1 && detail <= 1)) {
+    throw new Error('shading detail must be average, preserve, or a number from -1 to 1');
+  }
+  return detail;
+}
+
+function parseShading(node: unknown, variables: Variables): Shading {
   if (node === undefined) {
-    return { mode: 'paint' };
+    return { mode: 'paint', detail: 0 };
   }
   if (!node || typeof node !== 'object' || Array.isArray(node)) {
     throw new Error('shading must be an object');
   }
-  const { mode = 'paint', scale, colours } = node as Record<string, unknown>;
+  const { mode = 'paint', scale, colours, detail } = node as Record<string, unknown>;
   if (mode === 'paint') {
     if (scale !== undefined || colours !== undefined) {
       throw new PathError('shading scale and colours are only used with density mode', ['shading', scale !== undefined ? 'scale' : 'colours']);
     }
-    return { mode };
+    return { mode, detail: atPath(['shading', 'detail'], () => parseDetail(detail, variables)) };
   }
   if (mode !== 'density') {
     throw new PathError('shading mode must be paint or density', ['shading', 'mode']);
+  }
+  if (detail !== undefined) {
+    throw new PathError('shading detail is only used with paint mode', ['shading', 'detail']);
   }
   if (scale !== undefined && scale !== 'log' && scale !== 'sqrt' && scale !== 'linear') {
     throw new PathError('shading scale must be log, sqrt, or linear', ['shading', 'scale']);
@@ -1610,7 +1712,7 @@ export type ParsedScene = {
 // Input values replace the values of variables set while viewing.
 export function parseSceneWithDiagnostics(text: string, inputValues: InputValues = new Map()): ParsedScene {
   if (!text.trim()) {
-    return { scene: { ...fallback, inputs: [], shading: { mode: 'paint' } }, warnings: [] };
+    return { scene: { ...fallback, inputs: [], shading: { mode: 'paint', detail: 0 } }, warnings: [] };
   }
   const document = YAML.parseDocument(text, { prettyErrors: false });
   const lineOf = (offset: number) => text.slice(0, offset).split('\n').length;
@@ -1726,15 +1828,15 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
     const frame: FrameDefinition = {
       width: frameSize('width'),
       radius: frameSize('radius'),
-      color: typeof frameNode.colour === 'string' ? frameNode.colour : fallback.frame.color,
-      wall: typeof frameNode.wall === 'string' ? frameNode.wall : fallback.frame.wall,
-      background: typeof frameNode.background === 'string' ? frameNode.background : fallback.frame.background,
+      color: atPath(['frame', 'colour'], () => asColour(frameNode.colour, fallback.frame.color)),
+      wall: atPath(['frame', 'wall'], () => asColour(frameNode.wall, fallback.frame.wall)),
+      background: atPath(['frame', 'background'], () => asColour(frameNode.background, fallback.frame.background)),
       padding: frameSize('padding'),
       margin: frameSize('margin'),
     };
     const coordinates = { x: xRange(), y: yRange() };
 
-    const shading = atPath(['shading'], () => parseShading(sceneRoot.shading));
+    const shading = atPath(['shading'], () => parseShading(sceneRoot.shading, variables));
     const density = shading.mode === 'density';
     if (density && sceneRoot.seed !== undefined) {
       throw new PathError('seed is not used with density shading', ['seed']);
@@ -1769,9 +1871,9 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
       frame,
       seed: {
         color: typeof sceneRoot.seed === 'string'
-          ? sceneRoot.seed
-          : typeof seedNode.colour === 'string' ? seedNode.colour : fallback.seed.color,
-        opacity: clamp(atPath(['seed', 'opacity'], () => asNumber(seedNode.opacity, fallback.seed.opacity, variables)), 0, 1),
+          ? atPath(['seed'], () => asColour(sceneRoot.seed, fallback.seed.color))
+          : atPath(['seed', 'colour'], () => asColour(seedNode.colour, fallback.seed.color)),
+        opacity: parseOpacity(seedNode, fallback.seed.opacity, variables, ['seed']),
       },
       view: {
         aspect: resolvedAspect(),

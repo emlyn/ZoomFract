@@ -12,7 +12,7 @@
   <a href="#guide-align">Alignment</a>
   <a href="#guide-seed">Seed</a>
   <a href="#guide-glow">Glow</a>
-  <a href="#guide-shading">Density shading</a>
+  <a href="#guide-shading">Shading</a>
   <a href="#guide-expressions">Expressions</a>
   <a href="#guide-variables">Variables</a>
   <a href="#guide-inputs">Inputs</a>
@@ -205,6 +205,19 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     <code>opacity</code> defaults to 1. With
     <a href="#guide-shading">density shading</a>, use <code>weight</code> instead.
   </p>
+  <p>
+    Anywhere a colour is used, write a name such as <code>teal</code>, a hex code
+    (<code>#rgb</code>, <code>#rgba</code>, <code>#rrggbb</code> or <code>#rrggbbaa</code>),
+    or a function such as <code>rgb(255 0 0 / 50%)</code>, <code>rgba(255, 0, 0, 0.5)</code>,
+    <code>hsl(200 60% 50%)</code> or <code>oklch(70% 0.1 200)</code>. A colour's own
+    transparency combines with <code>opacity</code>.
+  </p>
+  <p>
+    Anywhere <code>opacity</code> is allowed you can write <code>transparency</code>
+    instead, which is 1 minus the opacity (use one or the other). Both take a number
+    from 0 to 1 or a percentage, so <code>opacity: 80%</code> and
+    <code>transparency: 0.2</code> are the same.
+  </p>
 </section>
 
 <section id="guide-position">
@@ -276,6 +289,15 @@ centre: view.centre       # a point of the whole view</code></pre>
     </li>
     <li>If only <code>width</code> or <code>height</code> is given, the other comes from the view's aspect, so the copy is not stretched.</li>
     <li><code>opacity</code> fades the copy (not with density shading).</li>
+    <li>
+      <code>blend</code> chooses how the copy mixes with what is below it:
+      <code>normal</code> (the default) paints over it, <code>multiply</code> darkens,
+      <code>screen</code> lightens, <code>add</code> adds the colours together,
+      <code>darken</code> keeps the darker colour and <code>lighten</code> the lighter one.
+      Blending is not used with density shading or in PowerPoint files, and pictures
+      with blended zooms build every level from the one before, so they can look
+      slightly softer.
+    </li>
   </ul>
 </section>
 
@@ -345,9 +367,31 @@ seed:
 </section>
 
 <section id="guide-shading">
+  <h3>Shading</h3>
+  <p>
+    Normally, shapes are painted on top of each other (<code>mode: paint</code>). When
+    copies become smaller than a pixel, <code>detail</code> chooses how they are shrunk:
+  </p>
+  <pre><code>shading:
+  detail: average            # average (default), preserve, or -1 to 1</code></pre>
+  <ul>
+    <li>
+      <code>average</code> (or <code>0</code>) blends tiny details into their surroundings,
+      like ordinary image scaling and PowerPoint. Faint, overlapping copies stay faint.
+    </li>
+    <li>
+      <code>preserve</code> (or <code>1</code>) keeps tiny details bold so thin lines do not
+      fade away, but areas with many see-through copies can turn dark.
+    </li>
+    <li>
+      Numbers between give a mix, for example <code>0.5</code> or <code>50%</code>.
+      Negative numbers, down to <code>-1</code>, do the opposite: tiny details fade away
+      faster, leaving only solid areas.
+    </li>
+  </ul>
   <h3>Density shading</h3>
   <p>
-    Normally, shapes are painted on top of each other, so busy areas can turn solid.
+    Painted busy areas can still turn solid.
     Density shading instead counts how many shapes and copies cover each pixel, and
     colours the pixel by that count. This keeps detail where many copies overlap.
   </p>
@@ -569,7 +613,9 @@ scene:
   </table>
   <p>
     Clicking or tapping the picture also shows it on its own, unless the definition has
-    point inputs. With the panel hidden, tapping the wall on a touch screen shows the
+    point inputs. On a touch screen you can then pinch to zoom in and drag to look
+    around. A tap without pinching or dragging returns to the wall.
+    With the panel hidden, tapping the wall on a touch screen shows the
     button that opens it. The share button in the corner of the wall label also opens
     Share.
   </p>

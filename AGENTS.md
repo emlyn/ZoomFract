@@ -188,6 +188,15 @@ files unless extracting a module clearly reduces complexity.
 
 - `rect` is borderless by default and uses `colour` (default black) plus
   optional `opacity`.
+- Every colour (items, glows, seed, frame, shading stops) is any colour the
+  canvas accepts: names, `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, and
+  functions such as `rgb()`, `hsl()`, `hwb()`, `lab()` and `oklch()`. The
+  parser validates each against a canvas, so unknown colours are errors.
+  Colour alpha multiplies with opacity.
+- Wherever `opacity` is accepted (items, glows, seed), `transparency`
+  (1 - opacity) may be used instead, but not both. Either may be a number
+  from 0 to 1, an expression, or a percentage such as `40%`; values are
+  clamped to 0..1.
 - Geometry may be determined from a sufficient combination of `centre`,
   width, height, named corners, and rotation.
 - Numeric rotations are degrees, and positive rotations are clockwise.
@@ -210,13 +219,25 @@ files unless extracting a module clearly reduces complexity.
 - Terminal zoom leaves use top-level `seed`; the seed may be a colour string
   or an object containing colour and opacity. Without a seed colour, terminal
   leaves are transparent.
+- Zoom `blend` is `normal` (default), `multiply`, `screen`, `add`, `darken`
+  or `lighten` (`BLEND_MODES`), paint mode only. A copy is the scene
+  composited on its own, then blended onto what is below, including seed
+  leaves. Exact recursion draws copies item by item, which only matches
+  that for normal, so when any zoom blends both renderers skip it (WebGL2
+  unrolls no zooms, Canvas 2D uses depth 0 passes). WebGL2 copies the
+  framebuffer to a backdrop texture before each blended copy and blends
+  premultiplied colours in the scene shader; Canvas 2D uses
+  `globalCompositeOperation` (`add` is `lighter`).
 - Keep quality controls out of the scene definition. Resolution, renderer,
   max recursion, levels, and supersampling are application quality settings.
 
-### Density shading
+### Shading
 
 - Optional top-level `shading` has `mode: paint` (default, normal
-  compositing) or `mode: density`. Density also accepts `scale` (`log`
+  compositing) or `mode: density`. Paint mode accepts `detail`, a number
+  from -1 to 1 (or percentage or expression; `average` is 0, the default,
+  and `preserve` is 1), choosing how mips shrink sub-pixel copies; it is
+  an error in density mode. Density also accepts `scale` (`log`
   default, `sqrt`, `linear`) and `colours` (2 to 8 stops, few hits to many);
   these are errors in paint mode. `colours` is a list (spread evenly) or a
   mapping from positions to colours, where a number is an absolute hit count
@@ -348,10 +369,12 @@ files unless extracting a module clearly reduces complexity.
   only what the inputs do not show; the resolved renderer, supersampling,
   recursion and levels are hover text on the Quality row and settings header.
 - Captures must exclude the host background and preserve transparency.
-- Downsampling must weight colours by alpha and prioritise non-transparent
-  coverage so fine recursive details do not disappear prematurely. Both
-  renderers build their mip chains this way; WebGL2 stores premultiplied
-  texels.
+- Downsampling must weight colours by alpha. Each 2x2 block's alpha is its
+  average moved towards its maximum (`shading.detail` > 0) or minimum
+  (< 0) by |detail|, with the alpha-weighted colour. Detail 0 (default) is a
+  plain premultiplied average, matching ordinary scaling and PowerPoint, so
+  stacked translucent copies do not darken; 1 keeps fine recursive details
+  bold. Glow masks always use 1. WebGL2 stores premultiplied texels.
 - Canvas 2D terminal bitmap leaves use projected-size, transform-aware
   rasterisation and cache equivalent leaf transforms.
 - Dynamic recursion stops before leaves become smaller than the selected
@@ -383,8 +406,11 @@ files unless extracting a module clearly reduces complexity.
   unused. Reopening reverses the transition.
 - Tapping or clicking the picture (not when it has point inputs) shows
   it alone: no frame, margin, cards or toggle, filling the window (and the
-  screen, where fullscreen is allowed) on the frame background. Any tap or
-  leaving fullscreen returns to the wall.
+  screen, where fullscreen is allowed) on the frame background. There,
+  touch pinches zoom (up to 8x) and drags pan via a CSS transform on the
+  frame, clamped to cover the screen or stay inside it; it resets on exit
+  or resize. A tap without a gesture, or leaving fullscreen, returns to
+  the wall.
 - Keyboard shortcuts live in one capture-phase `keydown` handler in
   `main.ts` and are listed in the guide's Keyboard shortcuts section. Letter
   keys are ignored while typing in a field or the editor; Ctrl/Cmd combos
