@@ -268,9 +268,11 @@ files unless extracting a module clearly reduces complexity.
 ### Glow
 
 - Rects and zooms accept `glow: { colour, opacity, size, softness }`.
-  `colour` and `size` (a positive scene-unit distance) are required;
+  `colour` and `size` (a non-negative scene-unit distance) are required;
   `opacity` defaults to 1; `softness` is 0 to 1 and defaults to 1. Glows
-  are errors in density mode and with Canvas 2D.
+  are errors in density mode and with Canvas 2D. Zoom glows also accept
+  `sourceOpacity` (0 to 1, default 0) to blend between ignoring source alpha
+  and weighting the glow by it.
 - Grow the shape by size * (1 - softness/2), then Gaussian blur with
   sigma = size * softness / 6, so the glow always reaches about `size`.
   Softness 1 matches LibreOffice's glow. The glow draws just before (under)

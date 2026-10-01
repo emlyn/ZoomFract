@@ -32,6 +32,7 @@ type GlowField = {
   levelSize: Vec2;
   size: Vec2;
   softness: number;
+  sourceOpacity: number;
   // How far the shape grows, and the blur's sigma, in texels of the sampled level.
   radius: Vec2;
   sigma: Vec2;
@@ -188,12 +189,15 @@ uniform vec2 levelSize;
 uniform vec2 fieldSize;
 uniform vec2 margin;
 uniform vec2 radius;
+uniform float sourceOpacity;
 out vec4 outColor;
 float alphaAt(vec2 coords) {
   if (any(lessThan(coords, vec2(0.0))) || any(greaterThan(coords, vec2(1.0)))) {
     return 0.0;
   }
-  return hasSource ? textureLod(source, coords, lod).a : constantAlpha;
+  float alpha = hasSource ? textureLod(source, coords, lod).a : constantAlpha;
+  // Zero treats any visible source as fully covered; one keeps its alpha.
+  return alpha > 0.0 ? mix(1.0, alpha, sourceOpacity) : 0.0;
 }
 void main() {
   vec2 coords = gl_FragCoord.xy / fieldSize * (1.0 + 2.0 * margin) - margin;
@@ -571,8 +575,9 @@ function drawWebgl(
         return;
       }
       const margin = { x: element.glow.size / element.width, y: element.glow.size / element.height };
-      const { softness } = element.glow;
+      const { softness, sourceOpacity } = element.glow;
       const existing = fields.find((field) => field.softness === softness
+        && field.sourceOpacity === sourceOpacity
         && Math.abs(field.margin.x - margin.x) < 1e-9 && Math.abs(field.margin.y - margin.y) < 1e-9);
       if (existing) {
         byElement.set(elementIndex, existing);
@@ -599,6 +604,7 @@ function drawWebgl(
         index: fields.length,
         margin,
         softness,
+        sourceOpacity,
         lod,
         levelSize,
         size,
@@ -630,6 +636,7 @@ function drawWebgl(
         const uniform = (name: string) => gl.getUniformLocation(glowDilateProgram, name);
         gl.uniform1i(uniform('hasSource'), source ? 1 : 0);
         gl.uniform1f(uniform('constantAlpha'), seedAlpha);
+        gl.uniform1f(uniform('sourceOpacity'), field.sourceOpacity);
         gl.uniform1f(uniform('lod'), field.lod);
         gl.uniform2f(uniform('levelSize'), field.levelSize.x, field.levelSize.y);
         gl.uniform2f(uniform('margin'), field.margin.x, field.margin.y);

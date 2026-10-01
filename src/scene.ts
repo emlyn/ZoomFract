@@ -88,7 +88,7 @@ const ROTATION: Shape = { keys: leaves('degrees', 'deg', 'radians', 'rad') };
 const AXIS: Shape = { keys: leaves('from', 'to', 'min', 'max') };
 const GEOMETRY: Record<string, Shape> = {
   ...leaves('type', 'name', 'width', 'height', 'opacity', 'transparency'),
-  glow: { keys: leaves('colour', 'opacity', 'transparency', 'size', 'softness') },
+  glow: { keys: leaves('colour', 'opacity', 'transparency', 'size', 'softness', 'sourceOpacity') },
   centre: POINT,
   topLeft: POINT,
   topRight: POINT,
@@ -207,6 +207,7 @@ export type Glow = {
   opacity: number;
   size: number;
   softness: number;
+  sourceOpacity: number;
 };
 
 type SceneElement = {
@@ -1290,6 +1291,7 @@ function parseGlow(
   variables: Variables,
   density: boolean,
   path: ScenePath,
+  isZoom: boolean,
 ): Glow | undefined {
   if (value === undefined) {
     return undefined;
@@ -1300,9 +1302,12 @@ function parseGlow(
   if (!isRecord(value)) {
     throw new Error(`${elementName} glow must be an object with a colour and size`);
   }
-  const size = atPath([...path, 'size'], () => asPositiveNumber(value.size, variables));
-  if (!size) {
-    throw new PathError(`${elementName} glow size must be a positive number`, value.size === undefined ? path : [...path, 'size']);
+  if (!isZoom && value.sourceOpacity !== undefined) {
+    throw new PathError('sourceOpacity is only used by zoom glows', [...path, 'sourceOpacity']);
+  }
+  const size = atPath([...path, 'size'], () => asNonNegativeNumber(value.size, Number.NaN, variables));
+  if (Number.isNaN(size)) {
+    throw new PathError(`${elementName} glow size must be a non-negative number`, value.size === undefined ? path : [...path, 'size']);
   }
   const colour = value.colour;
   if (colour === undefined) {
@@ -1317,6 +1322,9 @@ function parseGlow(
     opacity: parseOpacity(value, DEFAULT_GLOW_OPACITY, variables, path),
     size,
     softness,
+    sourceOpacity: atPath([...path, 'sourceOpacity'], () => value.sourceOpacity === undefined
+      ? 0
+      : asFraction(value.sourceOpacity, variables)),
   };
 }
 
@@ -1354,7 +1362,7 @@ function parseRectElement(
   return {
     kind: 'rect',
     name,
-    glow: at('glow', () => parseGlow(rect.glow, elementName, variables, density, [...path, 'glow'])),
+    glow: at('glow', () => parseGlow(rect.glow, elementName, variables, density, [...path, 'glow'], false)),
     ...geometry,
     color,
     opacity,
@@ -1548,7 +1556,7 @@ function parseZoomElement(
   return {
     kind: 'zoom',
     name,
-    glow: atPath([...path, 'glow'], () => parseGlow(zoom.glow, elementName, variables, density, [...path, 'glow'])),
+    glow: atPath([...path, 'glow'], () => parseGlow(zoom.glow, elementName, variables, density, [...path, 'glow'], true)),
     ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, path, { aspect, view, align }),
     opacity: parseOpacity(zoom, 1, variables, path),
     blend: (zoom.blend as BlendMode | undefined) ?? 'normal',

@@ -190,8 +190,9 @@ function transformXml(tag: string, { x, y, cx, cy, rot, flipV }: Placement, atOr
   return `<${tag}${attributes}>${offset}<a:ext cx="${cx}" cy="${cy}"/></${tag}>`;
 }
 
-const glowXml = (glow: Glow | undefined, mapping: ReturnType<typeof slideMapping>) => glow && visible(glow.color, glow.opacity)
-  ? `<a:effectLst><a:glow rad="${Math.round(mapping.length(glow.size))}">${colorXml(glow.color, glow.opacity)}</a:glow></a:effectLst>`
+const glowXml = (glow: Glow | undefined, mapping: ReturnType<typeof slideMapping>) =>
+  glow && visible(glow.color, glow.opacity)
+  ? `<a:effectLst><a:glow rad="${Math.max(1, Math.round(mapping.length(glow.size)))}">${colorXml(glow.color, glow.opacity)}</a:glow></a:effectLst>`
   : '';
 
 // --- limits ----------------------------------------------------------------
@@ -230,6 +231,10 @@ export function powerPointLimits(scene: SceneDefinition): PowerPointLimit[] {
       : null,
     scene.elements.some((element) => element.glow)
       ? { text: 'Glows use PowerPoint\u2019s own soft edge, so their softness is ignored' }
+      : null,
+    scene.elements.some((element) => element.kind === 'zoom' && element.glow !== undefined
+      && element.glow.sourceOpacity > 0)
+      ? { text: 'Custom zoom glow sourceOpacity is ignored' }
       : null,
     powerPointFadeWarning(scene),
   ].filter((limit): limit is PowerPointLimit => limit !== null);

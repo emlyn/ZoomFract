@@ -379,10 +379,24 @@ seed:
   glow:
     colour: "#fde047"  # required
     opacity: 0.6       # defaults to 1
-    size: 0.1          # how far it spreads, in coordinates; required
+    size: 0.1          # how far it spreads, in coordinates; 0 adds no spread
     softness: 0.3      # 0 is a solid band, 1 (the default) fades over the whole size</code></pre>
+  <p>
+    Zoom glows also accept <code>sourceOpacity</code>, from 0 to 1 (or a
+    percentage). It controls how much transparency in the copied picture reduces
+    the glow: 0 (the default) ignores source transparency when forming the
+    glow, closer to PowerPoint, while 1 keeps the current alpha-weighted glow.
+    Use values in between to blend the behaviours. The glow's own
+    <code>opacity</code> still controls its strength independently.
+  </p>
+  <pre><code>  glow:
+    colour: cyan
+    size: 0.005
+    opacity: 0.5
+    sourceOpacity: 0.25</code></pre>
   <ul>
     <li>A zoom's glow follows the shapes in its copy.</li>
+    <li>At size 0, a zoom glow still follows the source shape; it can show behind a translucent copy.</li>
     <li>Glow size is part of the scene, so it stays proportional when quality changes.</li>
     <li>Glows are copied into zooms along with everything else.</li>
     <li>Glows are cut off at the edge of the picture; add a view <code>overflow</code>, or <code>overflow: auto</code>, to make room.</li>
