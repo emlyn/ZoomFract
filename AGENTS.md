@@ -425,7 +425,8 @@ files unless extracting a module clearly reduces complexity.
   touch pinches zoom (up to 8x) and drags pan via a CSS transform on the
   frame, clamped to cover the screen or stay inside it; it resets on exit
   or resize. A tap without a gesture, or leaving fullscreen, returns to
-  the wall.
+  the wall. It works with the panel open, which hides for it and reopens
+  on return.
 - Keyboard shortcuts live in one capture-phase `keydown` handler in
   `main.ts` and are listed in the guide's Keyboard shortcuts section. Letter
   keys are ignored while typing in a field or the editor; Ctrl/Cmd combos

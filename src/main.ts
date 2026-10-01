@@ -457,10 +457,16 @@ const endPicturePointer = (event: PointerEvent) => {
 canvasHost.addEventListener('pointerup', endPicturePointer);
 canvasHost.addEventListener('pointercancel', endPicturePointer);
 
+let panelBeforePicture = false;
+
 function setPictureOnly(on: boolean) {
+  if (on === pictureOnly) {
+    return;
+  }
   pictureOnly = on;
   setPictureZoom(IDENTITY_ZOOM);
   if (on) {
+    panelBeforePicture = panelIsOpen;
     setPanelOpen(false);
   }
   shell.classList.toggle('picture-only', on);
@@ -470,6 +476,9 @@ function setPictureOnly(on: boolean) {
     shell.requestFullscreen?.().catch(() => undefined);
   } else if (!on && document.fullscreenElement) {
     void document.exitFullscreen();
+  }
+  if (!on && panelBeforePicture) {
+    setPanelOpen(true);
   }
   if (resizeCanvas()) {
     render();
@@ -485,9 +494,6 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 canvasHost.addEventListener('click', (event) => {
-  if (panelIsOpen) {
-    return;
-  }
   if (pictureOnly) {
     if (!pictureGestured) {
       setPictureOnly(false);
@@ -498,6 +504,8 @@ canvasHost.addEventListener('click', (event) => {
   const byMouse = event instanceof PointerEvent && event.pointerType === 'mouse';
   if (target?.closest('canvas') && !state.scene.inputs.some(isPointInput)) {
     setPictureOnly(true);
+  } else if (panelIsOpen) {
+    return;
   } else if (!byMouse && !target?.closest('.canvas-frame, .wall-label')) {
     window.clearTimeout(toggleHideTimer);
     const visible = shell.classList.toggle('panel-handle-visible');
