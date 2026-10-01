@@ -346,7 +346,7 @@ function createColorParser(): (color: string) => Rgba {
     if (cached) {
       return cached;
     }
-    // Invalid colours fall back to black, matching the Canvas 2D renderer.
+    // Invalid colours fall back to black, as on a canvas.
     context.clearRect(0, 0, 1, 1);
     context.fillStyle = '#000';
     context.fillStyle = color;
@@ -445,7 +445,7 @@ export function renderWebgl(
     preserveDrawingBuffer: true,
   });
   if (!gl) {
-    throw new Error('WebGL2 is not available in workers');
+    throw new Error('this browser does not support WebGL2 in workers, which ZoomFract needs');
   }
   // Chrome keeps only a few contexts per page and drops the oldest, so a
   // failed render releases its context straight away.

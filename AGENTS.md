@@ -53,13 +53,12 @@ Do not commit generated or local artifacts:
 - `src/guide.html`: user guide for the definition language, shown from the
   panel. Keep it in simple English and update it whenever the scene language
   changes.
-- `src/render/common.ts`: quality modes, render settings, renderer names,
-  worker message types, and scene-to-pixel helpers.
-- `src/render/worker.ts`: render worker entry; picks a renderer, falls back
-  from WebGL2 to Canvas 2D in Auto mode, and posts frames as `ImageBitmap`s.
+- `src/render/common.ts`: quality modes, render settings, worker message
+  types, and scene-to-pixel helpers.
+- `src/render/worker.ts`: render worker entry; runs the WebGL2 renderer and
+  posts frames as `ImageBitmap`s.
 - `src/render/webgl.ts`: WebGL2 feedback renderer.
 - `src/render/unroll.ts`: exact clipped geometry for unrolled WebGL2 zooms.
-- `src/render/canvas2d.ts`: reference Canvas 2D renderer.
 - `src/examples.ts`: built-in example registry (IDs and file imports).
 - `public/`: favicon, home-screen icons and web app manifest. The icons
   are the Sierpinski carpet rendered by the app at powers of 3 (81, 243
@@ -236,12 +235,10 @@ files unless extracting a module clearly reduces complexity.
   or `lighten` (`BLEND_MODES`), paint mode only. A copy is the scene
   composited on its own, then blended onto what is below, including seed
   leaves. Exact recursion draws copies item by item, which only matches
-  that for normal, so when any zoom blends both renderers skip it (WebGL2
-  unrolls no zooms, Canvas 2D uses depth 0 passes). WebGL2 copies the
-  framebuffer to a backdrop texture before each blended copy and blends
-  premultiplied colours in the scene shader; Canvas 2D uses
-  `globalCompositeOperation` (`add` is `lighter`).
-- Keep quality controls out of the scene definition. Resolution, renderer,
+  that for normal, so when any zoom blends no zooms are unrolled. The
+  renderer copies the framebuffer to a backdrop texture before each blended
+  copy and blends premultiplied colours in the scene shader.
+- Keep quality controls out of the scene definition. Resolution,
   max recursion, levels, and supersampling are application quality settings.
 
 ### Shading
@@ -264,10 +261,9 @@ files unless extracting a module clearly reduces complexity.
 - In density mode filled shapes use `weight` (positive, default 1) instead of
   `colour`/`opacity`; zoom `opacity` and `seed` are errors. `weight` in
   paint mode is an error.
-- Density is WebGL2 only and needs `EXT_color_buffer_float`. It draws
+- Density needs `EXT_color_buffer_float`. It draws
   straight into R32F (or R16F without float blending/filtering) textures
-  with additive blending, uses plain-average mips, and has no Canvas 2D
-  fallback; selecting Canvas 2D is an error. Edit mode keeps outlines but
+  with additive blending and uses plain-average mips. Edit mode keeps outlines but
   does not fade copies.
 
 ### Glow
@@ -275,7 +271,7 @@ files unless extracting a module clearly reduces complexity.
 - Rects and zooms accept `glow: { colour, opacity, size, softness }`.
   `colour` and `size` (a non-negative scene-unit distance) are required;
   `opacity` defaults to 1; `softness` is 0 to 1 and defaults to 1. Glows
-  are errors in density mode and with Canvas 2D. Zoom glows also accept
+  are errors in density mode. Zoom glows also accept
   `sourceOpacity` (0 to 1, default 0) to blend between ignoring source alpha
   and weighting the glow by it.
 - Grow the shape by size * (1 - softness/2), then Gaussian blur with
@@ -315,7 +311,7 @@ files unless extracting a module clearly reduces complexity.
   is 1200 px high (up to 14, 4x); Print is 3000 px high (up to 16, 2x).
   They use WebGL2 with automatic levels. Display modes are capped at 1500
   and 3000 px on the longest side respectively. A collapsible Render
-  settings section also shows width, height, renderer, supersampling, max
+  settings section also shows width, height, supersampling, max
   recursion and a levels slider whose rightmost position is Auto; they are
   read-only except in Custom. Custom accepts either width or height and
   infers the other from the full output aspect, showing that calculated value
@@ -327,7 +323,8 @@ files unless extracting a module clearly reduces complexity.
   smaller of `MAX_TEXTURE_SIZE` and `MAX_RENDERBUFFER_SIZE`, both output
   dimensions shrink proportionally. A warning beside Render quality reports
   the requested size, actual size and device limit.
-  WebGL2 falls back to Canvas 2D only if it is unavailable or fails.
+  WebGL2 is required; there is no other renderer. If it is unavailable or
+  fails, the render error says why.
 - Windows resets a GPU that spends about two seconds on one submission, and
   Chrome disables the GPU for every page after a few resets. WebGL scene
   draws are split into batches of at most 8 million working pixels, and the
@@ -343,12 +340,10 @@ files unless extracting a module clearly reduces complexity.
   to the end of the render details line. Each click extends the auto limit,
   continuing the existing worker render until details become too small to see
   or the new limit is reached. There is no arbitrary manual-extension ceiling;
-  changing the picture or quality clears the extension. Canvas 2D treats that as an upper bound
-  and stops early once a pass changes under 0.01% of its captured pixels;
-  WebGL2 always renders the estimate, because per-level readbacks stall the
-  GPU and feedback resampling keeps nudging pixels. Max recursion bounds how
-  many generations are exact geometry; the rest come from feedback or earlier
-  Canvas 2D passes.
+  changing the picture or quality clears the extension. The renderer always
+  renders the estimate, because per-level readbacks stall the GPU and
+  feedback resampling keeps nudging pixels. Max recursion bounds how many
+  generations are exact geometry; the rest come from feedback.
 - WebGL2 renders recursion by texture feedback: each level draws the scene
   once, with zooms as quads sampling the previous level's texture. Cost is
   linear in depth. Rect edges use MSAA at low supersampling.
@@ -361,27 +356,22 @@ files unless extracting a module clearly reduces complexity.
   expanded largest first until they fall below a small pixel size. Remaining
   zooms become leaves sampling the feedback texture; the shallowest leaf
   determines how many feedback levels are needed.
-- Canvas 2D is the reference renderer. Its geometric recursion is also capped
-  by leaf size and a leaf count, and it adds progressive passes, each posted
-  before preparing the next capture, until the requested levels are reached.
-  The first pass absorbs any remainder so the total is exact.
 - Progress appears only after a short delay, so fast renders do not flash it.
 - The render worker is kept while idle and holds the last render's working
   state. A request that differs only by more fixed levels continues from it:
-  WebGL2 adds feedback levels and redraws the kept exact geometry (identical
-  to a full render); Canvas 2D captures the kept image and adds passes. A
+  it adds feedback levels and redraws the kept exact geometry (identical
+  to a full render). A
   level increase that arrives while busy waits and replaces any earlier
   waiting increase; any other change terminates the busy worker. The Custom
   Levels row has a +1 button that uses this path.
 - Every render reports the fraction of display pixels that changed, compared
   premultiplied by more than rounding noise, between the final image and one
-  step before it: the previous level for WebGL2 (an extra output draw before
-  the last feedback level) and the previous pass for Canvas 2D, including
-  continuations.
+  step before it: the previous level (an extra output draw before the last
+  feedback level), including continuations.
 - The progress bar is a thin overlay along the bottom of the window, outside
   the panel, so it stays visible when the panel is hidden and never moves
   controls. Render details live inside the Render settings section and list
-  only what the inputs do not show; the resolved renderer, supersampling,
+  only what the inputs do not show; the resolved supersampling,
   recursion and levels are hover text on the Quality row and settings header.
 - Captures must exclude the host background and preserve transparency.
 - Downsampling must weight colours by alpha. Each 2x2 block's alpha is its
@@ -390,16 +380,12 @@ files unless extracting a module clearly reduces complexity.
   plain premultiplied average, matching ordinary scaling and PowerPoint, so
   stacked translucent copies do not darken; 1 keeps fine recursive details
   bold. Glow masks always use 1. WebGL2 stores premultiplied texels.
-- Canvas 2D terminal bitmap leaves use projected-size, transform-aware
-  rasterisation and cache equivalent leaf transforms.
 - Dynamic recursion stops before leaves become smaller than the selected
   quality threshold.
-- Be mindful of multiplicative cost: zoom count, recursion depth, passes,
-  supersampling, mip generation, and temporary canvas size all compound.
-  WebGL2 working images are limited by both the device texture size and a
-  48-million-pixel practical allocation budget. Automatic Canvas 2D fallback
-  is allowed only for small working images; explicit Canvas 2D remains
-  available for larger output.
+- Be mindful of multiplicative cost: zoom count, recursion depth,
+  supersampling, mip generation, and texture size all compound.
+  Working images are limited by both the device texture size and a
+  48-million-pixel practical allocation budget.
 - Edit mode is an application setting, not scene syntax. It fades top-level
   zoom contents and outlines each zoom, marking its top-left corner and any
   `align` target points. Levels used for recursion must stay unfaded, so only
@@ -532,13 +518,9 @@ For rendering changes, also check as applicable:
 
 - Canvas intrinsic dimensions match the selected quality resolution.
 - Transparent areas still have zero alpha.
-- Progressive Canvas 2D passes visibly differ and the final pass remains
-  displayed.
 - Progress appears during slow work and disappears after completion.
 - Fast, Display, High and Print quality resolve automatic levels at the
   fixed point.
-- WebGL2 and Canvas 2D output agree closely with equal Custom settings;
-  compare pixel differences and timings when changing either.
 - Rotated and asymmetric zooms render without clipping or allocation errors.
 - Rapid setting changes leave the latest requested result on screen.
 

@@ -71,8 +71,11 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     in grey. Entering a value in that field makes it the controlling dimension instead.
     If the supersampled working image exceeds either the device's WebGL texture size
     or ZoomFract's practical GPU capacity limit, the output is reduced proportionally
-    and a warning appears beside <em>Render quality</em>. Large WebGL failures do not
-    fall back automatically to an even more expensive Canvas 2D render.
+    and a warning appears beside <em>Render quality</em>.
+  </p>
+  <p>
+    ZoomFract draws with WebGL2, which all current browsers support. If it is turned
+    off or the graphics card fails, an error explains why.
   </p>
 </section>
 
@@ -407,7 +410,7 @@ seed:
     <li>Glow size is part of the scene, so it stays proportional when quality changes.</li>
     <li>Glows are copied into zooms along with everything else.</li>
     <li>Glows are cut off at the edge of the picture; add a view <code>overflow</code>, or <code>overflow: auto</code>, to make room.</li>
-    <li>Glows need the WebGL2 renderer and cannot be used with density shading.</li>
+    <li>Glows cannot be used with density shading.</li>
   </ul>
 </section>
 
@@ -471,8 +474,7 @@ seed:
   <p>
     Shapes do not have <code>colour</code> or <code>opacity</code> in this mode. Instead,
     <code>weight</code> (1 by default) says how much each shape counts. Zoom
-    <code>opacity</code> and <code>seed</code> are not used. Density shading needs the
-    WebGL2 renderer.
+    <code>opacity</code> and <code>seed</code> are not used.
   </p>
 </section>
 

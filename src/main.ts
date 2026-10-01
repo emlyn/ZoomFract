@@ -15,7 +15,6 @@ import {
   MAXIMUM_RECURSION_CHOICE,
   QUALITY_LABELS,
   QUALITY_MODES,
-  RENDERER_LABELS,
   SUPERSAMPLING_CHOICES,
   canContinue,
   continuationKey,
@@ -27,7 +26,6 @@ import {
   type RenderOptions,
   type RenderRequest,
   type RenderSettings,
-  type RendererName,
   type StepChange,
 } from './render/common';
 import {
@@ -568,15 +566,6 @@ qualityControl.select.className = 'quality-select';
 qualityControl.select.setAttribute('aria-label', 'Render quality');
 qualityControl.select.addEventListener('click', (event) => event.stopPropagation());
 
-const rendererControl = selectRow<RendererName>(
-  'renderer-row',
-  'Renderer',
-  Object.entries(RENDERER_LABELS) as [RendererName, string][],
-  (renderer) => updateCustomOptions({ renderer }),
-);
-rendererControl.row.title = 'How the image is drawn. WebGL2 uses the graphics card and is much faster; '
-  + 'Canvas 2D is a slower, simpler reference that works everywhere.';
-
 const supersamplingControl = selectRow<number>(
   'supersampling-row',
   'Supersampling',
@@ -713,7 +702,6 @@ function setQualityDetails(parts: string[], note: string | null) {
 customSettingsBody.append(
   widthControl.row,
   heightControl.row,
-  rendererControl.row,
   supersamplingControl.row,
   recursionControl.row,
   levelsRow,
@@ -733,7 +721,6 @@ function syncQualityControls() {
   const isCustom = state.quality === 'custom';
   const options = renderOptions();
   const isAuto = options.levels === 'auto';
-  rendererControl.setValue(options.renderer);
   supersamplingControl.setValue(options.supersampling);
   recursionControl.setValue(options.recursionDepth);
   const resolution = isCustom
@@ -754,7 +741,6 @@ function syncQualityControls() {
   for (const control of [
     widthControl.input,
     heightControl.input,
-    rendererControl.select,
     supersamplingControl.select,
     recursionControl.select,
     levelsSlider,
@@ -1101,7 +1087,7 @@ const state = {
   definitionText: DEFAULT_SCENE_TEXT,
   // Values set with the input controls, replacing those in the definition.
   inputValues: new Map<string, InputValue>() as ReadonlyMap<string, InputValue>,
-  rendered: null as { renderer: RendererName; levels: number } | null,
+  rendered: null as { levels: number } | null,
   definitionLocation: { kind: 'example', id: DEFAULT_EXAMPLE.id } as DefinitionLocation,
 };
 let definitionLoadRevision = 0;
@@ -1254,7 +1240,7 @@ function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered)
   return [
     ...(parts.length > 0 ? [parts.join(', ')] : []),
     `${width} × ${height} px`,
-    ...(rendered ? [`${RENDERER_LABELS[rendered.renderer]}, ${plural(rendered.levels, 'level')}`] : []),
+    ...(rendered ? [plural(rendered.levels, 'level')] : []),
   ];
 }
 
@@ -1532,13 +1518,13 @@ function outputResolution(
       requestedWidth = Math.max(1, Math.round(requestedHeight * aspect));
     }
   }
-  const textureLimit = options.renderer === 'webgl' ? maximumTextureSize() : null;
+  const textureLimit = maximumTextureSize();
   const factor = options.supersampling;
   const workingSide = Math.max(requestedWidth, requestedHeight) * factor;
   const workingPixels = requestedWidth * requestedHeight * factor * factor;
   const dimensionScale = textureLimit === null ? 1 : textureLimit / workingSide;
   const areaScale = Math.sqrt(MAX_WEBGL_WORKING_PIXELS / workingPixels);
-  const scale = options.renderer === 'webgl' ? Math.min(1, dimensionScale, areaScale) : 1;
+  const scale = Math.min(1, dimensionScale, areaScale);
   return {
     width: Math.max(1, Math.floor(requestedWidth * scale)),
     height: Math.max(1, Math.floor(requestedHeight * scale)),
@@ -1733,22 +1719,13 @@ function setRenderProgress(progress: number | null) {
 
 // The resolved settings mirror the inputs, so they are shown as hover text
 // that stays visible while the settings are collapsed.
-function describeSettings(renderer: RendererName, settings: RenderSettings) {
+function describeSettings(settings: RenderSettings) {
   return [
-    RENDERER_LABELS[renderer],
     `${canvas.width} × ${canvas.height} px`,
     `${settings.supersampling}× supersampling`,
     `Recursion ${settings.recursionDepth}`,
     `Levels ${settings.autoLevels ? `Auto (${settings.levels})` : settings.levels}`,
   ].join(' · ');
-}
-
-// Details not visible in the inputs above them.
-function describeRender(settings: RenderSettings, fallbackReason?: string) {
-  return [
-    ...(fallbackReason ? [`Canvas 2D fallback: ${fallbackReason}`] : []),
-    ...(settings.renderPasses > 1 ? [`${settings.renderPasses} passes`] : []),
-  ];
 }
 
 const formatDuration = (milliseconds: number) => milliseconds < 1000
@@ -1793,7 +1770,6 @@ let progressTimer = 0;
 // quality is rendered.
 const SETTLE_DELAY_MS = 400;
 const PREVIEW_OPTIONS: RenderOptions = {
-  renderer: QUALITY_MODES.fast.renderer,
   supersampling: 1,
   recursionDepth: QUALITY_MODES.fast.recursionDepth,
   levels: QUALITY_MODES.fast.levels,
@@ -1885,12 +1861,11 @@ function startRender(request: RenderRequest) {
   activeRequest = request;
   extendLevelsButton.disabled = true;
   shareDialog.setImageReady(false);
-  let details: string[] = [];
   let started: Extract<RenderMessage, { type: 'start' }> | null = null;
   let latestProgress = 0;
   let progressVisible = false;
   const showInProgress = () => {
-    qualityDetails.textContent = ['Rendering...', ...details].join(' · ');
+    qualityDetails.textContent = 'Rendering...';
   };
   // Fast renders swap straight to the final details, so the text does not
   // briefly shrink and shift the controls below it. Previews never show
@@ -1921,9 +1896,7 @@ function startRender(request: RenderRequest) {
     switch (message.type) {
       case 'start':
         started = message;
-        noteGpuLost(message.fallbackReason);
-        details = describeRender(message.settings, message.fallbackReason);
-        setSettingsTitle(describeSettings(message.renderer, message.settings));
+        setSettingsTitle(describeSettings(message.settings));
         if (progressVisible) {
           showInProgress();
         }
@@ -1945,22 +1918,15 @@ function startRender(request: RenderRequest) {
         drawDisplay();
         break;
       case 'done': {
-        // Automatic levels may converge before the estimate given at the start.
         const time = formatDuration(message.milliseconds);
         const step = message.stepMilliseconds === undefined ? '' : ` (last step ${formatDuration(message.stepMilliseconds)})`;
         if (started) {
-          const settings = {
-            ...started.settings,
-            levels: message.levels,
-            renderPasses: message.renderPasses ?? started.settings.renderPasses,
-          };
-          details = describeRender(settings, started.fallbackReason);
-          setSettingsTitle(`${describeSettings(started.renderer, settings)} · ${time}${step}`);
+          setSettingsTitle(`${describeSettings({ ...started.settings, levels: message.levels })} · ${time}${step}`);
         }
         state.resolvedLevels = message.levels;
         let labelChangedResolution = false;
         if (started) {
-          state.rendered = { renderer: started.renderer, levels: message.levels };
+          state.rendered = { levels: message.levels };
           labelChangedResolution = updateWallLabel();
         }
         syncQualityControls();
@@ -1968,7 +1934,6 @@ function startRender(request: RenderRequest) {
           && started.settings.autoLevelLimitReached
           && message.levels >= started.settings.levels;
         setQualityDetails([
-          ...details,
           ...message.details,
           ...(message.stepChange === undefined ? [] : [formatChange(message.stepChange)]),
           `${time}${step}`,

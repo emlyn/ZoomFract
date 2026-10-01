@@ -4,7 +4,6 @@ import {
   MAXIMUM_LEVELS,
   MAXIMUM_RECURSION_CHOICE,
   QUALITY_LABELS,
-  RENDERER_LABELS,
   SUPERSAMPLING_CHOICES,
   type QualityMode,
   type QualityOptions,
@@ -19,7 +18,8 @@ import type { InputValue, InputValues } from './scene';
 // Input values and app settings follow the text after a NUL, as a JSON object
 // with short keys: `i` input values, `q` quality mode, `r` custom render
 // settings as [renderer, supersampling, recursionDepth, levels, width, height], and `l`
-// whether the label is shown.
+// whether the label is shown. The renderer is always "webgl" now; "canvas2d"
+// from older links is still read, and ignored.
 const DICTIONARIES: Record<string, string> = { 1: dictionary1 };
 const CURRENT_VERSION = '1';
 const EXTRAS_SEPARATOR = '\0';
@@ -80,7 +80,7 @@ function parseRenderOptions(value: unknown): QualityOptions {
   }
   const [renderer, supersampling, recursionDepth, levels, width, height] = value;
   if (
-    !Object.hasOwn(RENDERER_LABELS, renderer)
+    !['webgl', 'canvas2d'].includes(renderer)
     || !SUPERSAMPLING_CHOICES.includes(supersampling)
     || !isIntegerIn(recursionDepth, 0, MAXIMUM_RECURSION_CHOICE)
     || !(levels === 'auto' || isIntegerIn(levels, 1, MAXIMUM_LEVELS))
@@ -92,7 +92,6 @@ function parseRenderOptions(value: unknown): QualityOptions {
     invalid('render settings');
   }
   return {
-    renderer,
     supersampling,
     recursionDepth,
     levels,
@@ -122,7 +121,7 @@ function extrasJson(inputs: InputValues, settings: SharedSettings | null) {
     ...(settings ? { q: settings.quality, l: settings.label } : {}),
     ...(custom ? {
       r: [
-        custom.renderer,
+        'webgl',
         custom.supersampling,
         custom.recursionDepth,
         custom.levels,

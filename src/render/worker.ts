@@ -1,12 +1,9 @@
-import { renderCanvas2d } from './canvas2d';
 import {
   changedFraction,
   continuationKey,
-  MAX_CANVAS_FALLBACK_PIXELS,
   resolveRenderSettings,
   type FrameCallbacks,
   type RenderMessage,
-  type RendererName,
   type RenderRequest,
   type RenderResult,
   type RenderSettings,
@@ -54,9 +51,7 @@ function frameCallbacks(width: number, height: number, initial: Snapshot | null)
 
 type Session = {
   key: string;
-  renderer: RendererName;
   settings: RenderSettings;
-  fallbackReason?: string;
   result: RenderResult;
   // Total time spent on this image, including continuations.
   milliseconds: number;
@@ -71,18 +66,15 @@ function continueSession(current: Session, request: RenderRequest): boolean {
     || (current.settings.autoLevels !== (request.options.levels === 'auto'))) {
     return false;
   }
-  const resolved = resolveRenderSettings(request.scene, request.options, current.renderer, request.additionalLevels);
-  const addedLevels = resolved.levels - current.settings.levels;
-  if (addedLevels <= 0) {
+  const resolved = resolveRenderSettings(request.scene, request.options, request.additionalLevels);
+  if (resolved.levels <= current.settings.levels) {
     return false;
   }
 
   const startedAt = performance.now();
-  const settings: RenderSettings = current.renderer === 'webgl'
-    // WebGL keeps the exact geometry from the render being continued.
-    ? { ...resolved, recursionDepth: current.settings.recursionDepth }
-    : { ...resolved, renderPasses: Math.ceil(addedLevels / (resolved.recursionDepth + 1)) };
-  post({ type: 'start', renderer: current.renderer, settings, fallbackReason: current.fallbackReason });
+  // The exact geometry from the render being continued is kept.
+  const settings: RenderSettings = { ...resolved, recursionDepth: current.settings.recursionDepth };
+  post({ type: 'start', settings });
   const { width, height } = request.scene.view.resolution;
   const frames = frameCallbacks(width, height, current.snapshot);
   const outcome = current.result.continueTo(settings, frames.callbacks);
@@ -93,7 +85,6 @@ function continueSession(current: Session, request: RenderRequest): boolean {
   post({
     type: 'done',
     levels: outcome.levels,
-    renderPasses: outcome.renderPasses,
     milliseconds: current.milliseconds,
     stepMilliseconds,
     stepChange: outcome.stepChange ?? frames.stepChange(),
@@ -118,72 +109,36 @@ function render(request: RenderRequest) {
     session = null;
   }
 
+  if (request.webglDisabled) {
+    post({ type: 'error', message: request.webglDisabled });
+    return;
+  }
   const startedAt = performance.now();
   const { width, height } = request.scene.view.resolution;
-  const density = request.scene.shading.mode === 'density';
-  const glow = request.scene.elements.some((element) => element.glow);
-  const webgl = request.options.renderer === 'webgl' && !request.webglDisabled;
-  const disabled = request.webglDisabled ? `. ${request.webglDisabled}` : '';
-  if (density && !webgl) {
-    post({ type: 'error', message: `Density shading needs the WebGL2 renderer${disabled}` });
-    return;
-  }
-  if (glow && !webgl) {
-    post({ type: 'error', message: `Glows need the WebGL2 renderer${disabled}` });
-    return;
-  }
-  const canvasFallbackSafe = width * height * request.options.supersampling ** 2
-    <= MAX_CANVAS_FALLBACK_PIXELS;
-  if (request.options.renderer === 'webgl' && !webgl && !canvasFallbackSafe) {
+  try {
+    const settings = resolveRenderSettings(request.scene, request.options, request.additionalLevels);
+    post({ type: 'start', settings });
+    const frames = frameCallbacks(width, height, null);
+    const result = renderWebgl(request.scene, settings, request.editMode, frames.callbacks);
+    const { outcome } = result;
+    const milliseconds = performance.now() - startedAt;
+    session = {
+      key: continuationKey(request),
+      settings: { ...settings, levels: outcome.levels },
+      result,
+      milliseconds,
+      snapshot: frames.current(),
+    };
     post({
-      type: 'error',
-      message: `${request.webglDisabled ?? 'WebGL2 is unavailable'}. `
-        + 'The output is too large for an automatic Canvas 2D fallback.',
+      type: 'done',
+      levels: outcome.levels,
+      milliseconds,
+      stepChange: outcome.stepChange ?? frames.stepChange(),
+      details: outcome.details,
     });
-    return;
+  } catch (error) {
+    post({ type: 'error', message: errorMessage(error) });
   }
-  let candidates: RendererName[];
-  if (density || glow) {
-    candidates = ['webgl'];
-  } else if (webgl) {
-    candidates = canvasFallbackSafe ? ['webgl', 'canvas2d'] : ['webgl'];
-  } else {
-    candidates = ['canvas2d'];
-  }
-  let fallbackReason = request.options.renderer === 'webgl' ? request.webglDisabled : undefined;
-
-  for (const renderer of candidates) {
-    try {
-      const settings = resolveRenderSettings(request.scene, request.options, renderer, request.additionalLevels);
-      post({ type: 'start', renderer, settings, fallbackReason });
-      const draw = renderer === 'webgl' ? renderWebgl : renderCanvas2d;
-      const frames = frameCallbacks(width, height, null);
-      const { outcome, ...result } = draw(request.scene, settings, request.editMode, frames.callbacks);
-      const milliseconds = performance.now() - startedAt;
-      session = {
-        key: continuationKey(request),
-        renderer,
-        settings: { ...settings, levels: outcome.levels },
-        fallbackReason,
-        result: { outcome, ...result },
-        milliseconds,
-        snapshot: frames.current(),
-      };
-      post({
-        type: 'done',
-        levels: outcome.levels,
-        renderPasses: outcome.renderPasses,
-        milliseconds,
-        stepChange: outcome.stepChange ?? frames.stepChange(),
-        details: outcome.details,
-      });
-      return;
-    } catch (error) {
-      fallbackReason = errorMessage(error);
-    }
-  }
-
-  post({ type: 'error', message: fallbackReason ?? 'Rendering failed' });
 }
 
 self.addEventListener('message', (event: MessageEvent<RenderRequest>) => {

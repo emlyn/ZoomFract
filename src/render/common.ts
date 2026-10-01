@@ -11,10 +11,7 @@ import {
 
 export type QualityMode = 'fast' | 'display' | 'high' | 'print' | 'custom';
 
-export type RendererName = 'webgl' | 'canvas2d';
-
 export type RenderOptions = {
-  renderer: RendererName;
   supersampling: number;
   // Maximum generations of zooms drawn as exact geometry.
   recursionDepth: number;
@@ -35,7 +32,6 @@ export type RenderSettings = {
   levels: number;
   autoLevels: boolean;
   autoLevelLimitReached: boolean;
-  renderPasses: number;
   supersampling: number;
 };
 
@@ -55,23 +51,18 @@ export const GPU_LOST_MESSAGE = 'The GPU stopped responding, so WebGL2 is off un
 // About an 8000 x 6000 working image. WebGL uses several full-size buffers,
 // so a dimension-only limit can still request far too much GPU memory.
 export const MAX_WEBGL_WORKING_PIXELS = 48_000_000;
-// An automatic WebGL failure must not start an enormous CPU render. Canvas
-// 2D remains available when the user explicitly chooses it.
-export const MAX_CANVAS_FALLBACK_PIXELS = 4_000_000;
 
 // Fraction of pixels that changed between two images, and how many levels
 // apart they were.
 export type StepChange = { fraction: number; levels: number };
 
 export type RenderMessage =
-  | { type: 'start'; renderer: RendererName; settings: RenderSettings; fallbackReason?: string }
+  | { type: 'start'; settings: RenderSettings }
   | { type: 'progress'; progress: number }
   | { type: 'frame'; bitmap: ImageBitmap }
   | {
     type: 'done';
     levels: number;
-    // Set when fewer passes were needed than announced at the start.
-    renderPasses?: number;
     milliseconds: number;
     stepMilliseconds?: number;
     stepChange?: StepChange;
@@ -87,13 +78,9 @@ export type FrameCallbacks = {
   progress: (progress: number) => void;
 };
 
-// Automatic levels may stop before the estimate, so renders report the
-// levels and passes they reached. Renderers that detect convergence report its
-// change.
 export type RenderOutcome = {
   details: string[];
   levels: number;
-  renderPasses?: number;
   stepChange?: StepChange;
 };
 
@@ -107,9 +94,6 @@ export type RenderResult = {
 
 // Channel differences up to this are rounding noise between equivalent renders.
 const CHANGE_THRESHOLD = 2;
-// Automatic levels stop once fewer than one pixel in 10,000 changes; exact
-// zero is rarely reached because resampling keeps nudging a few pixels.
-export const CONVERGED_FRACTION = 0.0001;
 
 // Inputs are unpremultiplied ImageData pixels. Colours are compared
 // premultiplied so rounding in nearly transparent pixels is not counted.
@@ -136,7 +120,7 @@ export function changedFraction(before: ArrayLike<number>, after: ArrayLike<numb
 // Requests with equal keys differ only in levels, so a render can continue
 // from an earlier one with fewer fixed levels.
 export const continuationKey = ({ scene, options, editMode }: RenderRequest) =>
-  JSON.stringify([scene, options.renderer, options.supersampling, options.recursionDepth, editMode]);
+  JSON.stringify([scene, options.supersampling, options.recursionDepth, editMode]);
 
 export const canContinue = (from: RenderRequest, to: RenderRequest) =>
   continuationKey(from) === continuationKey(to)
@@ -149,11 +133,6 @@ export const canContinue = (from: RenderRequest, to: RenderRequest) =>
       && (to.additionalLevels ?? 0) > (from.additionalLevels ?? 0))
   );
 
-export const RENDERER_LABELS: Record<RendererName, string> = {
-  webgl: 'WebGL2',
-  canvas2d: 'Canvas 2D',
-};
-
 export const EDIT_MODE_ZOOM_OPACITY = 0.6;
 
 export const MAXIMUM_LEVELS = 256;
@@ -162,9 +141,6 @@ export const EXTRA_LEVELS_STEP = 256;
 // previous bound rather than spending four times as long on an infinite scene.
 const NON_SHRINKING_LEVELS = 64;
 const FIXED_POINT_LEAF_PIXELS = 0.5;
-// Canvas 2D recursion is exponential, so its geometric depth stays bounded.
-const CANVAS2D_MINIMUM_LEAF_PIXELS = 2;
-const CANVAS2D_MAXIMUM_LEAVES = 10000;
 
 export const QUALITY_LABELS: Record<QualityMode, string> = {
   fast: 'Fast',
@@ -176,19 +152,19 @@ export const QUALITY_LABELS: Record<QualityMode, string> = {
 
 export const QUALITY_MODES: Record<Exclude<QualityMode, 'custom'>, QualityOptions> = {
   fast: {
-    renderer: 'webgl', supersampling: 2, recursionDepth: 1, levels: 'auto',
+    supersampling: 2, recursionDepth: 1, levels: 'auto',
     resolution: { mode: 'display', scale: 0.5, maxSide: 1500 },
   },
   display: {
-    renderer: 'webgl', supersampling: 2, recursionDepth: 8, levels: 'auto',
+    supersampling: 2, recursionDepth: 8, levels: 'auto',
     resolution: { mode: 'display', scale: 1, maxSide: 3000 },
   },
   high: {
-    renderer: 'webgl', supersampling: 4, recursionDepth: 14, levels: 'auto',
+    supersampling: 4, recursionDepth: 14, levels: 'auto',
     resolution: { mode: 'fixed', height: 1200 },
   },
   print: {
-    renderer: 'webgl', supersampling: 2, recursionDepth: 16, levels: 'auto',
+    supersampling: 2, recursionDepth: 16, levels: 'auto',
     resolution: { mode: 'fixed', height: 3000 },
   },
 };
@@ -239,12 +215,10 @@ export function elementPoints(element: DrawableElement, scene: ResolvedSceneDefi
 // Levels count generations of zooms: generation `levels` is the terminal seed,
 // and earlier generations are drawn as exact geometry or by sampling an
 // earlier rendering. Automatic levels are estimated as the point where the
-// largest zoom is below half a working pixel. Canvas 2D treats that as an upper
-// bound and stops sooner once a pass barely changes its captured pixels.
+// largest zoom is below half a working pixel.
 export function resolveRenderSettings(
   scene: ResolvedSceneDefinition,
   options: RenderOptions,
-  renderer: RendererName,
   additionalLevels = 0,
 ): RenderSettings {
   const { supersampling } = options;
@@ -252,7 +226,7 @@ export function resolveRenderSettings(
   if (zooms.length === 0) {
     return {
       recursionDepth: 0, levels: 0, autoLevels: options.levels === 'auto',
-      autoLevelLimitReached: false, renderPasses: 1, supersampling,
+      autoLevelLimitReached: false, supersampling,
     };
   }
 
@@ -285,23 +259,6 @@ export function resolveRenderSettings(
     ? Math.min(limit, estimatedLevels)
     : options.levels;
   // Generation `levels` holds the terminal seed, so geometry stops one short.
-  const requestedDepth = Math.min(options.recursionDepth, levels - 1);
-  if (renderer === 'webgl') {
-    return { recursionDepth: requestedDepth, levels, autoLevels, autoLevelLimitReached, renderPasses: 1, supersampling };
-  }
-
-  const leafLimitedDepth = Math.floor(Math.log(CANVAS2D_MAXIMUM_LEAVES) / Math.log(Math.max(2, zooms.length)));
-  const recursionDepth = Math.min(
-    requestedDepth,
-    generationsAbove(CANVAS2D_MINIMUM_LEAF_PIXELS, requestedDepth),
-    leafLimitedDepth,
-  );
-  return {
-    recursionDepth,
-    levels,
-    autoLevels,
-    autoLevelLimitReached,
-    renderPasses: Math.max(1, Math.ceil(levels / (recursionDepth + 1))),
-    supersampling,
-  };
+  const recursionDepth = Math.min(options.recursionDepth, levels - 1);
+  return { recursionDepth, levels, autoLevels, autoLevelLimitReached, supersampling };
 }
