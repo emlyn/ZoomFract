@@ -86,6 +86,7 @@ files unless extracting a module clearly reduces complexity.
   border `colour`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.
 - `view.aspect` is width divided by height of the view, excluding overflow.
+  `aspect: auto` derives it from the coordinates, making scene units square.
 - Pixel resolution is an application quality setting, not scene syntax.
 - Optional `view.overflow` (scene units, default 0, non-negative) adds a
   border on every side that catches anything drawn past the view edge, such
@@ -96,9 +97,13 @@ files unless extracting a module clearly reduces complexity.
   Edit mode outlines the declared view and zooms.
 - `overflow: auto` fits the shown area to the content: `contentBounds`
   iterates hull(shapes + each zoom's copy of the hull) to its fixed point, and
-  `fittedView` scales the declared view evenly about it. Because pixel sizes
+  `fittedView` scales the declared view evenly about it (each axis
+  separately with `aspect: auto`, so the picture takes the content's shape).
+  Because pixel sizes
   depend on the fit, `sceneFromValue` rebuilds until it settles. Zooms that
-  do not shrink are an error. `view.overflow` is not a variable in auto mode.
+  do not shrink are an error. The source content hull is clipped to the shown
+  view before each zoom copy contributes to the fit. `view.overflow` is not a
+  variable in auto mode.
 - `view.coordinates.x` runs left to right.
 - `view.coordinates.y` runs bottom to top, following mathematical convention.
 - Axis ranges accept `[from, to]` and object forms such as

@@ -14,7 +14,7 @@ frame:
 
 view:
   overflow: auto
-  aspect: 2/sqrt(3)
+  aspect: auto
   coordinates:
     x: [0, 1]
     y: [0, sqrt(3)/2]
@@ -30,21 +30,21 @@ scene:
     scale: 0.5
     glow:
       colour: cyan
-      opacity: 1
-      size: 0.005
+      opacity: 0.2
+      size: 0
   - type: zoom
     name: bottom-left
     centre: [1/8, sqrt(3)/8]
     scale: 0.5
     glow:
       colour: magenta
-      opacity: 1
-      size: 0.005
+      opacity: 0.2
+      size: 0
   - type: zoom
     name: bottom-right
     centre: [7/8, sqrt(3)/8]
     scale: 0.5
     glow:
       colour: yellow
-      opacity: 1
-      size: 0.005
+      opacity: 0.25
+      size: 0

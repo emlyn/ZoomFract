@@ -667,11 +667,70 @@ const boundsOf = (points: Vec2[]): Bounds => ({
   max: { x: Math.max(...points.map((p) => p.x)), y: Math.max(...points.map((p) => p.y)) },
 });
 
+function clipPolygon(points: Vec2[], bounds: Bounds): Vec2[] {
+  const boundaries: {
+    inside: (point: Vec2) => boolean;
+    intersect: (from: Vec2, to: Vec2) => Vec2;
+  }[] = [
+    {
+      inside: (point) => point.x >= bounds.min.x,
+      intersect: (from, to) => {
+        const t = (bounds.min.x - from.x) / (to.x - from.x);
+        return { x: bounds.min.x, y: from.y + (to.y - from.y) * t };
+      },
+    },
+    {
+      inside: (point) => point.x <= bounds.max.x,
+      intersect: (from, to) => {
+        const t = (bounds.max.x - from.x) / (to.x - from.x);
+        return { x: bounds.max.x, y: from.y + (to.y - from.y) * t };
+      },
+    },
+    {
+      inside: (point) => point.y >= bounds.min.y,
+      intersect: (from, to) => {
+        const t = (bounds.min.y - from.y) / (to.y - from.y);
+        return { x: from.x + (to.x - from.x) * t, y: bounds.min.y };
+      },
+    },
+    {
+      inside: (point) => point.y <= bounds.max.y,
+      intersect: (from, to) => {
+        const t = (bounds.max.y - from.y) / (to.y - from.y);
+        return { x: from.x + (to.x - from.x) * t, y: bounds.max.y };
+      },
+    },
+  ];
+  let clipped = points;
+  for (const boundary of boundaries) {
+    const input = clipped;
+    clipped = [];
+    input.forEach((point, index) => {
+      const previous = input[(index + input.length - 1) % input.length];
+      if (boundary.inside(point)) {
+        if (!boundary.inside(previous)) {
+          clipped.push(boundary.intersect(previous, point));
+        }
+        clipped.push(point);
+      } else if (boundary.inside(previous)) {
+        clipped.push(boundary.intersect(previous, point));
+      }
+    });
+  }
+  return clipped;
+}
+
 // Points of an octagon that contains a circle, for growing by a glow.
 const OCTAGON = Array.from({ length: 8 }, (_, index) => ({
   x: Math.cos(index * Math.PI / 4) / Math.cos(Math.PI / 8),
   y: Math.sin(index * Math.PI / 4) / Math.cos(Math.PI / 8),
 }));
+
+const CIRCLE_BOUNDS_RADIUS = 1 / Math.cos(Math.PI / 128);
+const CIRCLE_BOUNDS = Array.from({ length: 128 }, (_, index) => {
+  const angle = index * Math.PI * 2 / 128;
+  return { x: Math.cos(angle) * CIRCLE_BOUNDS_RADIUS, y: Math.sin(angle) * CIRCLE_BOUNDS_RADIUS };
+});
 
 // Bounds of everything the scene draws once zooms have repeated forever.
 // The convex hull of the finished picture is the fixed point of hull(rects
@@ -690,19 +749,30 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
     const label = zoom.name ? `Zoom "${zoom.name}"` : `Zoom ${index + 1}`;
     throw new Error(`overflow: auto cannot fit the picture because ${label} is ${shrink.toFixed(2)} times the size of the view, so its copies keep growing`);
   }
+  const viewBounds = {
+    min: {
+      x: Math.min(view.centre.x - view.width / 2, view.centre.x + view.width / 2),
+      y: Math.min(view.centre.y - view.height / 2, view.centre.y + view.height / 2),
+    },
+    max: {
+      x: Math.max(view.centre.x - view.width / 2, view.centre.x + view.width / 2),
+      y: Math.max(view.centre.y - view.height / 2, view.centre.y + view.height / 2),
+    },
+  };
   const base = elements
     .filter((element): element is ShapeElement =>
       element.kind !== 'zoom' && (element.opacity > 0 || (element.kind === 'rect' && element.glow !== undefined)))
     .flatMap((shape) => {
       if (shape.kind === 'circle') {
-        return OCTAGON.map((point) => add(shape.center, scaleVector(point, shape.radius)));
+        return CIRCLE_BOUNDS.map((point) => add(shape.center, scaleVector(point, shape.radius)));
       }
       if (shape.kind === 'polygon') {
         return shape.points;
       }
       const rect = shape;
       const grow = 2 * (rect.glow?.size ?? 0);
-      return CORNER_NAMES.map((name) => rectCorner({ ...rect, width: rect.width + grow, height: rect.height + grow }, name));
+      return CORNER_NAMES.map((name) =>
+        rectCorner({ ...rect, width: rect.width + grow, height: rect.height + grow }, name));
     });
   if (base.length === 0 && zooms.length === 0) {
     throw new Error('overflow: auto needs something in the scene to fit');
@@ -715,9 +785,12 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
       return glow > 0 ? OCTAGON.map((corner) => add(placed, scaleVector(corner, glow))) : [placed];
     };
   });
-  const step = (hull: Vec2[]) => convexHull([...base, ...copies.flatMap((copy) => hull.flatMap(copy))]);
+  const step = (hull: Vec2[]) => {
+    const source = clipPolygon(hull, viewBounds);
+    return convexHull([...base, ...copies.flatMap((copy) => source.flatMap(copy))]);
+  };
 
-  let hull = step(convexHull(CORNER_NAMES.map((name) => viewPoint(view, name))));
+  let hull = base.length > 0 ? convexHull(base) : convexHull(CORNER_NAMES.map((name) => viewPoint(view, name)));
   for (let iteration = 0; iteration < 100000; iteration += 1) {
     const next = step(hull);
     const [before, after] = [boundsOf(hull), boundsOf(next)];
@@ -737,20 +810,22 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
   return boundsOf(hull);
 }
 
-// The declared view scaled evenly about the content until it just holds it.
-function fittedView(scene: SceneDefinition): ViewRanges {
+// The declared view scaled about the content until it just holds it: evenly,
+// or with `matchContent` each axis separately so it takes the content's shape.
+function fittedView(scene: SceneDefinition, matchContent: boolean): ViewRanges {
   const bounds = contentBounds(scene.elements, viewFrame(scene.view.coordinates));
   const declared = viewFrame(scene.view.declared);
-  const scale = Math.max(
-    (bounds.max.x - bounds.min.x) / Math.abs(declared.width),
-    (bounds.max.y - bounds.min.y) / Math.abs(declared.height),
-  );
-  if (!(scale > 0)) {
-    throw new Error('overflow: auto found nothing with any size to fit');
+  const scaleX = (bounds.max.x - bounds.min.x) / Math.abs(declared.width);
+  const scaleY = (bounds.max.y - bounds.min.y) / Math.abs(declared.height);
+  const scale = Math.max(scaleX, scaleY);
+  if (!(matchContent ? Math.min(scaleX, scaleY) > 0 : scale > 0)) {
+    throw new Error(matchContent
+      ? 'overflow: auto with aspect: auto needs content with both width and height'
+      : 'overflow: auto found nothing with any size to fit');
   }
   const centre = { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 };
-  const halfWidth = declared.width * scale / 2;
-  const halfHeight = declared.height * scale / 2;
+  const halfWidth = declared.width * (matchContent ? scaleX : scale) / 2;
+  const halfHeight = declared.height * (matchContent ? scaleY : scale) / 2;
   return {
     x: { from: centre.x - halfWidth, to: centre.x + halfWidth },
     y: { from: centre.y - halfHeight, to: centre.y + halfHeight },
@@ -2088,8 +2163,9 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
   if (!isRecord(parsed) || !isRecord(parsed.view) || parsed.view.overflow !== 'auto') {
     return scene;
   }
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const fitted = atPath(['view', 'overflow'], () => fittedView(scene));
+  const matchContent = parsed.view.aspect === 'auto';
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    const fitted = atPath(['view', 'overflow'], () => fittedView(scene, matchContent));
     if (attempt > 0 && rangesMatch(fitted, scene.view.coordinates)) {
       return scene;
     }
@@ -2117,8 +2193,6 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
   // may refer to the others as long as there is no loop.
   const cells = new Map<string, () => number>();
   const variables: Variables = (name) => cells.get(name)?.();
-  const resolvedAspect = lazy('view.aspect', () =>
-    atPath(['view', 'aspect'], () => parseAspectRatio(viewNode.aspect, variables)));
   const axis = (key: 'x' | 'y') => {
     const path = ['view', 'coordinates', key];
     return lazy(`view.coordinates.${key}`, () => atPath(path, () =>
@@ -2126,6 +2200,10 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
   };
   const xRange = axis('x');
   const yRange = axis('y');
+  // `aspect: auto` follows the coordinates, so scene units are square.
+  const resolvedAspect = lazy('view.aspect', () => atPath(['view', 'aspect'], () => viewNode.aspect === 'auto'
+    ? Math.abs((xRange().to - xRange().from) / (yRange().to - yRange().from))
+    : parseAspectRatio(viewNode.aspect, variables)));
   const autoOverflow = viewNode.overflow === 'auto';
   const overflow = lazy('view.overflow', () => atPath(['view', 'overflow'], () => {
     const value = asNumber(viewNode.overflow, 0, variables);

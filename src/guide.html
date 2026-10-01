@@ -135,7 +135,11 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     x: [-4, 4]         # left edge, right edge
     y: [-3, 3]         # bottom edge, top edge</code></pre>
   <ul>
-    <li><code>aspect</code> is the width divided by the height. The default is 1 (square).</li>
+    <li>
+      <code>aspect</code> is the width divided by the height. The default is 1 (square).
+      <code>aspect: auto</code> takes it from the coordinates, so one unit is the same
+      length across and up.
+    </li>
     <li>
       <code>coordinates</code> sets the numbers used to place things. <code>x</code> goes
       from left to right, and <code>y</code> goes from bottom to top, as in maths.
@@ -152,9 +156,12 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
       <code>overflow: auto</code> fits the picture to everything the scene draws, however
       far the zooms spread it, so nothing is cut off and nothing is wasted. The view is
       grown or shrunk evenly about the content, keeping its aspect, and the short side is
-      padded equally on both sides. The coordinates still set what each zoom copies, so the
-      shape is the same as without it. Every zoom must be smaller than the view, or the
-      picture would grow forever.
+      padded equally on both sides. With <code>aspect: auto</code> as well, each side is
+      fitted separately, so the picture takes the shape of the content with no padding.
+      Shapes are clipped to the view before they are copied,
+      so parts outside it do not add empty space to the fit. The coordinates still set what
+      each zoom copies, so the shape is the same as without it. Every zoom must be smaller
+      than the view, or the picture would grow forever.
     </li>
   </ul>
 </section>
