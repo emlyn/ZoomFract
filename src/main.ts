@@ -385,16 +385,18 @@ function frameOrigin(): Vec2 {
   return { x: rect.left - pictureZoom.x, y: rect.top - pictureZoom.y };
 }
 
-// A picture larger than the screen must cover it; a smaller one stays inside.
+// The picture always covers the area it fills unzoomed (within the screen).
+// Zooming in about a point on it only grows it past that area, so the point
+// stays put; zooming out and panning are held to it.
 function clampPictureZoom(zoom: PictureZoom, origin: Vec2): PictureZoom {
   if (zoom.scale <= 1) {
     return IDENTITY_ZOOM;
   }
   const host = canvasHost.getBoundingClientRect();
   const axis = (offset: number, start: number, size: number, hostStart: number, hostSize: number) => {
-    const low = hostStart - start;
-    const high = hostStart + hostSize - size * zoom.scale - start;
-    return clamp(offset, Math.min(low, high), Math.max(low, high));
+    const from = Math.max(start, hostStart);
+    const to = Math.min(start + size, hostStart + hostSize);
+    return clamp(offset, to - start - size * zoom.scale, from - start);
   };
   return {
     scale: zoom.scale,
@@ -454,6 +456,27 @@ const endPicturePointer = (event: PointerEvent) => {
 };
 canvasHost.addEventListener('pointerup', endPicturePointer);
 canvasHost.addEventListener('pointercancel', endPicturePointer);
+
+// Scrolling down zooms in and up zooms out, about the mouse.
+const WHEEL_ZOOM_PER_PIXEL = 0.002;
+canvasHost.addEventListener('wheel', (event) => {
+  if (!pictureOnly) {
+    return;
+  }
+  event.preventDefault();
+  const pixels = event.deltaY * (
+    event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? canvasHost.clientHeight
+        : 1);
+  const scale = clamp(pictureZoom.scale * Math.exp(pixels * WHEEL_ZOOM_PER_PIXEL), 1, MAXIMUM_PICTURE_ZOOM);
+  const origin = frameOrigin();
+  const ratio = scale / pictureZoom.scale;
+  setPictureZoom(clampPictureZoom({
+    scale,
+    x: event.clientX - origin.x - (event.clientX - origin.x - pictureZoom.x) * ratio,
+    y: event.clientY - origin.y - (event.clientY - origin.y - pictureZoom.y) * ratio,
+  }, origin));
+}, { passive: false });
 
 let panelBeforePicture = false;
 
