@@ -95,7 +95,7 @@ files unless extracting a module clearly reduces complexity.
   need no special handling. `view.declared` keeps the written coordinates.
   Edit mode outlines the declared view and zooms.
 - `overflow: auto` fits the shown area to the content: `contentBounds`
-  iterates hull(rects + each zoom's copy of the hull) to its fixed point, and
+  iterates hull(shapes + each zoom's copy of the hull) to its fixed point, and
   `fittedView` scales the declared view evenly about it. Because pixel sizes
   depend on the fit, `sceneFromValue` rebuilds until it settles. Zooms that
   do not shrink are an error. `view.overflow` is not a variable in auto mode.
@@ -109,7 +109,7 @@ files unless extracting a module clearly reduces complexity.
 - Elements may have an optional `name`. Names must be unique, non-blank,
   contain no dots or spaces, and cannot be the reserved name `view`.
 - `scene` is an ordered list of typed items. Every item has a `type`, currently
-  `rect` or `zoom`, and later items draw on top of earlier items. Planned
+  `rect`, `circle`, `polygon` or `zoom`, and later items draw on top of earlier items. Planned
   syntax (more shapes, images, groups, gradients, zoom colour changes,
   repeats) is described in the guide's "Coming soon" section and baked into
   the v1 share dictionary; implement it with those exact names.
@@ -188,6 +188,14 @@ files unless extracting a module clearly reduces complexity.
 
 - `rect` is borderless by default and uses `colour` (default black) plus
   optional `opacity`.
+- `circle` uses either `centre` and positive `radius`, or exactly three
+  non-collinear `points`. `polygon` uses an ordered list of at least three
+  simple, non-crossing `points`, or `sides` (3-256), `centre`, and one
+  `vertex` to define a regular polygon. Filled shapes share colour, opacity,
+  transparency and density `weight` behaviour.
+- Named polygon points can be referenced as `name.points.0`; circle points
+  used to define a three-point circle can be referenced the same way. Named
+  shape parts such as `centre` and corners refer to the shape's bounding box.
 - Every colour (items, glows, seed, frame, shading stops) is any colour the
   canvas accepts: names, `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, and
   functions such as `rgb()`, `hsl()`, `hwb()`, `lab()` and `oklch()`. The
@@ -244,11 +252,11 @@ files unless extracting a module clearly reduces complexity.
   and `N%` is a fraction of the scaled range up to the normalising count.
   Count positions are converted after normalisation and all stops are
   sorted by position; colours clamp beyond the first and last stops.
-- Density counts how many rects and copies cover each working pixel, maps
+- Density counts how many filled shapes and copies cover each working pixel, maps
   the count through the scale, normalised by the 99.9th percentile of
   covered pixels, onto the gradient. Zero-hit pixels stay transparent;
   counts below one fade out.
-- In density mode rects use `weight` (positive, default 1) instead of
+- In density mode filled shapes use `weight` (positive, default 1) instead of
   `colour`/`opacity`; zoom `opacity` and `seed` are errors. `weight` in
   paint mode is an error.
 - Density is WebGL2 only and needs `EXT_color_buffer_float`. It draws
@@ -461,8 +469,8 @@ files unless extracting a module clearly reduces complexity.
   narrow gaps filled in (a morphological closing using distance transforms),
   with a thin fading halo, and is drawn with slightly offset copies beneath it
   to thicken very thin lines.
-- The PowerPoint export is one slide of the top level only. Rects become
-  `p:sp` rectangles; each zoom is an `mc:AlternateContent` holding a
+- The PowerPoint export is one slide of the top level only. Filled shapes become
+  `p:sp` vector shapes; each zoom is an `mc:AlternateContent` holding a
   self-referencing Slide Zoom (`pslz:sldZmObj` whose `sldId` is the slide's own
   ID and whose `cId` equals the slide's `p14:creationId`, with `showBg="0"` so
   copies stay transparent) and a fallback picture. Both use the rendered canvas

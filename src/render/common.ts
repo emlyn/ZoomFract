@@ -1,8 +1,10 @@
 import {
+  type DrawableElement,
   rectCorner,
   type CornerName,
   type RectGeometry,
   type ResolvedSceneDefinition,
+  scaleVector,
   type Vec2,
   type ZoomElement,
 } from '../scene';
@@ -209,6 +211,29 @@ export function scenePointToCanvas(point: Vec2, scene: ResolvedSceneDefinition):
 export function elementCorners(element: RectGeometry, scene: ResolvedSceneDefinition): Vec2[] {
   return (['topLeft', 'topRight', 'bottomRight', 'bottomLeft'] as CornerName[])
     .map((name) => scenePointToCanvas(rectCorner(element, name), scene));
+}
+
+export function elementPoints(element: DrawableElement, scene: ResolvedSceneDefinition, factor = 1): Vec2[] {
+  if (element.kind === 'rect' || element.kind === 'zoom') {
+    return elementCorners(element, scene).map((point) => scaleVector(point, factor));
+  }
+  if (element.kind === 'polygon') {
+    return element.points.map((point) => scaleVector(scenePointToCanvas(point, scene), factor));
+  }
+  const xScale = scene.view.resolution.width / Math.abs(scene.view.coordinates.x.to - scene.view.coordinates.x.from);
+  const yScale = scene.view.resolution.height / Math.abs(scene.view.coordinates.y.to - scene.view.coordinates.y.from);
+  const projectedRadius = element.radius * Math.max(xScale, yScale) * factor;
+  const angleStep = projectedRadius <= 0.25
+    ? Math.PI / 6
+    : Math.acos(Math.max(-1, 1 - 0.25 / projectedRadius));
+  const count = Math.max(12, Math.min(256, Math.ceil(Math.PI / Math.max(angleStep, 1e-6))));
+  return Array.from({ length: count }, (_, index) => {
+    const angle = index * Math.PI * 2 / count;
+    return scaleVector(scenePointToCanvas({
+      x: element.center.x + Math.cos(angle) * element.radius,
+      y: element.center.y + Math.sin(angle) * element.radius,
+    }, scene), factor);
+  });
 }
 
 // Levels count generations of zooms: generation `levels` is the terminal seed,

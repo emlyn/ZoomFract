@@ -5,7 +5,7 @@
   <a href="#guide-view">View</a>
   <a href="#guide-frame">Frame</a>
   <a href="#guide-scene">Scene</a>
-  <a href="#guide-rect">Rectangles</a>
+  <a href="#guide-shapes">Shapes</a>
   <a href="#guide-position">Position and size</a>
   <a href="#guide-points">Points</a>
   <a href="#guide-zoom">Zooms</a>
@@ -181,7 +181,8 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   <h3>Scene</h3>
   <p>
     The scene is a list of items. Each item has a <code>type</code>, either
-    <code>rect</code> or <code>zoom</code>. Items are drawn in order, so later items
+    <code>rect</code>, <code>circle</code>, <code>polygon</code> or <code>zoom</code>.
+    Items are drawn in order, so later items
     appear on top of earlier ones.
   </p>
   <p>
@@ -190,8 +191,8 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   </p>
 </section>
 
-<section id="guide-rect">
-  <h3>Rectangles</h3>
+<section id="guide-shapes">
+  <h3>Shapes</h3>
   <pre><code>- type: rect
   name: block
   centre: [0, 0]
@@ -204,6 +205,29 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     Rectangles are filled with <code>colour</code> (black by default) and have no outline.
     <code>opacity</code> defaults to 1. With
     <a href="#guide-shading">density shading</a>, use <code>weight</code> instead.
+  </p>
+  <p>Circles use a centre and radius, or exactly three points on the circumference:</p>
+  <pre><code>- type: circle
+  centre: [0, 0]
+  radius: 1
+- type: circle
+  points: [[-1, 0], [1, 0], [0, 1]]</code></pre>
+  <p>
+    A polygon lists its corner points in order, or can be regular: give its number of
+    <code>sides</code>, <code>centre</code> and one <code>vertex</code>. The vertex
+    sets both its radius and orientation.
+  </p>
+  <pre><code>- type: polygon
+  points: [[0, 0], [2, 0], [2, 1], [1, 1.5], [0, 1]]
+- type: polygon
+  sides: 6
+  centre: [0, 0]
+  vertex: [0, 1]</code></pre>
+  <p>
+    Listed polygon points must form a simple shape: edges cannot cross or touch.
+    Points can refer to another named shape, for example <code>shape.points.0</code>.
+    Circles and polygons use the same colour, opacity and density-weight settings as
+    rectangles.
   </p>
   <p>
     Anywhere a colour is used, write a name such as <code>teal</code>, a hex code
@@ -424,8 +448,8 @@ seed:
     </li>
   </ul>
   <p>
-    Rectangles do not have <code>colour</code> or <code>opacity</code> in this mode. Instead,
-    <code>weight</code> (1 by default) says how much each rectangle counts. Zoom
+    Shapes do not have <code>colour</code> or <code>opacity</code> in this mode. Instead,
+    <code>weight</code> (1 by default) says how much each shape counts. Zoom
     <code>opacity</code> and <code>seed</code> are not used. Density shading needs the
     WebGL2 renderer.
   </p>
@@ -573,7 +597,7 @@ scene:
     </li>
     <li>
       <strong>PowerPoint</strong> downloads a one-slide presentation of the top level of the
-      scene. Rectangles become PowerPoint rectangles, and each zoom becomes a Slide Zoom of
+      scene. Shapes become PowerPoint vector shapes, and each zoom becomes a Slide Zoom of
       the slide itself, so PowerPoint draws the repeats. Density shading, zoom opacity and
       glow softness are not carried over, and the tab lists any the scene uses. When only the
       seed draws anything, PowerPoint can fade the picture away as it updates the zooms;
@@ -629,22 +653,13 @@ scene:
   </p>
 
   <h4>More shapes</h4>
-  <pre><code>- type: circle
-  centre: [0, 0]
-  radius: 1
-- type: ellipse
+  <pre><code>  - type: ellipse
   centre: [0, 0]
   width: 3
   height: 2
   rotation: 20
 - type: triangle
   points: [[0, 0], [1, 0], [0.5, 0.8]]
-- type: polygon
-  points: [[0, 0], [2, 0], [2, 1], [1, 1.5], [0, 1]]
-- type: polygon            # a regular polygon
-  sides: 6
-  centre: [0, 0]
-  radius: 1                # centre to corner
 - type: star
   sides: 5
   centre: [0, 0]
@@ -658,11 +673,7 @@ scene:
 - type: path
   path: "M 0 0 C 1 1, 2 1, 3 0 Z"</code></pre>
   <ul>
-    <li>
-      Circles, ellipses, regular polygons and stars are placed like rectangles, with
-      the same points (<code>name.centre</code>, <code>name.topLeft</code> and so on)
-      for their surrounding box.
-    </li>
+    <li>Ellipses and stars will be placed like rectangles, with points for their surrounding box.</li>
     <li>
       Shapes made from <code>points</code> refer to them as <code>name.points.0</code>,
       <code>name.points.1</code> and so on, counting from 0.

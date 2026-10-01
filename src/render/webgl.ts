@@ -1,4 +1,10 @@
-import { BLEND_MODES, MAXIMUM_DENSITY_COLORS, type ResolvedSceneDefinition, type Vec2 } from '../scene';
+import {
+  BLEND_MODES,
+  MAXIMUM_DENSITY_COLORS,
+  triangulatePolygon,
+  type ResolvedSceneDefinition,
+  type Vec2,
+} from '../scene';
 import {
   MAX_WEBGL_WORKING_PIXELS,
   EDIT_MODE_ZOOM_OPACITY,
@@ -650,7 +656,7 @@ function drawWebgl(
   };
 
   const seedColor = parseColor(scene.seed.color);
-  const rectColors = scene.elements.map((element) => element.kind === 'rect' ? parseColor(element.color) : null);
+  const shapeColors = scene.elements.map((element) => element.kind !== 'zoom' ? parseColor(element.color) : null);
   const glowColors = scene.elements.map((element) => element.glow
     ? premultiplied(parseColor(element.glow.color), element.glow.opacity)
     : null);
@@ -664,19 +670,25 @@ function drawWebgl(
     mode = texCoords ? MODE_SOURCE : MODE_FLAT,
     shape: [number, number, number, number] = [0, 0, 0, 0],
   ) => {
-    const pushVertex = (index: number) => vertices.push(
-      polygon[index].x,
-      polygon[index].y,
+    const polygonIndex = new Map(polygon.map((point, index) => [point, index]));
+    const pushVertex = (point: Vec2) => {
+      const index = polygonIndex.get(point);
+      if (index === undefined) {
+        throw new Error('Triangulation returned a point outside the polygon');
+      }
+      vertices.push(
+      point.x,
+      point.y,
       texCoords?.[index].x ?? 0,
       texCoords?.[index].y ?? 0,
       ...color,
       mode,
       ...shape,
-    );
-    for (let index = 1; index < polygon.length - 1; index += 1) {
-      pushVertex(0);
-      pushVertex(index);
-      pushVertex(index + 1);
+      );
+    };
+    const triangles = triangulatePolygon(polygon, false);
+    for (const triangle of triangles) {
+      triangle.forEach(pushVertex);
     }
   };
 
@@ -685,9 +697,9 @@ function drawWebgl(
   const densityVertices = (items: UnrolledItem[], sampleSource: boolean) => {
     const vertices: number[] = [];
     for (const item of items) {
-      if (item.kind === 'rect') {
+      if (item.kind === 'shape') {
         const element = scene.elements[item.elementIndex];
-        const weight = element.kind === 'rect' ? element.weight * item.alpha : 0;
+        const weight = element.kind !== 'zoom' ? element.weight * item.alpha : 0;
         pushPolygon(vertices, item.polygon, null, [weight, weight, weight, weight]);
       } else if (item.kind === 'leaf' && sampleSource) {
         pushPolygon(vertices, item.polygon, item.texCoords, [item.alpha, item.alpha, item.alpha, item.alpha]);
@@ -701,8 +713,8 @@ function drawWebgl(
     const vertices: number[] = [];
     const seedAlpha = seedColor[3] * scene.seed.opacity;
     for (const item of items) {
-      if (item.kind === 'rect') {
-        const coverage = rectColors[item.elementIndex]![3] * item.alpha;
+      if (item.kind === 'shape') {
+        const coverage = shapeColors[item.elementIndex]![3] * item.alpha;
         pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
       } else if (item.kind === 'leaf') {
         pushPolygon(vertices, item.polygon, sampleSource ? item.texCoords : null, sampleSource
@@ -737,10 +749,13 @@ function drawWebgl(
   };
 
   const pushItem = (vertices: number[], item: UnrolledItem, sampleSource: boolean) => {
-    if (item.kind === 'rect') {
-      pushPolygon(vertices, item.polygon, null, premultiplied(rectColors[item.elementIndex]!, item.alpha));
+    if (item.kind === 'shape') {
+      pushPolygon(vertices, item.polygon, null, premultiplied(shapeColors[item.elementIndex]!, item.alpha));
     } else if (item.kind === 'rectGlow') {
       const element = scene.elements[item.elementIndex];
+      if (element.kind !== 'rect') {
+        throw new Error('A rectangle glow has no rectangle element');
+      }
       const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
       pushPolygon(vertices, item.polygon, item.local, color, MODE_RECT_GLOW, [
         element.width / 2,

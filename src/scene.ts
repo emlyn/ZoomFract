@@ -83,6 +83,7 @@ const leaves = (...names: string[]): Record<string, Shape> =>
   Object.fromEntries(names.map((name) => [name, LEAF]));
 
 const POINT: Shape = { keys: leaves('x', 'y') };
+const POINT_LIST: Shape = { items: POINT };
 const ROTATION: Shape = { keys: leaves('degrees', 'deg', 'radians', 'rad') };
 const AXIS: Shape = { keys: leaves('from', 'to', 'min', 'max') };
 const GEOMETRY: Record<string, Shape> = {
@@ -127,6 +128,8 @@ const DEFINITION: Shape = {
         byType: {
           // Scale and align are listed so rectangles get a specific error.
           rect: { keys: { ...GEOMETRY, ...leaves('colour', 'weight', 'scale', 'align') } },
+          circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'colour', 'weight', 'opacity', 'transparency'), points: POINT_LIST } },
+          polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'colour', 'weight', 'opacity', 'transparency'), points: POINT_LIST, vertex: POINT } },
           zoom: { keys: { ...GEOMETRY, ...leaves('scale', 'blend'), align: ALIGN } },
         },
       },
@@ -223,6 +226,24 @@ export type RectElement = SceneElement & {
   weight: number;
 };
 
+export type CircleElement = SceneElement & {
+  kind: 'circle';
+  center: Vec2;
+  radius: number;
+  sourcePoints?: Vec2[];
+  color: string;
+  opacity: number;
+  weight: number;
+};
+
+export type PolygonElement = SceneElement & {
+  kind: 'polygon';
+  points: Vec2[];
+  color: string;
+  opacity: number;
+  weight: number;
+};
+
 export type ZoomElement = SceneElement & {
   kind: 'zoom';
   center: Vec2;
@@ -234,7 +255,8 @@ export type ZoomElement = SceneElement & {
   alignTargets: Vec2[];
 };
 
-export type DrawableElement = RectElement | ZoomElement;
+export type ShapeElement = RectElement | CircleElement | PolygonElement;
+export type DrawableElement = ShapeElement | ZoomElement;
 
 export type ViewRanges = {
   x: AxisRange;
@@ -541,6 +563,102 @@ function convexHull(points: Vec2[]): Vec2[] {
   return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
+const polygonCross = (origin: Vec2, a: Vec2, b: Vec2) =>
+  (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+
+const polygonArea = (points: Vec2[]) => points.reduce((area, point, index) => {
+  const next = points[(index + 1) % points.length];
+  return area + point.x * next.y - next.x * point.y;
+}, 0) / 2;
+
+const pointOnSegment = (point: Vec2, start: Vec2, end: Vec2) =>
+  Math.abs(polygonCross(start, end, point)) < 1e-10
+  && point.x >= Math.min(start.x, end.x) - 1e-10
+  && point.x <= Math.max(start.x, end.x) + 1e-10
+  && point.y >= Math.min(start.y, end.y) - 1e-10
+  && point.y <= Math.max(start.y, end.y) + 1e-10;
+
+function segmentsIntersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2) {
+  const abC = polygonCross(a, b, c);
+  const abD = polygonCross(a, b, d);
+  const cdA = polygonCross(c, d, a);
+  const cdB = polygonCross(c, d, b);
+  return (abC * abD < 0 && cdA * cdB < 0)
+    || pointOnSegment(c, a, b)
+    || pointOnSegment(d, a, b)
+    || pointOnSegment(a, c, d)
+    || pointOnSegment(b, c, d);
+}
+
+// Ear-clipping triangulation supports both convex and concave simple polygons.
+export function triangulatePolygon(points: Vec2[], validate = true): Vec2[][] {
+  if (points.length < 3) {
+    throw new Error('A polygon needs at least three points');
+  }
+  if (validate && points.some((point, index) => vectorLength(subtract(point, points[(index + 1) % points.length])) < 1e-10)) {
+    throw new Error('Polygon points must not be repeated');
+  }
+  let vertices = points.filter((point, index) =>
+    vectorLength(subtract(point, points[(index + points.length - 1) % points.length])) >= 1e-10);
+  if (vertices.length > 1 && vectorLength(subtract(vertices[0], vertices.at(-1)!)) < 1e-10) {
+    vertices = vertices.slice(0, -1);
+  }
+  const area = polygonArea(vertices);
+  if (validate) {
+    for (let first = 0; first < vertices.length; first += 1) {
+      const firstNext = (first + 1) % vertices.length;
+      for (let second = first + 1; second < vertices.length; second += 1) {
+        const secondNext = (second + 1) % vertices.length;
+        if (first === second || firstNext === second || secondNext === first) {
+          continue;
+        }
+        if (segmentsIntersect(vertices[first], vertices[firstNext], vertices[second], vertices[secondNext])) {
+          throw new Error('Polygon edges must not cross or touch');
+        }
+      }
+    }
+  }
+  if (Math.abs(area) < 1e-10) {
+    throw new Error('Polygon points must enclose an area');
+  }
+  const orientation = Math.sign(area);
+  if (vertices.every((point, index) => {
+    const previous = vertices[(index + vertices.length - 1) % vertices.length];
+    const next = vertices[(index + 1) % vertices.length];
+    return polygonCross(previous, point, next) * orientation >= -1e-10;
+  })) {
+    return vertices.slice(1, -1).map((point, index) => [vertices[0], point, vertices[index + 2]]);
+  }
+  const remaining = vertices.map((_, index) => index);
+  const triangles: Vec2[][] = [];
+  const insideTriangle = (point: Vec2, a: Vec2, b: Vec2, c: Vec2) =>
+    polygonCross(a, b, point) * orientation >= -1e-10
+    && polygonCross(b, c, point) * orientation >= -1e-10
+    && polygonCross(c, a, point) * orientation >= -1e-10;
+
+  while (remaining.length > 3) {
+    const ear = remaining.findIndex((current, index) => {
+      const previous = remaining[(index + remaining.length - 1) % remaining.length];
+      const next = remaining[(index + 1) % remaining.length];
+      const [a, b, c] = [vertices[previous], vertices[current], vertices[next]];
+      return polygonCross(a, b, c) * orientation > 1e-10
+        && !remaining.some((candidate) =>
+          candidate !== previous && candidate !== current && candidate !== next
+          && insideTriangle(vertices[candidate], a, b, c));
+    });
+    if (ear < 0) {
+      throw new Error('Polygon could not be triangulated; check that its points make a simple shape');
+    }
+    const previous = remaining[(ear + remaining.length - 1) % remaining.length];
+    const current = remaining[ear];
+    const next = remaining[(ear + 1) % remaining.length];
+    triangles.push([vertices[previous], vertices[current], vertices[next]]);
+    remaining.splice(ear, 1);
+  }
+  triangles.push(remaining.map((index) => vertices[index]));
+  return triangles;
+}
+
 type Bounds = { min: Vec2; max: Vec2 };
 
 const boundsOf = (points: Vec2[]): Bounds => ({
@@ -572,8 +690,16 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
     throw new Error(`overflow: auto cannot fit the picture because ${label} is ${shrink.toFixed(2)} times the size of the view, so its copies keep growing`);
   }
   const base = elements
-    .filter((element): element is RectElement => element.kind === 'rect' && (element.opacity > 0 || element.glow !== undefined))
-    .flatMap((rect) => {
+    .filter((element): element is ShapeElement =>
+      element.kind !== 'zoom' && (element.opacity > 0 || (element.kind === 'rect' && element.glow !== undefined)))
+    .flatMap((shape) => {
+      if (shape.kind === 'circle') {
+        return OCTAGON.map((point) => add(shape.center, scaleVector(point, shape.radius)));
+      }
+      if (shape.kind === 'polygon') {
+        return shape.points;
+      }
+      const rect = shape;
       const grow = 2 * (rect.glow?.size ?? 0);
       return CORNER_NAMES.map((name) => rectCorner({ ...rect, width: rect.width + grow, height: rect.height + grow }, name));
     });
@@ -1236,6 +1362,164 @@ function parseRectElement(
   };
 }
 
+function parseShapeStyle<K extends 'circle' | 'polygon'>(
+  record: Record<string, unknown>,
+  name: string | undefined,
+  kind: K,
+  elementName: string,
+  variables: Variables,
+  density: boolean,
+  path: ScenePath,
+): { kind: K; name: string | undefined; color: string; opacity: number; weight: number } {
+  if (density && (record.colour !== undefined || record.opacity !== undefined || record.transparency !== undefined)) {
+    const key = record.colour !== undefined ? 'colour' : record.opacity !== undefined ? 'opacity' : 'transparency';
+    throw new PathError(
+      `${elementName}: ${key} is not used with density shading; use weight instead`,
+      [...path, key],
+    );
+  }
+  if (!density && record.weight !== undefined) {
+    throw new PathError(`${elementName}: weight is only used with density shading`, [...path, 'weight']);
+  }
+  const weight = record.weight === undefined ? 1 : atPath([...path, 'weight'], () => asPositiveNumber(record.weight, variables));
+  if (!weight) {
+    throw new PathError(`${elementName} weight must be a positive number`, [...path, 'weight']);
+  }
+  return {
+    kind,
+    name,
+    color: atPath([...path, 'colour'], () => asColour(record.colour, '#000')),
+    opacity: parseOpacity(record, 1, variables, path),
+    weight,
+  };
+}
+
+function parseShapePoints(
+  value: unknown,
+  resolvePoint: PointResolver,
+  elementName: string,
+  path: ScenePath,
+  validatePolygon = true,
+) {
+  if (!Array.isArray(value)) {
+    throw new PathError(`${elementName} points must be a list of at least three points`, path);
+  }
+  const points = value.map((point, index) => atPath([...path, index], () => {
+    const resolved = resolvePoint(point, `${elementName} point ${index + 1}`);
+    if (!resolved) {
+      throw new Error(`${elementName} point ${index + 1} must be [x, y], { x, y }, or a name.part reference`);
+    }
+    return resolved;
+  }));
+  if (validatePolygon) {
+    atPath(path, () => triangulatePolygon(points));
+  }
+  return points;
+}
+
+function circumcircle([a, b, c]: [Vec2, Vec2, Vec2], elementName: string): { center: Vec2; radius: number } {
+  const determinant = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  const scale = Math.max(1, vectorLength(subtract(a, b)), vectorLength(subtract(b, c)), vectorLength(subtract(c, a)));
+  if (Math.abs(determinant) <= 1e-10 * scale * scale) {
+    throw new Error(`${elementName} points must not be collinear`);
+  }
+  const aa = a.x * a.x + a.y * a.y;
+  const bb = b.x * b.x + b.y * b.y;
+  const cc = c.x * c.x + c.y * c.y;
+  const center = {
+    x: (aa * (b.y - c.y) + bb * (c.y - a.y) + cc * (a.y - b.y)) / determinant,
+    y: (aa * (c.x - b.x) + bb * (a.x - c.x) + cc * (b.x - a.x)) / determinant,
+  };
+  return { center, radius: vectorLength(subtract(a, center)) };
+}
+
+function parseCircleElement(
+  record: Record<string, unknown>,
+  name: string | undefined,
+  elementName: string,
+  resolvePoint: PointResolver,
+  variables: Variables,
+  density: boolean,
+  path: ScenePath,
+): CircleElement {
+  const hasPointSet = record.points !== undefined;
+  if (hasPointSet === (record.centre !== undefined || record.radius !== undefined)) {
+    throw new PathError(
+      `${elementName} must use either centre and radius, or three points`,
+      [...path, hasPointSet ? 'points' : 'centre'],
+    );
+  }
+  let center: Vec2;
+  let radius: number;
+  let sourcePoints: Vec2[] | undefined;
+  if (hasPointSet) {
+    sourcePoints = parseShapePoints(record.points, resolvePoint, elementName, [...path, 'points'], false);
+    if (sourcePoints.length !== 3) {
+      throw new PathError(`${elementName} needs exactly three points`, [...path, 'points']);
+    }
+    ({ center, radius } = atPath([...path, 'points'], () =>
+      circumcircle(sourcePoints as [Vec2, Vec2, Vec2], elementName)));
+  } else {
+    const resolvedCenter = atPath([...path, 'centre'], () => resolvePoint(record.centre, `${elementName} centre`));
+    if (!resolvedCenter) {
+      throw new PathError(`${elementName} needs a centre`, [...path, 'centre']);
+    }
+    center = resolvedCenter;
+    radius = atPath([...path, 'radius'], () => asPositiveNumber(record.radius, variables)) ?? 0;
+    if (!radius) {
+      throw new PathError(`${elementName} radius must be a positive number`, [...path, 'radius']);
+    }
+  }
+  return {
+    ...parseShapeStyle(record, name, 'circle', elementName, variables, density, path),
+    center,
+    radius,
+    ...(sourcePoints ? { sourcePoints } : {}),
+  };
+}
+
+function parsePolygonElement(
+  record: Record<string, unknown>,
+  name: string | undefined,
+  elementName: string,
+  resolvePoint: PointResolver,
+  variables: Variables,
+  density: boolean,
+  path: ScenePath,
+): PolygonElement {
+  let points: Vec2[];
+  if (record.points !== undefined) {
+    if (record.sides !== undefined || record.centre !== undefined || record.vertex !== undefined) {
+      throw new PathError(`${elementName} must use points or sides, centre, and vertex`, [...path, 'points']);
+    }
+    points = parseShapePoints(record.points, resolvePoint, elementName, [...path, 'points']);
+  } else {
+    const sides = atPath([...path, 'sides'], () => asNumber(record.sides, Number.NaN, variables));
+    if (!Number.isInteger(sides) || sides < 3 || sides > 256) {
+      throw new PathError(`${elementName} sides must be a whole number from 3 to 256`, [...path, 'sides']);
+    }
+    const center = atPath([...path, 'centre'], () => resolvePoint(record.centre, `${elementName} centre`));
+    const vertex = atPath([...path, 'vertex'], () => resolvePoint(record.vertex, `${elementName} vertex`));
+    if (!center || !vertex) {
+      throw new PathError(`${elementName} needs a centre and one vertex`, [...path, !center ? 'centre' : 'vertex']);
+    }
+    const offset = subtract(vertex, center);
+    const radius = vectorLength(offset);
+    if (radius <= 1e-10) {
+      throw new PathError(`${elementName} vertex must differ from its centre`, [...path, 'vertex']);
+    }
+    const angle = Math.atan2(offset.y, offset.x);
+    points = Array.from({ length: sides }, (_, index) => ({
+      x: center.x + radius * Math.cos(angle + index * Math.PI * 2 / sides),
+      y: center.y + radius * Math.sin(angle + index * Math.PI * 2 / sides),
+    }));
+  }
+  return {
+    ...parseShapeStyle(record, name, 'polygon', elementName, variables, density, path),
+    points,
+  };
+}
+
 function parseZoomElement(
   zoom: Record<string, unknown>,
   name: string | undefined,
@@ -1292,7 +1576,7 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
     if (typeof record.type !== 'string' || !record.type.trim()) {
       throw new Error(`Scene item ${itemNumber} must have a type`);
     }
-    if (record.type !== 'rect' && record.type !== 'zoom') {
+    if (!['rect', 'circle', 'polygon', 'zoom'].includes(record.type)) {
       throw new PathError(`Scene item ${itemNumber} has unknown type: ${record.type}`, ['scene', index, 'type']);
     }
 
@@ -1314,7 +1598,13 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
       return name;
     });
 
-    const kind = record.type === 'rect' ? 'Rectangle' : 'Zoom';
+    const kind = record.type === 'zoom'
+      ? 'Zoom'
+      : record.type === 'circle'
+        ? 'Circle'
+        : record.type === 'polygon'
+          ? 'Polygon'
+          : 'Rectangle';
     return {
       record,
       type: record.type,
@@ -1347,6 +1637,26 @@ function resolveSceneElements(
       return point;
     }
 
+    const pointList = value.trim().match(/^([^.\s]+)\.points\.(\d+)$/);
+    if (pointList) {
+      const [, name, indexText] = pointList;
+      const target = indexByName.get(name);
+      if (target === undefined) {
+        throw new Error(`${label} refers to unknown element "${name}"`);
+      }
+      if (target === ownIndex) {
+        throw new Error(`${label} cannot refer to its own element`);
+      }
+      const element = resolveElement(target);
+      const index = Number(indexText);
+      const points = element.kind === 'polygon' ? element.points
+        : element.kind === 'circle' ? element.sourcePoints
+          : undefined;
+      if (!points || !points[index]) {
+        throw new Error(`${label} reference "${value}" has no point ${indexText}`);
+      }
+      return points[index];
+    }
     const match = value.trim().match(/^([^.\s]+)\.([A-Za-z]+)$/);
     if (!match) {
       throw new Error(`${label} reference "${value}" must look like name.part`);
@@ -1366,7 +1676,23 @@ function resolveSceneElements(
     if (target === ownIndex) {
       throw new Error(`${label} cannot refer to its own element`);
     }
-    return rectPoint(resolveElement(target), part);
+    const element = resolveElement(target);
+    if (element.kind === 'rect' || element.kind === 'zoom') {
+      return rectPoint(element, part);
+    }
+    const box = element.kind === 'circle'
+      ? { center: element.center, width: 2 * element.radius, height: 2 * element.radius, rotation: 0 }
+      : (() => {
+        const min = { x: Math.min(...element.points.map((point) => point.x)), y: Math.min(...element.points.map((point) => point.y)) };
+        const max = { x: Math.max(...element.points.map((point) => point.x)), y: Math.max(...element.points.map((point) => point.y)) };
+        return {
+          center: scaleVector(add(min, max), 0.5),
+          width: max.x - min.x,
+          height: max.y - min.y,
+          rotation: 0,
+        };
+      })();
+    return rectPoint(box, part);
   };
 
   const resolveElement = (index: number): DrawableElement => {
@@ -1382,9 +1708,18 @@ function resolveSceneElements(
     resolving.add(index);
     const resolvePoint = pointResolverFor(index);
     const path = ['scene', index];
-    const element = atPath(path, () => item.type === 'rect'
-      ? parseRectElement(item.record, item.name, item.label, resolvePoint, variables, density, path)
-      : parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density, path));
+    const element = atPath(path, () => {
+      if (item.type === 'rect') {
+        return parseRectElement(item.record, item.name, item.label, resolvePoint, variables, density, path);
+      }
+      if (item.type === 'circle') {
+        return parseCircleElement(item.record, item.name, item.label, resolvePoint, variables, density, path);
+      }
+      if (item.type === 'polygon') {
+        return parsePolygonElement(item.record, item.name, item.label, resolvePoint, variables, density, path);
+      }
+      return parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density, path);
+    });
     resolving.delete(index);
     resolved[index] = element;
     return element;

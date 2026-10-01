@@ -3,6 +3,8 @@ import fernText from './examples/fern.yaml?raw';
 import pythagorasTreeDensityText from './examples/pythagoras-tree-density.yaml?raw';
 import pythagorasTreeInteractiveText from './examples/pythagoras-tree-interactive.yaml?raw';
 import pythagorasTreeText from './examples/pythagoras-tree.yaml?raw';
+import mengerSpongeText from './examples/menger-sponge.yaml?raw';
+import sierpinskiCirclesText from './examples/sierpinski-circles.yaml?raw';
 import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
 import sierpinskiText from './examples/sierpinski.yaml?raw';
 import vicsekRedBlueText from './examples/vicsek-red-blue.yaml?raw';
@@ -25,12 +27,14 @@ function example(id: string, text: string): ExampleDefinition {
 
 export const EXAMPLES: ExampleDefinition[] = [
   example('sierpinski', sierpinskiText),
+  example('sierpinski-circles', sierpinskiCirclesText),
   example('sierpinski-carpet', sierpinskiCarpetText),
   example('vicsek-red-blue', vicsekRedBlueText),
   example('fern', fernText),
   example('pythagoras-tree', pythagorasTreeText),
   example('pythagoras-tree-density', pythagorasTreeDensityText),
   example('pythagoras-tree-interactive', pythagorasTreeInteractiveText),
+  example('menger-sponge', mengerSpongeText),
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0];

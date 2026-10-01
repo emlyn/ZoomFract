@@ -1,7 +1,16 @@
-import type { DrawableElement, Glow, SceneDefinition, Vec2 } from './scene';
+import type {
+  CircleElement,
+  DrawableElement,
+  Glow,
+  PolygonElement,
+  RectElement,
+  SceneDefinition,
+  Vec2,
+  ZoomElement,
+} from './scene';
 
-// A PowerPoint file with one slide holding the scene's top level: rects
-// become rectangles, and zooms become Slide Zooms of the slide itself, so
+// A PowerPoint file with one slide holding the scene's top level: shapes
+// become vector shapes, and zooms become Slide Zooms of the slide itself, so
 // PowerPoint draws the recursion. Each zoom carries a picture of the slide
 // for PowerPoint to show until it redraws, and for viewers without zooms.
 
@@ -149,7 +158,7 @@ function slideMapping(scene: SceneDefinition, width: number, height: number) {
 
 // An element's box on the slide. Its edges are the images of the scene's
 // right and downward directions, which must stay square to each other.
-function placement(element: DrawableElement, mapping: ReturnType<typeof slideMapping>): Placement {
+function placement(element: RectElement | ZoomElement, mapping: ReturnType<typeof slideMapping>): Placement {
   const turn = (v: Vec2): Vec2 => ({
     x: v.x * Math.cos(element.rotation) - v.y * Math.sin(element.rotation),
     y: v.x * Math.sin(element.rotation) + v.y * Math.cos(element.rotation),
@@ -195,7 +204,7 @@ export type PowerPointLimit = { text: string; color?: string };
 function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
   const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
   const drawsItself = scene.elements.some((element) =>
-    (element.kind === 'rect' && visible(element.color, element.opacity))
+    (element.kind !== 'zoom' && visible(element.color, element.opacity))
     || (element.glow !== undefined && visible(element.glow.color, element.glow.opacity)));
   if (drawsItself || zooms.length === 0 || !visible(scene.seed.color, scene.seed.opacity)) {
     return null;
@@ -234,6 +243,9 @@ const EMPTY_TREE = '<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpP
 const guid = (id: number) => `{6184D655-31FA-EE49-9346-${id.toString(16).toUpperCase().padStart(12, '0')}}`;
 
 function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<typeof slideMapping>) {
+  if (element.kind === 'circle' || element.kind === 'polygon') {
+    return polygonShapeXml(element, id, mapping);
+  }
   const place = placement(element, mapping);
   if (element.kind === 'rect') {
     const name = escapeXml(element.name ?? `Rectangle ${id}`);
@@ -264,6 +276,43 @@ function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<type
   return `<mc:AlternateContent xmlns:mc="${NS_MC}">`
     + `<mc:Choice xmlns:pslz="${NS_PSLZ}" Requires="pslz">${zoom}</mc:Choice>`
     + `<mc:Fallback>${picture}</mc:Fallback></mc:AlternateContent>`;
+}
+
+function polygonShapeXml(
+  element: CircleElement | PolygonElement,
+  id: number,
+  mapping: ReturnType<typeof slideMapping>,
+) {
+  const points = element.kind === 'polygon'
+    ? element.points
+    : Array.from({ length: 128 }, (_, index) => ({
+      x: element.center.x + Math.cos(index * Math.PI * 2 / 128) * element.radius,
+      y: element.center.y + Math.sin(index * Math.PI * 2 / 128) * element.radius,
+    }));
+  const mapped = points.map(mapping.point);
+  const left = Math.min(...mapped.map((point) => point.x));
+  const top = Math.min(...mapped.map((point) => point.y));
+  const width = Math.max(...mapped.map((point) => point.x)) - left;
+  const height = Math.max(...mapped.map((point) => point.y)) - top;
+  const coordinates = mapped.map((point) => ({
+    x: Math.round((point.x - left) / width * 100000),
+    y: Math.round((point.y - top) / height * 100000),
+  }));
+  const [first, ...rest] = coordinates;
+  const commands = `<a:moveTo><a:pt x="${first.x}" y="${first.y}"/></a:moveTo>`
+    + rest.map((point) => `<a:lnTo><a:pt x="${point.x}" y="${point.y}"/></a:lnTo>`).join('')
+    + '<a:close/>';
+  const name = escapeXml(element.name ?? `${element.kind === 'circle' ? 'Circle' : 'Polygon'} ${id}`);
+  const fill = element.opacity > 0
+    ? `<a:solidFill>${colorXml(element.color, element.opacity)}</a:solidFill>`
+    : '<a:noFill/>';
+  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
+    + `<p:spPr><a:xfrm><a:off x="${Math.round(left)}" y="${Math.round(top)}"/>`
+    + `<a:ext cx="${Math.max(1, Math.round(width))}" cy="${Math.max(1, Math.round(height))}"/></a:xfrm>`
+    + `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="100000" b="100000"/>`
+    + `<a:pathLst><a:path w="100000" h="100000" fill="norm" stroke="0">${commands}</a:path></a:pathLst></a:custGeom>`
+    + `${fill}<a:ln><a:noFill/></a:ln></p:spPr>`
+    + '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>';
 }
 
 // `picture` is a PNG of the rendered scene, with transparent background.

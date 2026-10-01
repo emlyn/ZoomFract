@@ -1236,6 +1236,8 @@ function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered)
   const count = (kind: string) => scene.elements.filter((element) => element.kind === kind).length;
   const parts = [
     ...(count('rect') > 0 ? [plural(count('rect'), 'rectangle')] : []),
+    ...(count('circle') > 0 ? [plural(count('circle'), 'circle')] : []),
+    ...(count('polygon') > 0 ? [plural(count('polygon'), 'polygon')] : []),
     ...(count('zoom') > 0 ? [plural(count('zoom'), 'zoom')] : []),
     ...(scene.elements.some((element) => element.glow) ? ['glow'] : []),
     ...(scene.shading.mode === 'density' ? ['density shading'] : []),

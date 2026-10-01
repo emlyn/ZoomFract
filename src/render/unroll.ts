@@ -1,5 +1,5 @@
 import type { BlendMode, ResolvedSceneDefinition, Vec2 } from '../scene';
-import { elementCorners } from './common';
+import { elementPoints } from './common';
 
 // x' = a x + c y + e, y' = b x + d y + f
 type Affine = [number, number, number, number, number, number];
@@ -17,7 +17,7 @@ type ZoomNode = {
 // in the rectangle's own frame, in scene units from its centre. A zoom glow
 // carries source view coordinates, which extend beyond 0 to 1 by the glow.
 export type UnrolledItem =
-  | { kind: 'rect'; polygon: Vec2[]; elementIndex: number; alpha: number }
+  | { kind: 'shape'; polygon: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; alpha: number; blend: BlendMode }
   | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'zoomGlow'; polygon: Vec2[]; texCoords: Vec2[]; elementIndex: number; alpha: number };
@@ -162,8 +162,7 @@ export function unrollScene(
 ): { items: UnrolledItem[]; expandedZooms: number; shallowestLeaf: number } {
   const width = scene.view.resolution.width * factor;
   const height = scene.view.resolution.height * factor;
-  const elementPolygons = scene.elements.map((element) =>
-    elementCorners(element, scene).map((point) => ({ x: point.x * factor, y: point.y * factor })));
+  const elementPolygons = scene.elements.map((element) => elementPoints(element, scene, factor));
   const zoomTransforms = scene.elements.map((element, index): Affine | null => {
     if (element.kind !== 'zoom') {
       return null;
@@ -190,7 +189,7 @@ export function unrollScene(
   ]);
   // The element's outline grown outwards by its glow size.
   const glowQuads = scene.elements.map((element, index) => {
-    if (!element.glow) {
+    if (!element.glow || (element.kind !== 'rect' && element.kind !== 'zoom')) {
       return null;
     }
     const grow = { x: element.glow.size / element.width, y: element.glow.size / element.height };
@@ -245,9 +244,11 @@ export function unrollScene(
     }
   });
   enqueueChildren(root);
-  let itemCount = scene.elements.length;
+  const triangleCost = scene.elements.reduce((total, element, index) =>
+    total + (element.kind === 'zoom' ? 2 : Math.max(1, elementPolygons[index].length - 2)), 0);
+  let itemCount = triangleCost;
   let expandedZooms = 0;
-  const expandCost = scene.elements.length - 1;
+  const expandCost = triangleCost - 2;
   if (options.uniform) {
     // Whole generations only, so every leaf sits at the same depth.
     let frontier = heap.splice(0);
@@ -293,6 +294,9 @@ export function unrollScene(
       return;
     }
     const element = scene.elements[index];
+    if (element.kind !== 'rect' && element.kind !== 'zoom') {
+      return;
+    }
     const toUnit = invertAffine(composeAffine(node.transform, elementFrames[index]));
     items.push({
       kind: 'rectGlow',
@@ -307,14 +311,14 @@ export function unrollScene(
   };
   const emit = (node: ZoomNode) => {
     scene.elements.forEach((element, index) => {
-      if (element.kind === 'rect') {
+      if (element.kind !== 'zoom') {
         emitGlow(node, index, node.alpha, null);
         const polygon = clipPolygon(
           elementPolygons[index].map((point) => applyAffine(node.transform, point)),
           node.clip,
         );
         if (polygon.length > 0) {
-          items.push({ kind: 'rect', polygon, elementIndex: index, alpha: node.alpha * element.opacity });
+          items.push({ kind: 'shape', polygon, elementIndex: index, alpha: node.alpha * element.opacity });
         }
         return;
       }

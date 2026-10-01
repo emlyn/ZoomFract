@@ -1,0 +1,50 @@
+info:
+  title: Sierpiński triangle of coloured circles
+  author: Emlyn Corrin
+  date: 2026
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  overflow: auto
+  aspect: 2/sqrt(3)
+  coordinates:
+    x: [0, 1]
+    y: [0, sqrt(3)/2]
+
+scene:
+  - type: circle
+    centre: [0.5, sqrt(3)/4]
+    radius: sqrt(3)/2
+    opacity: 0.05
+  - type: zoom
+    name: top
+    centre: [1/2, sqrt(3)/2]
+    scale: 0.5
+    glow:
+      colour: cyan
+      opacity: 1
+      size: 0.005
+  - type: zoom
+    name: bottom-left
+    centre: [1/8, sqrt(3)/8]
+    scale: 0.5
+    glow:
+      colour: magenta
+      opacity: 1
+      size: 0.005
+  - type: zoom
+    name: bottom-right
+    centre: [7/8, sqrt(3)/8]
+    scale: 0.5
+    glow:
+      colour: yellow
+      opacity: 1
+      size: 0.005

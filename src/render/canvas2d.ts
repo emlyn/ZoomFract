@@ -3,8 +3,8 @@ import {
   subtract,
   vectorLength,
   type BlendMode,
-  type RectElement,
   type ResolvedSceneDefinition,
+  type ShapeElement,
   type Vec2,
   type ZoomElement,
 } from '../scene';
@@ -13,6 +13,7 @@ import {
   CONVERGED_FRACTION,
   EDIT_MODE_ZOOM_OPACITY,
   elementCorners,
+  elementPoints,
   type FrameCallbacks,
   type RenderOutcome,
   type RenderResult,
@@ -39,13 +40,11 @@ function tracePolygon(points: Vec2[]) {
   ctx.closePath();
 }
 
-function drawRectElement(element: RectElement, scene: ResolvedSceneDefinition) {
-  const corners = elementCorners(element, scene);
-
+function drawShapeElement(element: ShapeElement, scene: ResolvedSceneDefinition) {
   ctx.save();
   ctx.globalAlpha *= element.opacity;
   ctx.fillStyle = element.color;
-  tracePolygon(corners);
+  tracePolygon(elementPoints(element, scene));
   ctx.fill();
   ctx.restore();
 }
@@ -204,8 +203,8 @@ function drawScene(
   fadeZooms = false,
 ) {
   for (const element of scene.elements) {
-    if (element.kind === 'rect') {
-      drawRectElement(element, scene);
+    if (element.kind !== 'zoom') {
+      drawShapeElement(element, scene);
       continue;
     }
 
