@@ -79,34 +79,70 @@ const REFERENCE_PROGRESS = 0.65;
 // batches that each fill at most this many working pixels, and the renderer
 // waits for the GPU after each one, so slow GPUs never queue seconds of work.
 const MAXIMUM_BATCH_PIXELS = 8_000_000;
+// Levels are drawn one tile at a time, so the multisampled buffer and the
+// blend backdrop only need to cover a tile rather than the whole image.
+const TILE_SIZE = 2048;
+
+type Tile = { x: number; y: number; width: number; height: number };
+
+// Each triangle's bounding box and area, five numbers per triangle, so the
+// batches of every tile can be found without reading vertices again.
+function triangleBounds(vertices: Float32Array): Float64Array {
+  const count = vertices.length / FLOATS_PER_VERTEX / 3;
+  const bounds = new Float64Array(count * 5);
+  for (let triangle = 0; triangle < count; triangle += 1) {
+    const offset = triangle * 3 * FLOATS_PER_VERTEX;
+    const ax = vertices[offset];
+    const ay = vertices[offset + 1];
+    const bx = vertices[offset + FLOATS_PER_VERTEX];
+    const by = vertices[offset + FLOATS_PER_VERTEX + 1];
+    const cx = vertices[offset + 2 * FLOATS_PER_VERTEX];
+    const cy = vertices[offset + 2 * FLOATS_PER_VERTEX + 1];
+    const at = triangle * 5;
+    bounds[at] = Math.min(ax, bx, cx);
+    bounds[at + 1] = Math.min(ay, by, cy);
+    bounds[at + 2] = Math.max(ax, bx, cx);
+    bounds[at + 3] = Math.max(ay, by, cy);
+    bounds[at + 4] = Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2;
+  }
+  return bounds;
+}
 
 // Ranges of whole triangles, as [first vertex, vertex count], that each fill
-// at most the batch size. A triangle larger than that is drawn on its own.
+// at most the batch size within a tile. A triangle larger than that is drawn
+// on its own; ranges start and end at triangles that reach the tile.
 function fillBatches(
-  vertices: Float32Array,
+  bounds: Float64Array,
   start: number,
   end: number,
-  width: number,
-  height: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
 ): [number, number][] {
   const batches: [number, number][] = [];
-  let first = start;
+  let first = -1;
+  let last = -1;
   let fill = 0;
   for (let vertex = start; vertex < end; vertex += 3) {
-    const [ax, ay, bx, by, cx, cy] = [0, 1, 2].flatMap((corner) => {
-      const offset = (vertex + corner) * FLOATS_PER_VERTEX;
-      return [vertices[offset], vertices[offset + 1]];
-    });
-    const area = Math.min(Math.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / 2, width * height);
-    if (fill > 0 && fill + area > MAXIMUM_BATCH_PIXELS) {
-      batches.push([first, vertex - first]);
-      first = vertex;
+    const offset = vertex / 3 * 5;
+    const overlapWidth = Math.min(right, bounds[offset + 2]) - Math.max(left, bounds[offset]);
+    const overlapHeight = Math.min(bottom, bounds[offset + 3]) - Math.max(top, bounds[offset + 1]);
+    if (overlapWidth <= 0 || overlapHeight <= 0) {
+      continue;
+    }
+    const area = Math.min(bounds[offset + 4], overlapWidth * overlapHeight);
+    if (first >= 0 && fill + area > MAXIMUM_BATCH_PIXELS) {
+      batches.push([first, last - first]);
+      first = -1;
       fill = 0;
     }
+    first = first < 0 ? vertex : first;
+    last = vertex + 3;
     fill += area;
   }
-  if (end > first) {
-    batches.push([first, end - first]);
+  if (first >= 0) {
+    batches.push([first, last - first]);
   }
   return batches;
 }
@@ -150,6 +186,8 @@ precision highp float;
 uniform sampler2D source;
 uniform sampler2D backdrop;
 uniform int blendMode;
+// Where the backdrop's first texel lies in the framebuffer being drawn.
+uniform ivec2 tileOrigin;
 ${glowFieldIndexes.map((index) => `uniform sampler2D glow${index};`).join('\n')}
 in vec2 uv;
 in vec4 tint;
@@ -185,7 +223,7 @@ void main() {
     : drawMode < 2.5
       ? tint * rectGlow(uv, shapeData.xy, shapeData.z, shapeData.w)
       : tint * zoomGlow(int(shapeData.x + 0.5), uv);
-  outColor = blendMode == 0 ? color : blendOver(color, texelFetch(backdrop, ivec2(gl_FragCoord.xy), 0));
+  outColor = blendMode == 0 ? color : blendOver(color, texelFetch(backdrop, ivec2(gl_FragCoord.xy) - tileOrigin, 0));
 }`;
 
 // Grows the source's visible parts by an ellipse, measured in texels of the
@@ -639,6 +677,7 @@ function drawWebgl(
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
   const blendModeLocation = gl.getUniformLocation(sceneProgram, 'blendMode');
+  const tileOriginLocation = gl.getUniformLocation(sceneProgram, 'tileOrigin');
   const levelFramebuffer = newFramebuffer();
   // Every texture starts transparent, as a new one would, even when reused.
   // Chrome fills new texture memory with zeros on first use, which is very
@@ -685,34 +724,55 @@ function drawWebgl(
   const finalOutput = outputTarget(outputWidth, outputHeight);
   const changeCounts = outputTarget(Math.ceil(outputWidth / COMPARE_BLOCK), Math.ceil(outputHeight / COMPARE_BLOCK));
 
-  // Painted levels are drawn with multisampling and copied into textures.
-  // Density levels are drawn straight into their float textures.
-  const drawFramebuffer = density ? null : newFramebuffer();
-  if (drawFramebuffer) {
-    const samples = factor <= MSAA_MAXIMUM_SUPERSAMPLING
-      ? Math.min(MSAA_SAMPLES, gl.getParameter(gl.MAX_SAMPLES))
-      : 0;
-    const drawRenderbuffer = take(gpu.renderbuffers, `${width}x${height} ${samples}`, () => {
+  // Levels are drawn in tiles. Multisampled tiles are drawn into a tile-sized
+  // buffer, offset by the viewport, resolved into a tile texture and copied
+  // into place, since a resolve cannot move pixels. Other levels are drawn
+  // straight into their textures, a scissored tile at a time.
+  const tileWidth = Math.min(TILE_SIZE, width);
+  const tileHeight = Math.min(TILE_SIZE, height);
+  const tiles: Tile[] = [];
+  for (let y = 0; y < height; y += TILE_SIZE) {
+    for (let x = 0; x < width; x += TILE_SIZE) {
+      tiles.push({ x, y, width: Math.min(TILE_SIZE, width - x), height: Math.min(TILE_SIZE, height - y) });
+    }
+  }
+  const tileKey = `${width}x${height} tile`;
+  const tileTexture = () => {
+    const texture = take(gpu.fieldTextures, tileKey, () => createFieldTexture(gl, tileWidth, tileHeight));
+    clearTexture(texture, tileWidth, tileHeight);
+    return texture;
+  };
+  const textureFramebuffer = (texture: WebGLTexture) => {
+    const framebuffer = newFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    return framebuffer;
+  };
+  const samples = !density && factor <= MSAA_MAXIMUM_SUPERSAMPLING
+    ? Math.min(MSAA_SAMPLES, gl.getParameter(gl.MAX_SAMPLES))
+    : 0;
+  const multisample = samples > 0 ? (() => {
+    const renderbuffer = take(gpu.renderbuffers, `${tileKey} ${samples}`, () => {
       const created = gl.createRenderbuffer()!;
       gl.bindRenderbuffer(gl.RENDERBUFFER, created);
-      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, tileWidth, tileHeight);
       return created;
     });
+    const drawFramebuffer = newFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, drawRenderbuffer);
-  }
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, renderbuffer);
+    return { drawFramebuffer, resolveFramebuffer: textureFramebuffer(tileTexture()) };
+  })() : null;
 
   // Blended copies need what is below them, which is copied here first.
   const blended = scene.elements.some((element) => element.kind === 'zoom' && element.blend !== 'normal');
-  const backdropFramebuffer = blended ? newFramebuffer() : null;
-  if (backdropFramebuffer) {
-    const backdrop = fieldTexture(width, height);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFramebuffer);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, backdrop, 0);
+  const backdropFramebuffer = blended ? (() => {
+    const backdrop = tileTexture();
     gl.activeTexture(gl.TEXTURE0 + BACKDROP_UNIT);
     gl.bindTexture(gl.TEXTURE_2D, backdrop);
     gl.activeTexture(gl.TEXTURE0);
-  }
+    return textureFramebuffer(backdrop);
+  })() : null;
 
   const { vertexBuffer, emptyVertexArray } = gpu;
   const vertexArray = gpu.vertexArray ?? gl.createVertexArray()!;
@@ -963,13 +1023,25 @@ function drawWebgl(
     }
   };
 
-  const withBatches = (vertices: Float32Array, runs: { blend: number; first: number; count: number }[]) => ({
-    vertices,
-    runs: runs.map(({ blend, first, count }) => ({
-      blend,
-      batches: fillBatches(vertices, first, first + count, width, height),
-    })),
-  });
+  const withBatches = (vertices: Float32Array, runs: { blend: number; first: number; count: number }[]) => {
+    const bounds = triangleBounds(vertices);
+    return {
+      vertices,
+      runs: runs.map(({ blend, first, count }) => ({
+        blend,
+        // Vertex positions run downwards, while tiles are placed upwards.
+        tileBatches: tiles.map((tile) => fillBatches(
+          bounds,
+          first,
+          first + count,
+          tile.x,
+          height - tile.y - tile.height,
+          tile.x + tile.width,
+          height - tile.y,
+        )),
+      })),
+    };
+  };
   const normalRun = (vertices: Float32Array) => withBatches(vertices, [
     { blend: 0, first: 0, count: vertices.length / FLOATS_PER_VERTEX },
   ]);
@@ -1045,12 +1117,15 @@ function drawWebgl(
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, levels - 1);
   };
 
-  // Copies what has been drawn so far for a blended copy to read.
-  const copyBackdrop = (framebuffer: WebGLFramebuffer) => {
+  // Copies what has been drawn so far in a tile for a blended copy to read.
+  // Scissoring would clip the copy, which lands at the backdrop's origin.
+  const copyBackdrop = (framebuffer: WebGLFramebuffer, x: number, y: number, tile: Tile) => {
+    gl.disable(gl.SCISSOR_TEST);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, framebuffer);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, backdropFramebuffer);
-    gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.blitFramebuffer(x, y, x + tile.width, y + tile.height, 0, 0, tile.width, tile.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.enable(gl.SCISSOR_TEST);
   };
 
   const drawLevel = (
@@ -1059,49 +1134,64 @@ function drawWebgl(
     items: UnrolledItem[],
     mask = false,
   ) => {
-    if (drawFramebuffer) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
-    } else {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, levelFramebuffer);
-      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
-    }
-    gl.viewport(0, 0, width, height);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, levelFramebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
     gl.useProgram(sceneProgram);
     gl.uniform2f(gl.getUniformLocation(sceneProgram, 'resolution'), width, height);
     glowFields.bind();
     gl.bindTexture(gl.TEXTURE_2D, source?.texture ?? null);
-    gl.enable(gl.BLEND);
     // Painting composites over what is below; density adds up hits.
     gl.blendFunc(gl.ONE, density ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
     const { vertices, runs } = cachedVertices(items, source !== null, mask);
     gl.bindVertexArray(vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.DYNAMIC_DRAW);
-    for (const { blend, batches } of runs) {
-      if (blend > 0) {
-        copyBackdrop(drawFramebuffer ?? levelFramebuffer);
-        gl.disable(gl.BLEND);
+    gl.clearColor(0, 0, 0, 0);
+    tiles.forEach((tile, index) => {
+      // The framebuffer holding the tile, and where the tile starts in it.
+      const framebuffer = multisample?.drawFramebuffer ?? levelFramebuffer;
+      const [x, y] = multisample ? [0, 0] : [tile.x, tile.y];
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.viewport(x - tile.x, y - tile.y, width, height);
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(x, y, tile.width, tile.height);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform2i(tileOriginLocation, x, y);
+      gl.enable(gl.BLEND);
+      for (const { blend, tileBatches } of runs) {
+        const batches = tileBatches[index];
+        if (batches.length === 0) {
+          continue;
+        }
+        if (blend > 0) {
+          copyBackdrop(framebuffer, x, y, tile);
+          gl.disable(gl.BLEND);
+        }
+        gl.uniform1i(blendModeLocation, blend);
+        for (const [first, count] of batches) {
+          gl.drawArrays(gl.TRIANGLES, first, count);
+          waitForGpu();
+        }
+        if (blend > 0) {
+          gl.enable(gl.BLEND);
+        }
       }
-      gl.uniform1i(blendModeLocation, blend);
-      for (const [first, count] of batches) {
-        gl.drawArrays(gl.TRIANGLES, first, count);
-        waitForGpu();
+      gl.disable(gl.SCISSOR_TEST);
+      if (!multisample) {
+        return;
       }
-      if (blend > 0) {
-        gl.enable(gl.BLEND);
-      }
-    }
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, multisample.drawFramebuffer);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, multisample.resolveFramebuffer);
+      gl.blitFramebuffer(0, 0, tile.width, tile.height, 0, 0, tile.width, tile.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, multisample.resolveFramebuffer);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, levelFramebuffer);
+      gl.blitFramebuffer(
+        0, 0, tile.width, tile.height,
+        tile.x, tile.y, tile.x + tile.width, tile.y + tile.height,
+        gl.COLOR_BUFFER_BIT, gl.NEAREST,
+      );
+    });
     gl.uniform1i(blendModeLocation, 0);
-    if (!drawFramebuffer) {
-      return;
-    }
-
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, drawFramebuffer);
-    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, levelFramebuffer);
-    gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
-    gl.blitFramebuffer(0, 0, width, height, 0, 0, width, height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
   };

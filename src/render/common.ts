@@ -48,9 +48,11 @@ export type RenderRequest = {
 // Retrying WebGL2 after a GPU reset tends to reset it again, and Chrome turns
 // the GPU off for every page after a few resets.
 export const GPU_LOST_MESSAGE = 'The GPU stopped responding, so WebGL2 is off until the page is reloaded';
-// About an 8000 x 6000 working image. WebGL uses several full-size buffers,
-// so a dimension-only limit can still request far too much GPU memory.
-export const MAX_WEBGL_WORKING_PIXELS = 48_000_000;
+// About a 12800 x 7200 working image (Print at 16:9). WebGL keeps two
+// full-size level textures with mips (four with zoom glows), about 1 GB at
+// this size, so a dimension-only limit can still request far too much GPU
+// memory.
+export const MAX_WEBGL_WORKING_PIXELS = 96_000_000;
 
 // Fraction of pixels that changed between two images, and how many levels
 // apart they were.
@@ -134,11 +136,11 @@ export const QUALITY_MODES: Record<Exclude<QualityMode, 'custom'>, QualityOption
   },
   high: {
     supersampling: 4, recursionDepth: 14, levels: 'auto',
-    resolution: { mode: 'fixed', height: 1200 },
+    resolution: { mode: 'fixed', height: 1500 },
   },
   print: {
     supersampling: 2, recursionDepth: 16, levels: 'auto',
-    resolution: { mode: 'fixed', height: 3000 },
+    resolution: { mode: 'fixed', height: 3600 },
   },
 };
 

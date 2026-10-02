@@ -236,7 +236,7 @@ files unless extracting a module clearly reduces complexity.
   composited on its own, then blended onto what is below, including seed
   leaves. Exact recursion draws copies item by item, which only matches
   that for normal, so when any zoom blends no zooms are unrolled. The
-  renderer copies the framebuffer to a backdrop texture before each blended
+  renderer copies the current tile to a backdrop texture before each blended
   copy and blends premultiplied colours in the scene shader.
 - Keep quality controls out of the scene definition. Resolution,
   max recursion, levels, and supersampling are application quality settings.
@@ -308,7 +308,7 @@ files unless extracting a module clearly reduces complexity.
 - Quality is an application setting with five modes. Fast renders at half
   the display's physical resolution (one exact recursion, 2x supersampling);
   Display matches physical resolution (up to 8 exact recursions, 2x); High
-  is 1200 px high (up to 14, 4x); Print is 3000 px high (up to 16, 2x).
+  is 1500 px high (up to 14, 4x); Print is 3600 px high (up to 16, 2x).
   They use WebGL2 with automatic levels. Display modes are capped at 1500
   and 3000 px on the longest side respectively. A collapsible Render
   settings section also shows width, height, supersampling, max
@@ -327,7 +327,7 @@ files unless extracting a module clearly reduces complexity.
   fails, the render error says why.
 - Windows resets a GPU that spends about two seconds on one submission, and
   Chrome disables the GPU for every page after a few resets. WebGL scene
-  draws are split into batches of at most 8 million working pixels, and the
+  draws are split, per tile, into batches of at most 8 million working pixels, and the
   renderer calls `gl.finish()` after each batch and each feedback level. Once
   a context is lost, the page stops requesting WebGL2 until it is reloaded,
   and says why.
@@ -346,7 +346,12 @@ files unless extracting a module clearly reduces complexity.
   generations are exact geometry; the rest come from feedback.
 - WebGL2 renders recursion by texture feedback: each level draws the scene
   once, with zooms as quads sampling the previous level's texture. Cost is
-  linear in depth. Rect edges use MSAA at low supersampling. Textures that
+  linear in depth. Rect edges use MSAA at low supersampling. Each level is
+  drawn in tiles of at most 2048 px (`TILE_SIZE`), each with its own batches
+  that skip triangles outside it, so the MSAA renderbuffer, its resolve
+  texture and the blend backdrop are tile-sized rather than full-size. Tile
+  viewport offsets can move sub-pixel edge snapping slightly; that is not a
+  seam or quality loss. Textures that
   are first written by a blit (level textures, glow masks, the blend
   backdrop) are cleared, every mip level, before each use: Chrome otherwise
   zero-fills new ones on first use, which took about 0.3 s each at Print
@@ -428,7 +433,7 @@ files unless extracting a module clearly reduces complexity.
 - Be mindful of multiplicative cost: zoom count, recursion depth,
   supersampling, mip generation, and texture size all compound.
   Working images are limited by both the device texture size and a
-  48-million-pixel practical allocation budget.
+  96-million-pixel practical allocation budget (Print at 16:9 fits).
 - Edit mode is an application setting, not scene syntax. It fades top-level
   zoom contents and outlines each zoom, marking its top-left corner and any
   `align` target points. Levels used for recursion must stay unfaded, so only
