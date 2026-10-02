@@ -235,6 +235,9 @@ precision highp float;
 uniform sampler2D source;
 uniform bool hasSource;
 uniform float constantAlpha;
+// Without a source, the seed: the declared view within the source, in its
+// texture coordinates, as (left, bottom, right, top).
+uniform vec4 seedBounds;
 uniform float lod;
 uniform vec2 levelSize;
 uniform vec2 fieldSize;
@@ -246,7 +249,9 @@ float alphaAt(vec2 coords) {
   if (any(lessThan(coords, vec2(0.0))) || any(greaterThan(coords, vec2(1.0)))) {
     return 0.0;
   }
-  float alpha = hasSource ? textureLod(source, coords, lod).r : constantAlpha;
+  float alpha = hasSource
+    ? textureLod(source, coords, lod).r
+    : all(greaterThanEqual(coords, seedBounds.xy)) && all(lessThanEqual(coords, seedBounds.zw)) ? constantAlpha : 0.0;
   // Zero treats any visible source as fully covered; one keeps its alpha.
   return alpha > 0.0 ? mix(1.0, alpha, sourceOpacity) : 0.0;
 }
@@ -851,6 +856,11 @@ function drawWebgl(
     });
 
     const seedAlpha = parseColor(scene.seed.color)[3] * scene.seed.opacity;
+    const { coordinates: shown, declared } = scene.view;
+    const unit = (value: number, range: { from: number; to: number }) => (value - range.from) / (range.to - range.from);
+    const seedX = [unit(declared.x.from, shown.x), unit(declared.x.to, shown.x)];
+    const seedY = [unit(declared.y.from, shown.y), unit(declared.y.to, shown.y)];
+    const seedBounds = [Math.min(...seedX), Math.min(...seedY), Math.max(...seedX), Math.max(...seedY)] as const;
     const pass = (program: WebGLProgram, target: WebGLTexture, input: WebGLTexture | null, field: GlowField) => {
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
       gl.useProgram(program);
@@ -869,6 +879,7 @@ function drawWebgl(
         const uniform = (name: string) => gl.getUniformLocation(glowDilateProgram, name);
         gl.uniform1i(uniform('hasSource'), source ? 1 : 0);
         gl.uniform1f(uniform('constantAlpha'), seedAlpha);
+        gl.uniform4f(uniform('seedBounds'), ...seedBounds);
         gl.uniform1f(uniform('sourceOpacity'), field.sourceOpacity);
         gl.uniform1f(uniform('lod'), field.lod);
         gl.uniform2f(uniform('levelSize'), field.levelSize.x, field.levelSize.y);
@@ -973,10 +984,11 @@ function drawWebgl(
       if (item.kind === 'shape') {
         const coverage = shapeColors[item.elementIndex]![3] * item.alpha;
         pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
-      } else if (item.kind === 'leaf') {
-        pushPolygon(vertices, item.polygon, sampleSource ? item.texCoords : null, sampleSource
-          ? [item.alpha, item.alpha, item.alpha, item.alpha]
-          : [seedAlpha * item.alpha, seedAlpha * item.alpha, seedAlpha * item.alpha, seedAlpha * item.alpha]);
+      } else if (item.kind === 'leaf' && sampleSource) {
+        pushPolygon(vertices, item.polygon, item.texCoords, [item.alpha, item.alpha, item.alpha, item.alpha]);
+      } else if (item.kind === 'leaf' && item.seed.length > 0) {
+        const coverage = seedAlpha * item.alpha;
+        pushPolygon(vertices, item.seed, null, [coverage, coverage, coverage, coverage]);
       }
     }
     return new Float32Array(vertices);
@@ -1030,8 +1042,8 @@ function drawWebgl(
       pushPolygon(vertices, item.polygon, coords, color, MODE_ZOOM_GLOW, [field.index, 0, 0, 0]);
     } else if (sampleSource) {
       pushPolygon(vertices, item.polygon, item.texCoords, premultiplied([1, 1, 1, 1], item.alpha));
-    } else {
-      pushPolygon(vertices, item.polygon, null, premultiplied(seedColor, scene.seed.opacity * item.alpha));
+    } else if (item.seed.length > 0) {
+      pushPolygon(vertices, item.seed, null, premultiplied(seedColor, scene.seed.opacity * item.alpha));
     }
   };
 

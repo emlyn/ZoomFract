@@ -1,5 +1,5 @@
 import type { BlendMode, ResolvedSceneDefinition, Vec2 } from '../scene';
-import { elementPoints } from './common';
+import { elementPoints, scenePointToCanvas } from './common';
 
 // x' = a x + c y + e, y' = b x + d y + f
 type Affine = [number, number, number, number, number, number];
@@ -16,9 +16,10 @@ type ZoomNode = {
 // Glows are drawn just before their item. A rectangle glow carries positions
 // in the rectangle's own frame, in scene units from its centre. A zoom glow
 // carries source view coordinates, which extend beyond 0 to 1 by the glow.
+// A leaf's seed covers only the declared view in its copy, not the overflow.
 export type UnrolledItem =
   | { kind: 'shape'; polygon: Vec2[]; elementIndex: number; alpha: number }
-  | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; alpha: number; blend: BlendMode }
+  | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; seed: Vec2[]; alpha: number; blend: BlendMode }
   | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'zoomGlow'; polygon: Vec2[]; texCoords: Vec2[]; elementIndex: number; alpha: number };
 
@@ -200,6 +201,16 @@ export function unrollScene(
       { x: -grow.x, y: 1 + grow.y },
     ].map((point) => applyAffine(elementFrames[index], point));
   });
+  const { x: declaredX, y: declaredY } = scene.view.declared;
+  const declaredQuad = [
+    { x: declaredX.from, y: declaredY.from },
+    { x: declaredX.to, y: declaredY.from },
+    { x: declaredX.to, y: declaredY.to },
+    { x: declaredX.from, y: declaredY.to },
+  ].map((point) => {
+    const pixel = scenePointToCanvas(point, scene);
+    return { x: pixel.x * factor, y: pixel.y * factor };
+  });
   const toViewCoordinates = (inverse: Affine) => (point: Vec2) => {
     const viewPoint = applyAffine(inverse, point);
     return { x: viewPoint.x / width, y: 1 - viewPoint.y / height };
@@ -337,6 +348,7 @@ export function unrollScene(
         kind: 'leaf',
         polygon: child.clip,
         texCoords: child.clip.map(toViewCoordinates(invertAffine(child.transform))),
+        seed: clipPolygon(child.clip, declaredQuad.map((point) => applyAffine(child.transform, point))),
         alpha: child.alpha,
         blend: element.blend,
       });

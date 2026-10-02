@@ -92,7 +92,9 @@ files unless extracting a module clearly reduces complexity.
   as glows. After all geometry and references resolve, `buildScene` sets the
   output coordinates to the shown area and re-describes every zoom with
   `reframeZoom` so it copies that area with an unchanged transform; renderers
-  need no special handling. `view.declared` keeps the written coordinates.
+  need no special handling, except that seed leaves fill only the declared
+  view within each copy (`seed` on unrolled leaves, `seedBounds` in the glow
+  dilate). `view.declared` keeps the written coordinates.
   Edit mode outlines the declared view and zooms.
 - `overflow: auto` fits the shown area to the content: `contentBounds`
   iterates hull(shapes + each zoom's copy of the hull) to its fixed point, and

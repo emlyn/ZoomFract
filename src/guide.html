@@ -153,7 +153,8 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
       <code>overflow</code> adds a border, in coordinates, around every side of the view.
       Nothing is placed by it, but it shows anything that spills past the edges, such as
       glows. Each zoom's copy includes the border too, so zooms draw slightly bigger than
-      their size. The default is 0. In edit mode the view edge is shown as a grey dashed line.
+      their size. The seed still only fills the part of each copy inside the view, not the
+      border. The default is 0. In edit mode the view edge is shown as a grey dashed line.
     </li>
     <li>
       <code>overflow: auto</code> fits the picture to everything the scene draws, however
