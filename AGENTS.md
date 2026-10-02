@@ -341,12 +341,20 @@ files unless extracting a module clearly reduces complexity.
   When an auto render reaches its limit, the collapsed settings header shows
   a warning icon and a +256 levels button, and a highlighted note is appended
   to the end of the render details line. Each click extends the auto limit,
-  continuing the existing worker render until details become too small to see
-  or the new limit is reached. There is no arbitrary manual-extension ceiling;
-  changing the picture or quality clears the extension. The renderer always
-  renders the estimate, because per-level readbacks stall the GPU and
-  feedback resampling keeps nudging pixels. Max recursion bounds how many
-  generations are exact geometry; the rest come from feedback.
+  continuing the existing worker render until the picture settles or the new
+  limit is reached. There is no arbitrary manual-extension ceiling;
+  changing the picture or quality clears the extension. The estimate is a
+  minimum: translucent items let deeper levels show, so in paint mode auto
+  renders then measure convergence. They compare consecutive feedback levels
+  by the largest 15x15-block average difference (per-pixel maxima are
+  dominated by rounding nudges), at the output's mip level, with one small
+  readback. Two measurements give a geometric rate r; rendering stops when
+  the predicted remaining change d*r/(1-r) is under 1/255, the change is under
+  0.2/255, or r >= 1. Otherwise it jumps ahead by the levels r predicts, at
+  most doubling, and measures again, so readbacks stay few. Only reaching the
+  limit while still changing counts as hitting it. Density mode keeps the
+  estimate. Max recursion bounds how many generations are exact geometry; the
+  rest come from feedback.
 - WebGL2 renders recursion by texture feedback: each level draws the scene
   once, with zooms as quads sampling the previous level's texture. Cost is
   linear in depth. Rect edges use MSAA at low supersampling. Each level is
@@ -573,8 +581,8 @@ For rendering changes, also check as applicable:
 - Canvas intrinsic dimensions match the selected quality resolution.
 - Transparent areas still have zero alpha.
 - Progress appears during slow work and disappears after completion.
-- Fast, Display, High and Print quality resolve automatic levels at the
-  fixed point.
+- Fast, Display, High and Print quality resolve automatic levels where the
+  picture settles, at or beyond the fixed point.
 - Rotated and asymmetric zooms render without clipping or allocation errors.
 - Rapid setting changes leave the latest requested result on screen.
 

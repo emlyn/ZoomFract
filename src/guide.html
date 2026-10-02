@@ -57,11 +57,13 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     under the buttons, and nothing is drawn until it is fixed.
   </p>
   <p>
-    Automatic quality renders enough levels for the smallest visible details, up to a
-    safety limit. If it reaches that limit first, a warning appears beside
-    <em>Render settings</em>. Use <em>+256 levels</em> there to continue the current
-    picture without starting over. Each click allows another 256 levels, stopping
-    sooner if they become too small to see; changing the picture or quality starts fresh.
+    Automatic quality renders enough levels for the smallest visible details, and keeps
+    going while the picture is still visibly changing, such as when see-through shapes
+    let deeper levels show, up to a safety limit. If it reaches that limit first, a
+    warning appears beside <em>Render settings</em>. Use <em>+256 levels</em> there to
+    continue the current picture without starting over. Each click allows another 256
+    levels, stopping sooner once the picture settles; changing the picture or quality
+    starts fresh.
   </p>
   <p>
     Quality also controls output resolution. <em>Fast</em> draws at half the display's

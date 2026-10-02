@@ -41,17 +41,26 @@ function continueSession(current: Session, request: RenderRequest): boolean {
     return false;
   }
   const resolved = resolveRenderSettings(request.scene, request.options, request.additionalLevels);
-  if (resolved.levels <= current.settings.levels) {
+  // Automatic levels continue when their limit is raised; fixed levels when
+  // more are asked for.
+  const extended = current.settings.autoLevels
+    ? resolved.levelLimit > current.settings.levelLimit
+    : resolved.levels > current.settings.levels;
+  if (!extended) {
     return false;
   }
 
   const startedAt = performance.now();
   // The exact geometry from the render being continued is kept.
-  const settings: RenderSettings = { ...resolved, recursionDepth: current.settings.recursionDepth };
+  const settings: RenderSettings = {
+    ...resolved,
+    recursionDepth: current.settings.recursionDepth,
+    levels: Math.max(resolved.levels, current.settings.levels),
+  };
   post({ type: 'start', settings });
   const outcome = current.result.continueTo(settings, frameCallbacks);
   const stepMilliseconds = performance.now() - startedAt;
-  current.settings = settings;
+  current.settings = { ...settings, levels: outcome.levels };
   current.milliseconds += stepMilliseconds;
   post({
     type: 'done',
@@ -59,6 +68,7 @@ function continueSession(current: Session, request: RenderRequest): boolean {
     milliseconds: current.milliseconds,
     stepMilliseconds,
     stepChange: outcome.stepChange,
+    limitReached: outcome.limitReached,
     details: outcome.details,
   });
   return true;
@@ -102,6 +112,7 @@ function render(request: RenderRequest) {
       levels: outcome.levels,
       milliseconds,
       stepChange: outcome.stepChange,
+      limitReached: outcome.limitReached,
       details: outcome.details,
     });
   } catch (error) {

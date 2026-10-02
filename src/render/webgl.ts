@@ -376,6 +376,43 @@ void main() {
   outColor = vec4(changed / 255.0, 0.0, 0.0, 1.0);
 }`;
 
+// Finds the largest average difference over a block between two feedback
+// levels at one mip level, stored in 16 bits across red and green. Averaging
+// leaves out rounding in scattered pixels, which settles very slowly.
+const DIFFERENCE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D before;
+uniform sampler2D after;
+uniform int lod;
+out vec4 outColor;
+void main() {
+  ivec2 size = textureSize(after, lod);
+  ivec2 origin = ivec2(gl_FragCoord.xy) * ${COMPARE_BLOCK};
+  float total = 0.0;
+  float count = 0.0;
+  for (int y = 0; y < ${COMPARE_BLOCK}; y++) {
+    for (int x = 0; x < ${COMPARE_BLOCK}; x++) {
+      ivec2 point = origin + ivec2(x, y);
+      if (point.x < size.x && point.y < size.y) {
+        vec4 difference = abs(texelFetch(before, point, lod) - texelFetch(after, point, lod));
+        total += max(max(difference.r, difference.g), max(difference.b, difference.a));
+        count += 1.0;
+      }
+    }
+  }
+  float encoded = round(clamp(total / max(count, 1.0), 0.0, 1.0) * 65535.0);
+  outColor = vec4(floor(encoded / 256.0) / 255.0, mod(encoded, 256.0) / 255.0, 0.0, 1.0);
+}`;
+
+// Automatic levels continue past the size estimate until the change still to
+// come is too small to see. The change per level shrinks by a roughly
+// constant rate r, so after a change m about m r / (1 - r) remains, and the
+// levels needed are predicted from that rather than measured one at a time.
+// A change that does not shrink is rounding that will not settle; so is an
+// average change below a fraction of a step.
+const SETTLED_DIFFERENCE = 1 / 255;
+const ROUNDING_DIFFERENCE = 0.2 / 255;
+
 // Counts are normalised by this percentile of covered pixels, measured on a
 // mip level no larger than this, so a few extreme pixels do not dim the rest.
 const DENSITY_PERCENTILE = 0.999;
@@ -682,6 +719,10 @@ function drawWebgl(
   gl.useProgram(compareProgram);
   gl.uniform1i(gl.getUniformLocation(compareProgram, 'before'), 0);
   gl.uniform1i(gl.getUniformLocation(compareProgram, 'after'), COMPARE_UNIT);
+  const differenceProgram = program('difference', FULLSCREEN_VERTEX_SHADER, DIFFERENCE_FRAGMENT_SHADER);
+  gl.useProgram(differenceProgram);
+  gl.uniform1i(gl.getUniformLocation(differenceProgram, 'before'), 0);
+  gl.uniform1i(gl.getUniformLocation(differenceProgram, 'after'), COMPARE_UNIT);
   gl.useProgram(sceneProgram);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'source'), 0);
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
@@ -729,6 +770,14 @@ function drawWebgl(
   const referenceOutput = outputTarget(outputWidth, outputHeight);
   const finalOutput = outputTarget(outputWidth, outputHeight);
   const changeCounts = outputTarget(Math.ceil(outputWidth / COMPARE_BLOCK), Math.ceil(outputHeight / COMPARE_BLOCK));
+  // Feedback levels are compared at the mip level nearest the output size.
+  const differenceLod = Math.floor(Math.log2(factor));
+  const differences = settings.autoLevels && !density
+    ? outputTarget(
+      Math.ceil(Math.max(1, width >> differenceLod) / COMPARE_BLOCK),
+      Math.ceil(Math.max(1, height >> differenceLod) / COMPARE_BLOCK),
+    )
+    : null;
 
   // Levels are drawn in tiles. Multisampled tiles are drawn into a tile-sized
   // buffer, offset by the viewport, resolved into a tile texture and copied
@@ -1226,6 +1275,9 @@ function drawWebgl(
   // added later by continuing the feedback loop from it.
   let lastFeedback: LevelTexture | null = null;
   let completedFeedbackLevels = 0;
+  // Whether the other feedback texture still holds the level before the
+  // newest, which output drawing overwrites.
+  let previousLevelKept = false;
   const unusedTexture = () => lastFeedback === textures[0] ? textures[1] : textures[0];
   const levelsShown = () => completedFeedbackLevels + finalUnroll().shallowestLeaf;
 
@@ -1234,8 +1286,32 @@ function drawWebgl(
     drawLevel(target, lastFeedback, levelItems);
     generateMips(target);
     waitForGpu();
+    previousLevelKept = lastFeedback !== null;
     lastFeedback = target;
     completedFeedbackLevels += 1;
+  };
+
+  // The largest change in any output-sized pixel made by the newest level.
+  const feedbackDifference = (target: OutputTarget) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.viewport(0, 0, target.width, target.height);
+    gl.disable(gl.BLEND);
+    gl.useProgram(differenceProgram);
+    gl.uniform1i(gl.getUniformLocation(differenceProgram, 'lod'), differenceLod);
+    gl.bindVertexArray(emptyVertexArray);
+    gl.bindTexture(gl.TEXTURE_2D, unusedTexture().texture);
+    gl.activeTexture(gl.TEXTURE0 + COMPARE_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, lastFeedback!.texture);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const blocks = new Uint8Array(target.width * target.height * 4);
+    gl.readPixels(0, 0, target.width, target.height, gl.RGBA, gl.UNSIGNED_BYTE, blocks);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    let largest = 0;
+    for (let index = 0; index < blocks.length; index += 4) {
+      largest = Math.max(largest, blocks[index] * 256 + blocks[index + 1]);
+    }
+    return largest / 65535;
   };
 
   // Every copy's glow spreads from the mask of the fully recursed image. A
@@ -1306,6 +1382,7 @@ function drawWebgl(
   // output image.
   const drawOutput = (target: OutputTarget, items = finalUnroll().items) => {
     const finalTexture = unusedTexture();
+    previousLevelKept = false;
     drawLevel(finalTexture, lastFeedback, items);
     useDensityProgram(finalTexture);
     gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
@@ -1382,7 +1459,7 @@ function drawWebgl(
     copyToCanvas(finalOutput);
   };
 
-  const renderLevels = (levels: number, frameCallbacks: FrameCallbacks): RenderOutcome => {
+  const renderLevels = (levels: number, levelLimit: number, frameCallbacks: FrameCallbacks): RenderOutcome => {
     prepareGlowFields(levels);
     const preview = completedFeedbackLevels === 0 && !blended && settings.recursionDepth > 1;
     if (preview) {
@@ -1403,21 +1480,73 @@ function drawWebgl(
     const feedbackLevels = settings.autoLevels && completedFeedbackLevels > 0
       ? Math.max(exactLevels, completedFeedbackLevels + 1)
       : exactLevels;
+    const feedbackLimit = settings.autoLevels
+      ? Math.max(feedbackLevels, feedbackLevelsFor(levelLimit))
+      : feedbackLevels;
     const firstLevel = completedFeedbackLevels;
     const startProgress = preview ? PREVIEW_PROGRESS : 0;
+    // Settling may plan more levels as it goes, so progress never goes back.
+    let plannedLevels = feedbackLevels;
+    let feedbackProgress = 0;
     let compared = false;
-    const report = () => frameCallbacks.progress(startProgress + (1 - startProgress) * (
-      FEEDBACK_PROGRESS * (completedFeedbackLevels - firstLevel) / (feedbackLevels - firstLevel)
-      + (compared ? REFERENCE_PROGRESS : 0)
-    ));
+    const report = () => {
+      feedbackProgress = Math.max(feedbackProgress, plannedLevels > firstLevel
+        ? (completedFeedbackLevels - firstLevel) / (plannedLevels - firstLevel)
+        : 1);
+      frameCallbacks.progress(startProgress + (1 - startProgress) * (
+        FEEDBACK_PROGRESS * feedbackProgress + (compared ? REFERENCE_PROGRESS : 0)
+      ));
+    };
+    const addLevelsTo = (target: number) => {
+      plannedLevels = Math.max(plannedLevels, target + 1);
+      while (completedFeedbackLevels < target) {
+        addFeedbackLevel();
+        report();
+      }
+    };
+    // Adds levels until the change still to come is too small to see, jumping
+    // ahead by the levels the measured rate predicts, but never more than
+    // doubling the levels so far before measuring again. Returns whether it
+    // stopped at the limit with more still changing.
+    const settle = (target: OutputTarget, limit: number) => {
+      addLevelsTo(Math.min(limit, Math.max(2, completedFeedbackLevels + (previousLevelKept ? 0 : 1))));
+      if (!previousLevelKept) {
+        return true;
+      }
+      let difference = feedbackDifference(target);
+      let previous: { difference: number; level: number } | null = null;
+      while (difference > ROUNDING_DIFFERENCE) {
+        const rate = previous === null
+          ? null
+          : (difference / previous.difference) ** (1 / (completedFeedbackLevels - previous.level));
+        if (rate !== null && (rate >= 1 || difference * rate / (1 - rate) <= SETTLED_DIFFERENCE)) {
+          return false;
+        }
+        if (completedFeedbackLevels >= limit) {
+          return true;
+        }
+        const predicted = rate === null
+          ? 1
+          : Math.ceil(Math.log(SETTLED_DIFFERENCE * (1 - rate) / (rate * difference)) / Math.log(rate));
+        previous = { difference, level: completedFeedbackLevels };
+        addLevelsTo(Math.min(limit, completedFeedbackLevels + Math.max(1, Math.min(predicted, completedFeedbackLevels))));
+        difference = feedbackDifference(target);
+      }
+      return false;
+    };
+
     if (preview) {
       frameCallbacks.progress(startProgress);
     }
-    while (completedFeedbackLevels < feedbackLevels) {
-      if (completedFeedbackLevels === feedbackLevels - 1) {
-        drawOutput(referenceOutput);
-        compared = true;
-      }
+    addLevelsTo(feedbackLevels - 1);
+    const stoppedAtLimit = differences !== null && feedbackLevels > 0 && settle(differences, feedbackLimit - 1);
+    const lastLevel = settings.autoLevels && feedbackLevels > 0
+      ? Math.max(feedbackLevels, completedFeedbackLevels + 1)
+      : feedbackLevels;
+    if (completedFeedbackLevels < lastLevel) {
+      plannedLevels = lastLevel;
+      drawOutput(referenceOutput);
+      compared = true;
       addFeedbackLevel();
       report();
     }
@@ -1430,12 +1559,13 @@ function drawWebgl(
       details: details(),
       levels: levelsShown(),
       stepChange: compared ? { fraction: changedFraction(referenceOutput, finalOutput), levels: 1 } : undefined,
+      limitReached: settings.autoLevels && (settings.autoLevelLimitReached || stoppedAtLimit),
     };
   };
   return {
-    outcome: renderLevels(settings.levels, callbacks),
+    outcome: renderLevels(settings.levels, settings.levelLimit, callbacks),
     // Exact geometry is kept from the first render; only feedback levels are added.
-    continueTo: (next, frameCallbacks) => renderLevels(next.levels, frameCallbacks),
+    continueTo: (next, frameCallbacks) => renderLevels(next.levels, next.levelLimit, frameCallbacks),
     dispose: () => {
       owned.forEach((giveBack) => giveBack());
       if (lastMask) {

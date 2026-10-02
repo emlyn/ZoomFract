@@ -32,6 +32,9 @@ export type RenderSettings = {
   levels: number;
   autoLevels: boolean;
   autoLevelLimitReached: boolean;
+  // Automatic levels may go past the size estimate until the picture
+  // settles, up to this many.
+  levelLimit: number;
   supersampling: number;
 };
 
@@ -68,6 +71,7 @@ export type RenderMessage =
     milliseconds: number;
     stepMilliseconds?: number;
     stepChange?: StepChange;
+    limitReached: boolean;
     details: string[];
   }
   | { type: 'error'; message: string };
@@ -82,6 +86,8 @@ export type RenderOutcome = {
   details: string[];
   levels: number;
   stepChange?: StepChange;
+  // Automatic levels stopped at their limit before the picture settled.
+  limitReached: boolean;
 };
 
 // A finished render keeps its working state so fixed levels can be extended
@@ -201,7 +207,7 @@ export function resolveRenderSettings(
   if (zooms.length === 0) {
     return {
       recursionDepth: 0, levels: 0, autoLevels: options.levels === 'auto',
-      autoLevelLimitReached: false, supersampling,
+      autoLevelLimitReached: false, levelLimit: 0, supersampling,
     };
   }
 
@@ -235,5 +241,5 @@ export function resolveRenderSettings(
     : options.levels;
   // Generation `levels` holds the terminal seed, so geometry stops one short.
   const recursionDepth = Math.min(options.recursionDepth, levels - 1);
-  return { recursionDepth, levels, autoLevels, autoLevelLimitReached, supersampling };
+  return { recursionDepth, levels, autoLevels, autoLevelLimitReached, levelLimit: limit, supersampling };
 }

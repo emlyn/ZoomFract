@@ -2035,9 +2035,7 @@ function startRender(request: RenderRequest) {
           labelChangedResolution = updateWallLabel();
         }
         syncQualityControls();
-        const limitReached = started !== null && started.settings.autoLevels
-          && started.settings.autoLevelLimitReached
-          && message.levels >= started.settings.levels;
+        const limitReached = started !== null && message.limitReached;
         setQualityDetails([
           ...message.details,
           ...(message.stepChange === undefined ? [] : [formatChange(message.stepChange)]),
