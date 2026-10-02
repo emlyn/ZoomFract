@@ -24,6 +24,9 @@ view:
 seed:
   colour: "#000"
 
+shading:
+  detail: 0.9
+
 scene:
   - type: zoom
     name: bottom-left
