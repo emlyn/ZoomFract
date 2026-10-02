@@ -1293,8 +1293,8 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 // take a noticeable time to calculate.
 let shownDimension: FractalDimension | null = null;
 
-// The "medium" lines of the label: what the picture is made of and how it was
-// rendered, like the materials line on a gallery label.
+// The "medium" paragraphs of the label: what the picture is and how it was
+// made, like the materials line on a gallery label.
 function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered, preview: boolean): string[] {
   const count = (kind: string) => scene.elements.filter((element) => element.kind === kind).length;
   const parts = [
@@ -1305,16 +1305,21 @@ function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered,
     ...(scene.elements.some((element) => element.glow) ? ['glow'] : []),
     ...(scene.shading.mode === 'density' ? ['density shading'] : []),
   ];
+  const contents = [
+    ...(parts.length > 0 ? [parts.join(', ')] : []),
+    ...(rendered ? [plural(rendered.levels, 'level')] : []),
+  ];
   const { width, height } = canvas;
   if (!preview) {
     shownDimension = fractalDimension(scene);
   }
+  // Formulas read "= log(3) / log(2) ≈ 1.585"; estimates already start with "≈".
+  const value = (text: string) => (text.startsWith('\u2248') ? text : `= ${text}`);
+  const similarity = shownDimension?.similarity ? ` (similarity dimension ${value(shownDimension.similarity)})` : '';
   return [
-    ...(parts.length > 0 ? [parts.join(', ')] : []),
-    ...(shownDimension ? [`Fractal dimension ${shownDimension.text}`] : []),
-    ...(shownDimension?.similarity ? [`Similarity dimension ${shownDimension.similarity}`] : []),
-    `${width} × ${height} px`,
-    ...(rendered ? [plural(rendered.levels, 'level')] : []),
+    `Digital image, ${width} × ${height} pixels`,
+    ...(contents.length > 0 ? [contents.join('; ')] : []),
+    ...(shownDimension ? [`Fractal dimension ${value(shownDimension.text)}${similarity}`] : []),
   ];
 }
 
@@ -1352,7 +1357,7 @@ function updateWallLabel(preview = false) {
   wallLabel.replaceChildren(
     ...(info.title ? [labelElement('h2', 'wall-label-title', info.title)] : []),
     ...(byline ? [labelElement('p', 'wall-label-byline', byline)] : []),
-    labelElement('p', 'wall-label-medium', describeMedium(state.scene, state.rendered, preview).join('\n')),
+    ...describeMedium(state.scene, state.rendered, preview).map((text) => labelElement('p', 'wall-label-medium', text)),
     ...(info.description ? [labelElement('p', 'wall-label-description', info.description)] : []),
     ...(info.links.length > 0 ? [links] : []),
     wallLabelShare,

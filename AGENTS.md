@@ -80,8 +80,9 @@ files unless extracting a module clearly reduces complexity.
 - Optional `info` holds text-only `title`, `author`, `date`, `description`,
   and `links` (http(s) URL strings or `{ title, url }`). It never affects
   rendering. It is shown on a gallery-style wall label beside the frame,
-  together with a generated medium line (contents, resolution, renderer and
-  levels). The label is hidden when `info` is empty or "Show label" is off.
+  together with generated medium paragraphs: "Digital image, W × H pixels",
+  then contents and levels ("1 rectangle, 3 zooms; 23 levels"), then the
+  fractal dimension. The label is hidden when `info` is empty or "Show label" is off.
 - The medium lines include the fractal dimension of the zooms' attractor
   (`src/dimension.ts`, main thread, memoised per scene; previews keep the
   last value). Exactly coinciding maps merge first. Copies covering the
@@ -91,7 +92,7 @@ files unless extracting a module clearly reduces complexity.
   Hochman, for overlaps unless deeper compositions coincide exactly; then
   the growth of distinct compositions is the estimate. Non-similar maps use
   box counting. Estimates show 2 decimals. For similarities, the similarity
-  (Moran) dimension is shown on its own line when it exceeds the picture's
+  (Moran) dimension follows in brackets when it exceeds the picture's
   dimension, e.g. a projected 3D Menger sponge.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
   border `colour`, outer `wall`, inner `background`, canvas `padding`, and
