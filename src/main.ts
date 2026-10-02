@@ -1629,9 +1629,9 @@ function showTextureLimit(resolution: OutputResolution, options: QualityOptions)
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
   const aspect = outputAspect(state.scene);
-  // Alone, the picture drops its frame, margin and cards but keeps its background.
+  // Alone, the picture drops its border, margin and cards but keeps its padding and background.
   const frame = pictureOnly
-    ? { ...state.scene.frame, width: 0, padding: 0, margin: 0, radius: 0, wall: state.scene.frame.background }
+    ? { ...state.scene.frame, width: 0, margin: 0, radius: 0, wall: state.scene.frame.background }
     : state.scene.frame;
   const frameSpace = 2 * (frame.width + frame.padding);
   // Notched phones add safe-area insets to the margin.

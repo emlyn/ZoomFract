@@ -16,7 +16,8 @@ frame:
   margin: 24
 
 view:
-  aspect: 0.8
+  aspect: auto
+  overflow: auto
   coordinates:
     x: [-0.8, 0.8]
     y: [-1, 1]
