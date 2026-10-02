@@ -480,6 +480,27 @@ canvasHost.addEventListener('wheel', (event) => {
 }, { passive: false });
 
 let panelBeforePicture = false;
+// Chrome reports fullscreen a frame or two before the window resizes, so the
+// layout waits for the resize itself and then changes once, before the browser
+// paints the resized window.
+let layoutHeld = false;
+
+function windowResized(width: number, height: number) {
+  return new Promise<void>((resolve) => {
+    if (window.innerWidth !== width || window.innerHeight !== height) {
+      resolve();
+      return;
+    }
+    // A window that is already screen-sized never resizes.
+    const done = () => {
+      window.clearTimeout(cap);
+      window.removeEventListener('resize', done);
+      resolve();
+    };
+    const cap = window.setTimeout(done, 500);
+    window.addEventListener('resize', done);
+  });
+}
 
 function setPictureOnly(on: boolean) {
   if (on === pictureOnly) {
@@ -491,22 +512,29 @@ function setPictureOnly(on: boolean) {
     panelBeforePicture = panelIsOpen;
     setPanelOpen(false);
   }
-  shell.classList.toggle('picture-only', on);
   shell.classList.remove('panel-handle-visible');
-  if (on && !document.fullscreenElement) {
-    // Fullscreen is a bonus; without it the picture still fills the window.
-    shell.requestFullscreen?.().catch(() => undefined);
-  } else if (!on && document.fullscreenElement) {
-    void document.exitFullscreen();
+  const apply = () => {
+    layoutHeld = false;
+    shell.classList.toggle('picture-only', pictureOnly);
+    if (!pictureOnly && panelBeforePicture) {
+      setPanelOpen(true);
+    }
+    if (!resizeCanvas()) {
+      drawDisplay();
+    }
+    renderAfterResize();
+  };
+  // Fullscreen is a bonus; without it the picture still fills the window.
+  const fullscreen = on && !document.fullscreenElement
+    ? shell.requestFullscreen?.()
+    : !on && document.fullscreenElement ? document.exitFullscreen() : undefined;
+  if (!fullscreen) {
+    apply();
+    return;
   }
-  if (!on && panelBeforePicture) {
-    setPanelOpen(true);
-  }
-  if (resizeCanvas()) {
-    render();
-  } else {
-    drawDisplay();
-  }
+  layoutHeld = true;
+  const { innerWidth, innerHeight } = window;
+  void fullscreen.then(() => windowResized(innerWidth, innerHeight), () => undefined).then(apply);
 }
 
 document.addEventListener('fullscreenchange', () => {
@@ -917,6 +945,8 @@ applySceneButton.addEventListener('click', () => {
     { kind: 'custom' },
     true,
     pendingEditorInputValues ?? state.inputValues,
+    false,
+    true,
   );
 });
 
@@ -1139,11 +1169,17 @@ function applyDefinition(
   updateUrl: boolean,
   inputValues: InputValues = new Map(),
   keepInvalidText = false,
+  // Applying an edit keeps showing the old picture until the new one
+  // renders, unless its shape changed; other definitions start blank.
+  keepPicture = false,
 ): boolean {
   try {
     const nextScene = parseScene(text, inputValues);
     // Info only changes the label, so the current picture can stay.
     const pictureChanged = JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
+    if (pictureChanged && (!keepPicture || outputAspect(nextScene) !== outputAspect(state.scene))) {
+      clearDisplay();
+    }
     state.scene = nextScene;
     state.definitionText = text;
     state.inputValues = new Map(nextScene.inputs.flatMap((input) => {
@@ -1628,12 +1664,15 @@ function resizeCanvas() {
   canvasFrame.style.backgroundColor = frame.background;
 
   const resolutionChanged = canvas.width !== resolution.width || canvas.height !== resolution.height;
-  if (resolutionChanged) {
-    canvas.width = resolution.width;
-    canvas.height = resolution.height;
-  }
   canvas.style.width = `${display.width}px`;
   canvas.style.height = `${display.height}px`;
+  if (resolutionChanged) {
+    // Resizing clears the bitmap, so stretch the current frame until the
+    // new resolution renders.
+    canvas.width = resolution.width;
+    canvas.height = resolution.height;
+    drawDisplay();
+  }
   return resolutionChanged;
 }
 
@@ -1719,6 +1758,12 @@ type DisplayedFrame = {
 
 let displayedFrame: DisplayedFrame | null = null;
 
+function clearDisplay() {
+  displayedFrame?.bitmap.close();
+  displayedFrame = null;
+  drawDisplay();
+}
+
 function drawDisplay() {
   displayContext.setTransform(1, 0, 0, 1, 0, 0);
   displayContext.clearRect(0, 0, canvas.width, canvas.height);
@@ -1729,7 +1774,8 @@ function drawDisplay() {
   displayContext.imageSmoothingQuality = 'high';
   displayContext.drawImage(displayedFrame.bitmap, 0, 0, canvas.width, canvas.height);
   if (displayedFrame.editMode) {
-    drawZoomOutlines(displayedFrame.scene);
+    // A frame stretched to a resized canvas keeps outlines at the new size.
+    drawZoomOutlines(withResolution(displayedFrame.scene, { width: canvas.width, height: canvas.height }));
   }
 }
 
@@ -1818,7 +1864,7 @@ function previewScene(scene: ResolvedSceneDefinition): ResolvedSceneDefinition {
 
 function scheduleSettledRender() {
   window.clearTimeout(settleTimer);
-  settleTimer = window.setTimeout(render, SETTLE_DELAY_MS);
+  settleTimer = window.setTimeout(() => render(), SETTLE_DELAY_MS);
 }
 
 function renderPreview(settle: boolean) {
@@ -1858,7 +1904,24 @@ function stopActiveRender(terminate: boolean) {
   }
 }
 
-function render() {
+// Renders for a new resolution of the same picture keep showing the old
+// image, stretched, until their final frame, instead of a rougher preview.
+const resizeRequests = new WeakSet<RenderRequest>();
+
+// Waits for resizing to settle, then renders if the resolution no longer
+// matches the displayed frame.
+let resizeRenderTimer = 0;
+function renderAfterResize() {
+  window.clearTimeout(resizeRenderTimer);
+  resizeRenderTimer = window.setTimeout(() => {
+    const target = activeRequest?.scene.view.resolution ?? displayedFrame?.scene.view.resolution;
+    if (!target || target.width !== canvas.width || target.height !== canvas.height) {
+      render(true);
+    }
+  }, 150);
+}
+
+function render(resized = false) {
   window.clearTimeout(settleTimer);
   resizeCanvas();
   const baseRequest: RenderRequest = {
@@ -1873,6 +1936,9 @@ function render() {
     autoExtensionKey = key;
   }
   const request: RenderRequest = { ...baseRequest, additionalLevels: extraAutoLevels };
+  if (resized) {
+    resizeRequests.add(request);
+  }
   showLevelLimit(false);
   if (activeRequest && canContinue(activeRequest, request)) {
     pendingRequest = request;
@@ -1937,6 +2003,10 @@ function startRender(request: RenderRequest) {
         }
         break;
       case 'frame':
+        if (!message.final && resizeRequests.has(request) && displayedFrame && !displayedFrame.preview) {
+          message.bitmap.close();
+          break;
+        }
         displayedFrame?.bitmap.close();
         displayedFrame = {
           bitmap: message.bitmap,
@@ -1945,6 +2015,12 @@ function startRender(request: RenderRequest) {
           preview: previewRequests.has(request),
         };
         drawDisplay();
+        if (message.final) {
+          // Only the change statistics remain, so the picture is done.
+          window.clearTimeout(progressTimer);
+          progressVisible = false;
+          setRenderProgress(null);
+        }
         break;
       case 'done': {
         const time = formatDuration(message.milliseconds);
@@ -1969,7 +2045,7 @@ function startRender(request: RenderRequest) {
         ], limitReached ? `stopped at ${message.levels} levels; more detail may be visible` : null);
         finish(false);
         if (labelChangedResolution) {
-          render();
+          render(true);
           break;
         }
         if (!activeRequest) {
@@ -1994,15 +2070,15 @@ function startRender(request: RenderRequest) {
   worker.postMessage(request);
 }
 
-let resizeRenderTimer = 0;
 window.addEventListener('resize', () => {
-  setPictureZoom(IDENTITY_ZOOM);
-  const resolutionChanged = resizeCanvas();
-  drawDisplay();
-  if (resolutionChanged) {
-    window.clearTimeout(resizeRenderTimer);
-    resizeRenderTimer = window.setTimeout(render, 150);
+  if (layoutHeld) {
+    return;
   }
+  setPictureZoom(IDENTITY_ZOOM);
+  if (!resizeCanvas()) {
+    drawDisplay();
+  }
+  renderAfterResize();
 });
 
 window.addEventListener('popstate', () => {

@@ -64,6 +64,16 @@ const GLOW_BLUR_TEXELS = 8;
 const UNROLL_MINIMUM_ZOOM_PIXELS = 12;
 // Bounds geometry memory when many zooms stay large for several generations.
 const UNROLL_BUDGET = 150000;
+// A first render shows feedback alone before the exact geometry, with at
+// least this many feedback levels so the picture is recognisable.
+const PREVIEW_FEEDBACK_LEVELS = 6;
+// Shares of a render's progress, measured at Print quality on the built-in
+// examples. The preview arrives after setup, the first feedback levels and
+// unrolling, which run together. Of the rest, the first exact draw builds
+// its vertices and takes most of the time; feedback levels take a little.
+const PREVIEW_PROGRESS = 0.6;
+const FEEDBACK_PROGRESS = 0.25;
+const REFERENCE_PROGRESS = 0.65;
 // Windows resets a GPU that spends about two seconds on one submission, and
 // Chrome turns the GPU off after a few resets. Scene draws are split into
 // batches that each fill at most this many working pixels, and the renderer
@@ -128,6 +138,7 @@ void main() {
 const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, index) => index);
 // Blended copies read what is below them from this texture unit.
 const BACKDROP_UNIT = MAXIMUM_ZOOM_GLOW_FIELDS + 1;
+const COMPARE_UNIT = BACKDROP_UNIT + 1;
 
 // Rectangle glows are worked out from the distance to the rectangle: the
 // shape is grown, then blurred over the rest of the glow size. Full softness
@@ -291,6 +302,32 @@ void main() {
   outColor = total / float(factor * factor);
 }`;
 
+// Counts the pixels in each block that differ between two output images by
+// more than rounding noise. Texels are premultiplied, so rounding in nearly
+// transparent pixels is not counted. A block's count must fit in a byte.
+const COMPARE_BLOCK = 15;
+const CHANGE_THRESHOLD = 2.5 / 255;
+const COMPARE_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D before;
+uniform sampler2D after;
+out vec4 outColor;
+void main() {
+  ivec2 size = textureSize(after, 0);
+  ivec2 origin = ivec2(gl_FragCoord.xy) * ${COMPARE_BLOCK};
+  float changed = 0.0;
+  for (int y = 0; y < ${COMPARE_BLOCK}; y++) {
+    for (int x = 0; x < ${COMPARE_BLOCK}; x++) {
+      ivec2 point = origin + ivec2(x, y);
+      if (point.x < size.x && point.y < size.y) {
+        vec4 difference = abs(texelFetch(before, point, 0) - texelFetch(after, point, 0));
+        changed += max(max(difference.r, difference.g), max(difference.b, difference.a)) > ${CHANGE_THRESHOLD} ? 1.0 : 0.0;
+      }
+    }
+  }
+  outColor = vec4(changed / 255.0, 0.0, 0.0, 1.0);
+}`;
+
 // Counts are normalised by this percentile of covered pixels, measured on a
 // mip level no larger than this, so a few extreme pixels do not dim the rest.
 const DENSITY_PERCENTILE = 0.999;
@@ -378,6 +415,65 @@ function compileProgram(gl: WebGL2RenderingContext, vertexSource: string, fragme
   return program;
 }
 
+// The worker keeps one WebGL2 context. A finished render hands its textures
+// and buffers back when it is disposed, so a later render of the same size
+// starts with them allocated and initialised, and its shaders compiled.
+type Pool<T> = { spare: Map<string, T[]>; destroy: (item: T) => void };
+
+type Gpu = {
+  output: OffscreenCanvas;
+  gl: WebGL2RenderingContext;
+  programs: Map<string, WebGLProgram>;
+  levelTextures: Pool<LevelTexture>;
+  fieldTextures: Pool<WebGLTexture>;
+  renderbuffers: Pool<WebGLRenderbuffer>;
+  framebuffers: Pool<WebGLFramebuffer>;
+  vertexBuffer: WebGLBuffer;
+  vertexArray: WebGLVertexArrayObject | null;
+  emptyVertexArray: WebGLVertexArrayObject;
+};
+
+let gpu: Gpu | null = null;
+
+function createGpu(width: number, height: number): Gpu {
+  const output = new OffscreenCanvas(width, height);
+  const gl = output.getContext('webgl2', {
+    alpha: true,
+    antialias: false,
+    depth: false,
+    stencil: false,
+    premultipliedAlpha: true,
+    preserveDrawingBuffer: true,
+  });
+  if (!gl) {
+    throw new Error('this browser does not support WebGL2 in workers, which ZoomFract needs');
+  }
+  const pool = <T>(destroy: (item: T) => void): Pool<T> => ({ spare: new Map(), destroy });
+  return {
+    output,
+    gl,
+    programs: new Map(),
+    levelTextures: pool(({ texture }) => gl.deleteTexture(texture)),
+    fieldTextures: pool((texture) => gl.deleteTexture(texture)),
+    renderbuffers: pool((renderbuffer) => gl.deleteRenderbuffer(renderbuffer)),
+    framebuffers: pool((framebuffer) => gl.deleteFramebuffer(framebuffer)),
+    vertexBuffer: gl.createBuffer()!,
+    // Made with the scene program, which sets its attribute locations.
+    vertexArray: null,
+    emptyVertexArray: gl.createVertexArray()!,
+  };
+}
+
+// Deletes spare items that the keep test rejects.
+function freeSpares<T>(pool: Pool<T>, keep: (key: string) => boolean) {
+  for (const [key, items] of pool.spare) {
+    if (!keep(key)) {
+      items.forEach(pool.destroy);
+      pool.spare.delete(key);
+    }
+  }
+}
+
 function createLevelTexture(
   gl: WebGL2RenderingContext,
   width: number,
@@ -402,6 +498,9 @@ function createLevelTexture(
   }
   return { texture, levels };
 }
+
+// An image the size of the output, kept on the GPU.
+type OutputTarget = { texture: WebGLTexture; framebuffer: WebGLFramebuffer; width: number; height: number };
 
 function createFieldTexture(gl: WebGL2RenderingContext, width: number, height: number): WebGLTexture {
   const texture = gl.createTexture()!;
@@ -435,41 +534,68 @@ export function renderWebgl(
   editMode: boolean,
   callbacks: FrameCallbacks,
 ): RenderResult {
-  const output = new OffscreenCanvas(scene.view.resolution.width, scene.view.resolution.height);
-  const gl = output.getContext('webgl2', {
-    alpha: true,
-    antialias: false,
-    depth: false,
-    stencil: false,
-    premultipliedAlpha: true,
-    preserveDrawingBuffer: true,
-  });
-  if (!gl) {
-    throw new Error('this browser does not support WebGL2 in workers, which ZoomFract needs');
+  const { width, height } = scene.view.resolution;
+  const current = gpu && !gpu.gl.isContextLost() ? gpu : createGpu(width, height);
+  gpu = current;
+  if (current.output.width !== width || current.output.height !== height) {
+    current.output.width = width;
+    current.output.height = height;
   }
   // Chrome keeps only a few contexts per page and drops the oldest, so a
   // failed render releases its context straight away.
   try {
-    return drawWebgl(gl, output, scene, settings, editMode, callbacks);
+    return drawWebgl(current, scene, settings, editMode, callbacks);
   } catch (error) {
-    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    current.gl.getExtension('WEBGL_lose_context')?.loseContext();
+    gpu = null;
     throw error;
   }
 }
 
 function drawWebgl(
-  gl: WebGL2RenderingContext,
-  output: OffscreenCanvas,
+  gpu: Gpu,
   scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   editMode: boolean,
   callbacks: FrameCallbacks,
 ): RenderResult {
+  const { gl, output } = gpu;
   const outputWidth = output.width;
   const outputHeight = output.height;
   const factor = settings.supersampling;
   const width = outputWidth * factor;
   const height = outputHeight * factor;
+  // Clear what an earlier render left bound, so no texture is both sampled
+  // and drawn to.
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.disable(gl.BLEND);
+  for (let unit = 0; unit <= COMPARE_UNIT; unit += 1) {
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+  gl.activeTexture(gl.TEXTURE0);
+  // Spares of other sizes are freed before anything new is allocated.
+  const sized = (key: string) => key.startsWith(`${width}x${height} `) || key.startsWith(`${outputWidth}x${outputHeight} `);
+  freeSpares(gpu.levelTextures, sized);
+  freeSpares(gpu.fieldTextures, sized);
+  freeSpares(gpu.renderbuffers, sized);
+  // What this render takes is given back to the pools when it is disposed.
+  const owned: (() => void)[] = [];
+  const take = <T>(pool: Pool<T>, key: string, create: () => T): T => {
+    const item = pool.spare.get(key)?.pop() ?? create();
+    owned.push(() => pool.spare.set(key, [...(pool.spare.get(key) ?? []), item]));
+    return item;
+  };
+  const program = (name: string, vertexSource: string, fragmentSource: string) => {
+    const existing = gpu.programs.get(name);
+    if (existing) {
+      return existing;
+    }
+    const compiled = compileProgram(gl, vertexSource, fragmentSource);
+    gpu.programs.set(name, compiled);
+    return compiled;
+  };
+  const newFramebuffer = () => take(gpu.framebuffers, 'framebuffer', () => gl.createFramebuffer()!);
   // A lost context turns later calls into no-ops, so it is checked each time
   // the queue drains.
   const waitForGpu = () => {
@@ -497,46 +623,90 @@ function drawWebgl(
   const density = shading.mode === 'density';
   const format = density ? densityFormat(gl) : gl.RGBA8;
   const parseColor = createColorParser();
-  const sceneProgram = compileProgram(gl, SCENE_VERTEX_SHADER, SCENE_FRAGMENT_SHADER);
-  const mipProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, MIP_FRAGMENT_SHADER);
+  const sceneProgram = program('scene', SCENE_VERTEX_SHADER, SCENE_FRAGMENT_SHADER);
+  const mipProgram = program('mip', FULLSCREEN_VERTEX_SHADER, MIP_FRAGMENT_SHADER);
   const resolveProgram = density
-    ? compileProgram(gl, FULLSCREEN_VERTEX_SHADER, DENSITY_FRAGMENT_SHADER)
-    : compileProgram(gl, FULLSCREEN_VERTEX_SHADER, RESOLVE_FRAGMENT_SHADER);
-  const glowDilateProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, GLOW_DILATE_FRAGMENT_SHADER);
-  const glowBlurProgram = compileProgram(gl, FULLSCREEN_VERTEX_SHADER, GLOW_BLUR_FRAGMENT_SHADER);
+    ? program('density', FULLSCREEN_VERTEX_SHADER, DENSITY_FRAGMENT_SHADER)
+    : program('resolve', FULLSCREEN_VERTEX_SHADER, RESOLVE_FRAGMENT_SHADER);
+  const glowDilateProgram = program('glowDilate', FULLSCREEN_VERTEX_SHADER, GLOW_DILATE_FRAGMENT_SHADER);
+  const glowBlurProgram = program('glowBlur', FULLSCREEN_VERTEX_SHADER, GLOW_BLUR_FRAGMENT_SHADER);
+  const compareProgram = program('compare', FULLSCREEN_VERTEX_SHADER, COMPARE_FRAGMENT_SHADER);
+  gl.useProgram(compareProgram);
+  gl.uniform1i(gl.getUniformLocation(compareProgram, 'before'), 0);
+  gl.uniform1i(gl.getUniformLocation(compareProgram, 'after'), COMPARE_UNIT);
   gl.useProgram(sceneProgram);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'source'), 0);
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
   const blendModeLocation = gl.getUniformLocation(sceneProgram, 'blendMode');
-  const textures = [createLevelTexture(gl, width, height, format), createLevelTexture(gl, width, height, format)];
+  const levelFramebuffer = newFramebuffer();
+  // Every texture starts transparent, as a new one would, even when reused.
+  // Chrome fills new texture memory with zeros on first use, which is very
+  // slow (about 0.3 s per texture at Print quality) when that use is a blit,
+  // so clearing them first also saves time.
+  // Mip levels are cleared too, as a reused texture still holds the last
+  // render's mips.
+  const clearTexture = (texture: WebGLTexture, textureWidth: number, textureHeight: number, levels = 1) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, levelFramebuffer);
+    gl.clearColor(0, 0, 0, 0);
+    for (let level = 0; level < levels; level += 1) {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, level);
+      gl.viewport(0, 0, Math.max(1, textureWidth >> level), Math.max(1, textureHeight >> level));
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+  };
+  const levelTexture = (textureFormat: number) => {
+    const level = take(gpu.levelTextures, `${width}x${height} ${textureFormat}`,
+      () => createLevelTexture(gl, width, height, textureFormat));
+    clearTexture(level.texture, width, height, level.levels);
+    return level;
+  };
+  const fieldTexture = (textureWidth: number, textureHeight: number) => {
+    const texture = take(gpu.fieldTextures, `${textureWidth}x${textureHeight} `,
+      () => createFieldTexture(gl, textureWidth, textureHeight));
+    clearTexture(texture, textureWidth, textureHeight);
+    return texture;
+  };
+  const textures = [levelTexture(format), levelTexture(format)];
   // Zoom glows spread from what a copy shows, not from its glows, so scenes
   // with zoom glows also build a mask of the shapes' coverage.
   const zoomGlows = !density && scene.elements.some((element) => element.kind === 'zoom' && element.glow);
-  const masks = zoomGlows
-    ? [createLevelTexture(gl, width, height, gl.RGBA8), createLevelTexture(gl, width, height, gl.RGBA8)]
-    : [];
-  const levelFramebuffer = gl.createFramebuffer()!;
+  const masks = zoomGlows ? [levelTexture(gl.RGBA8), levelTexture(gl.RGBA8)] : [];
+  // Output images stay on the GPU: they are compared there and copied to the
+  // canvas, which is posted without reading pixels back.
+  const outputTarget = (targetWidth: number, targetHeight: number) => {
+    const texture = fieldTexture(targetWidth, targetHeight);
+    const framebuffer = newFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    return { texture, framebuffer, width: targetWidth, height: targetHeight };
+  };
+  const referenceOutput = outputTarget(outputWidth, outputHeight);
+  const finalOutput = outputTarget(outputWidth, outputHeight);
+  const changeCounts = outputTarget(Math.ceil(outputWidth / COMPARE_BLOCK), Math.ceil(outputHeight / COMPARE_BLOCK));
 
   // Painted levels are drawn with multisampling and copied into textures.
   // Density levels are drawn straight into their float textures.
-  const drawFramebuffer = density ? null : gl.createFramebuffer()!;
+  const drawFramebuffer = density ? null : newFramebuffer();
   if (drawFramebuffer) {
     const samples = factor <= MSAA_MAXIMUM_SUPERSAMPLING
       ? Math.min(MSAA_SAMPLES, gl.getParameter(gl.MAX_SAMPLES))
       : 0;
-    const drawRenderbuffer = gl.createRenderbuffer()!;
-    gl.bindRenderbuffer(gl.RENDERBUFFER, drawRenderbuffer);
-    gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
+    const drawRenderbuffer = take(gpu.renderbuffers, `${width}x${height} ${samples}`, () => {
+      const created = gl.createRenderbuffer()!;
+      gl.bindRenderbuffer(gl.RENDERBUFFER, created);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, width, height);
+      return created;
+    });
     gl.bindFramebuffer(gl.FRAMEBUFFER, drawFramebuffer);
     gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, drawRenderbuffer);
   }
 
   // Blended copies need what is below them, which is copied here first.
   const blended = scene.elements.some((element) => element.kind === 'zoom' && element.blend !== 'normal');
-  const backdropFramebuffer = blended ? gl.createFramebuffer()! : null;
+  const backdropFramebuffer = blended ? newFramebuffer() : null;
   if (backdropFramebuffer) {
-    const backdrop = createFieldTexture(gl, width, height);
+    const backdrop = fieldTexture(width, height);
     gl.bindFramebuffer(gl.FRAMEBUFFER, backdropFramebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, backdrop, 0);
     gl.activeTexture(gl.TEXTURE0 + BACKDROP_UNIT);
@@ -544,19 +714,21 @@ function drawWebgl(
     gl.activeTexture(gl.TEXTURE0);
   }
 
-  const vertexBuffer = gl.createBuffer()!;
-  const vertexArray = gl.createVertexArray()!;
-  gl.bindVertexArray(vertexArray);
-  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-  const attributes: [string, number][] = [['position', 2], ['texCoord', 2], ['color', 4], ['mode', 1], ['shape', 4]];
-  let attributeOffset = 0;
-  for (const [name, size] of attributes) {
-    const location = gl.getAttribLocation(sceneProgram, name);
-    gl.enableVertexAttribArray(location);
-    gl.vertexAttribPointer(location, size, gl.FLOAT, false, FLOATS_PER_VERTEX * 4, attributeOffset * 4);
-    attributeOffset += size;
+  const { vertexBuffer, emptyVertexArray } = gpu;
+  const vertexArray = gpu.vertexArray ?? gl.createVertexArray()!;
+  if (!gpu.vertexArray) {
+    gpu.vertexArray = vertexArray;
+    gl.bindVertexArray(vertexArray);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    const attributes: [string, number][] = [['position', 2], ['texCoord', 2], ['color', 4], ['mode', 1], ['shape', 4]];
+    let attributeOffset = 0;
+    for (const [name, size] of attributes) {
+      const location = gl.getAttribLocation(sceneProgram, name);
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(location, size, gl.FLOAT, false, FLOATS_PER_VERTEX * 4, attributeOffset * 4);
+      attributeOffset += size;
+    }
   }
-  const emptyVertexArray = gl.createVertexArray()!;
 
   const premultiplied = (color: Rgba, opacity: number): Rgba => {
     const alpha = color[3] * opacity;
@@ -611,7 +783,7 @@ function drawWebgl(
         radius: { x: reach.x / 2 ** lod, y: reach.y / 2 ** lod },
         // Half a texel of blur keeps hard glows from showing the texel grid.
         sigma: { x: Math.max(0.5, sigma.x / 2 ** lod), y: Math.max(0.5, sigma.y / 2 ** lod) },
-        textures: [createFieldTexture(gl, size.x, size.y), createFieldTexture(gl, size.x, size.y)],
+        textures: [fieldTexture(size.x, size.y), fieldTexture(size.x, size.y)],
       };
       fields.push(field);
       byElement.set(elementIndex, field);
@@ -668,6 +840,12 @@ function drawWebgl(
     ? premultiplied(parseColor(element.glow.color), element.glow.opacity)
     : null);
   const glowFields = createGlowFields();
+  // Everything is allocated now, so spares this render did not need go.
+  const unused = () => false;
+  freeSpares(gpu.levelTextures, unused);
+  freeSpares(gpu.fieldTextures, unused);
+  freeSpares(gpu.renderbuffers, unused);
+  freeSpares(gpu.framebuffers, unused);
 
   const pushPolygon = (
     vertices: number[],
@@ -817,19 +995,29 @@ function drawWebgl(
     minimumZoomPixels: Infinity,
     topLevelZoomOpacity: 1,
   }).items;
+  // Fading copies would change density counts; edit mode outlines are enough.
+  const topLevelZoomOpacity = editMode && !density ? EDIT_MODE_ZOOM_OPACITY : 1;
+  const previewItems = topLevelZoomOpacity === 1 ? levelItems : unrollScene(scene, factor, {
+    maximumDepth: 0,
+    uniform: false,
+    budget: 0,
+    minimumZoomPixels: Infinity,
+    topLevelZoomOpacity,
+  }).items;
   // Exact geometry draws copies item by item, which only matches feedback for
-  // normal blending, so blended scenes recurse by feedback alone.
-  const finalUnroll = unrollScene(scene, factor, {
+  // normal blending, so blended scenes recurse by feedback alone. It is
+  // unrolled on first use, so progress can be shown before it.
+  let finalUnrollCache: ReturnType<typeof unrollScene> | null = null;
+  const finalUnroll = () => finalUnrollCache ??= unrollScene(scene, factor, {
     maximumDepth: blended ? 0 : settings.recursionDepth,
     uniform: !settings.autoLevels,
     budget: UNROLL_BUDGET,
     minimumZoomPixels: settings.autoLevels ? UNROLL_MINIMUM_ZOOM_PIXELS : 0,
-    // Fading copies would change density counts; edit mode outlines are enough.
-    topLevelZoomOpacity: editMode && !density ? EDIT_MODE_ZOOM_OPACITY : 1,
+    topLevelZoomOpacity,
   });
   // A leaf at generation g sampling the texture after F feedback levels ends
   // with seed zooms at generation g + F, so the shallowest leaf sets F.
-  const feedbackLevelsFor = (levels: number) => Math.max(0, levels - finalUnroll.shallowestLeaf);
+  const feedbackLevelsFor = (levels: number) => Math.max(0, levels - finalUnroll().shallowestLeaf);
 
   const paintDetail = shading.mode === 'paint' ? shading.detail : 0;
   const generateMips = ({ texture, levels }: LevelTexture, detail = paintDetail) => {
@@ -923,7 +1111,7 @@ function drawWebgl(
   let lastFeedback: LevelTexture | null = null;
   let completedFeedbackLevels = 0;
   const unusedTexture = () => lastFeedback === textures[0] ? textures[1] : textures[0];
-  const levelsShown = () => completedFeedbackLevels + finalUnroll.shallowestLeaf;
+  const levelsShown = () => completedFeedbackLevels + finalUnroll().shallowestLeaf;
 
   const addFeedbackLevel = () => {
     const target = unusedTexture();
@@ -993,12 +1181,13 @@ function drawWebgl(
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'stopCount'), shading.colors.length);
   };
 
-  // Draws the exact geometry over the latest feedback texture into the output.
-  const drawOutput = () => {
+  // Draws items over the latest feedback texture and resolves them into an
+  // output image.
+  const drawOutput = (target: OutputTarget, items = finalUnroll().items) => {
     const finalTexture = unusedTexture();
-    drawLevel(finalTexture, lastFeedback, finalUnroll.items);
+    drawLevel(finalTexture, lastFeedback, items);
     useDensityProgram(finalTexture);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
     gl.viewport(0, 0, outputWidth, outputHeight);
     gl.disable(gl.BLEND);
     gl.useProgram(resolveProgram);
@@ -1007,44 +1196,125 @@ function drawWebgl(
     gl.bindTexture(gl.TEXTURE_2D, finalTexture.texture);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     waitForGpu();
+  };
+
+  // Reading the error waits for every queued command, so it is left until
+  // the CPU has nothing else to do.
+  const checkErrors = () => {
     const error = gl.getError();
     if (error !== gl.NO_ERROR) {
       throw new Error(`WebGL error ${error}`);
     }
   };
 
+  // Posting the canvas waits for the GPU, so it is copied first.
+  const copyToCanvas = (target: OutputTarget) => {
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.framebuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.blitFramebuffer(0, 0, outputWidth, outputHeight, 0, 0, outputWidth, outputHeight, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  };
+
+  // Only the per-block counts are read back.
+  const changedFraction = (before: OutputTarget, after: OutputTarget) => {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, changeCounts.framebuffer);
+    gl.viewport(0, 0, changeCounts.width, changeCounts.height);
+    gl.disable(gl.BLEND);
+    gl.useProgram(compareProgram);
+    gl.bindVertexArray(emptyVertexArray);
+    gl.bindTexture(gl.TEXTURE_2D, before.texture);
+    gl.activeTexture(gl.TEXTURE0 + COMPARE_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, after.texture);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const counts = new Uint8Array(changeCounts.width * changeCounts.height * 4);
+    gl.readPixels(0, 0, changeCounts.width, changeCounts.height, gl.RGBA, gl.UNSIGNED_BYTE, counts);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    let changed = 0;
+    for (let index = 0; index < counts.length; index += 4) {
+      changed += counts[index];
+    }
+    return changed / (outputWidth * outputHeight);
+  };
+
   const details = () => {
-    const exactGenerations = finalUnroll.shallowestLeaf - 1;
+    const { shallowestLeaf, expandedZooms } = finalUnroll();
+    const exactGenerations = shallowestLeaf - 1;
     const budgetLimited = !blended && !settings.autoLevels && exactGenerations < settings.recursionDepth;
     return [
-      blended ? 'blend modes skip exact recursion' : `${finalUnroll.expandedZooms.toLocaleString('en-GB')} exact zooms`,
+      blended ? 'blend modes skip exact recursion' : `${expandedZooms.toLocaleString('en-GB')} exact zooms`,
       ...(budgetLimited ? [`recursion capped at ${exactGenerations}`] : []),
     ];
   };
 
+  // A first render shows feedback alone before the exact geometry. Every
+  // feedback level is the same whatever is drawn over it, so the levels the
+  // exact render also needs are kept. The GPU draws the preview while the
+  // exact geometry is unrolled.
+  const queuePreview = (levels: number) => {
+    const needed = levels - (settings.recursionDepth + 1);
+    const previewLevels = Math.min(levels - 1, Math.max(needed, PREVIEW_FEEDBACK_LEVELS));
+    while (completedFeedbackLevels < previewLevels) {
+      addFeedbackLevel();
+    }
+    drawOutput(finalOutput, previewItems);
+    copyToCanvas(finalOutput);
+  };
+
   const renderLevels = (levels: number, frameCallbacks: FrameCallbacks): RenderOutcome => {
     prepareGlowFields(levels);
-    const feedbackLevels = feedbackLevelsFor(levels);
-    const steps = feedbackLevels - completedFeedbackLevels + 1;
-    let step = 0;
+    const preview = completedFeedbackLevels === 0 && !blended && settings.recursionDepth > 1;
+    if (preview) {
+      queuePreview(levels);
+    }
+    const exactLevels = feedbackLevelsFor(levels);
+    if (preview) {
+      checkErrors();
+      frameCallbacks.frame(output, false);
+    }
+    // Fixed levels must be exact. Automatic levels keep any extra preview
+    // levels, which only add detail too small to see, and add one more so the
+    // final image can be compared with the one before.
+    if (completedFeedbackLevels > exactLevels && !settings.autoLevels) {
+      lastFeedback = null;
+      completedFeedbackLevels = 0;
+    }
+    const feedbackLevels = settings.autoLevels && completedFeedbackLevels > 0
+      ? Math.max(exactLevels, completedFeedbackLevels + 1)
+      : exactLevels;
+    const firstLevel = completedFeedbackLevels;
+    const startProgress = preview ? PREVIEW_PROGRESS : 0;
+    let compared = false;
+    const report = () => frameCallbacks.progress(startProgress + (1 - startProgress) * (
+      FEEDBACK_PROGRESS * (completedFeedbackLevels - firstLevel) / (feedbackLevels - firstLevel)
+      + (compared ? REFERENCE_PROGRESS : 0)
+    ));
+    if (preview) {
+      frameCallbacks.progress(startProgress);
+    }
     while (completedFeedbackLevels < feedbackLevels) {
       if (completedFeedbackLevels === feedbackLevels - 1) {
-        drawOutput();
-        frameCallbacks.reference(output, levelsShown());
+        drawOutput(referenceOutput);
+        compared = true;
       }
       addFeedbackLevel();
-      step += 1;
-      frameCallbacks.progress(step / steps);
+      report();
     }
-    drawOutput();
+    drawOutput(finalOutput);
+    checkErrors();
     frameCallbacks.progress(1);
-    frameCallbacks.frame(output, levelsShown());
-    return { details: details(), levels: levelsShown() };
+    copyToCanvas(finalOutput);
+    frameCallbacks.frame(output, true);
+    return {
+      details: details(),
+      levels: levelsShown(),
+      stepChange: compared ? { fraction: changedFraction(referenceOutput, finalOutput), levels: 1 } : undefined,
+    };
   };
   return {
     outcome: renderLevels(settings.levels, callbacks),
     // Exact geometry is kept from the first render; only feedback levels are added.
     continueTo: (next, frameCallbacks) => renderLevels(next.levels, frameCallbacks),
-    dispose: () => gl.getExtension('WEBGL_lose_context')?.loseContext(),
+    dispose: () => owned.forEach((giveBack) => giveBack()),
   };
 }

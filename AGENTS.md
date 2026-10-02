@@ -303,8 +303,8 @@ files unless extracting a module clearly reduces complexity.
   the worker. The selected quality renders once values settle (400 ms, or on
   drag release). Image sharing stays disabled while a preview is displayed.
 - Rendering runs in a Web Worker on `OffscreenCanvas`, so the UI thread only
-  displays finished frames. Each render uses a fresh worker; starting a new
-  render terminates the old one, which cancels obsolete work immediately.
+  displays finished frames. Starting a new render while one is running
+  terminates the busy worker, which cancels obsolete work immediately.
 - Quality is an application setting with five modes. Fast renders at half
   the display's physical resolution (one exact recursion, 2x supersampling);
   Display matches physical resolution (up to 8 exact recursions, 2x); High
@@ -346,7 +346,11 @@ files unless extracting a module clearly reduces complexity.
   generations are exact geometry; the rest come from feedback.
 - WebGL2 renders recursion by texture feedback: each level draws the scene
   once, with zooms as quads sampling the previous level's texture. Cost is
-  linear in depth. Rect edges use MSAA at low supersampling.
+  linear in depth. Rect edges use MSAA at low supersampling. Textures that
+  are first written by a blit (level textures, glow masks, the blend
+  backdrop) are cleared, every mip level, before each use: Chrome otherwise
+  zero-fills new ones on first use, which took about 0.3 s each at Print
+  quality, and reused ones still hold the last render.
 - The final WebGL2 level is unrolled into exact geometry
   (`src/render/unroll.ts`), with every item clipped to its ancestor zoom
   quads, up to max recursion and an internal item budget. With fixed levels,
@@ -356,7 +360,36 @@ files unless extracting a module clearly reduces complexity.
   expanded largest first until they fall below a small pixel size. Remaining
   zooms become leaves sampling the feedback texture; the shallowest leaf
   determines how many feedback levels are needed.
-- Progress appears only after a short delay, so fast renders do not flash it.
+- Progress appears only after a short delay, so fast renders do not flash it,
+  and hides as soon as the final frame is shown, before change statistics.
+- A fresh render (not a continuation, blended scene, or max recursion of 0
+  or 1) posts an early preview: it queues at least 6 feedback levels
+  (no more than levels - 1) and draws them with the top level's items, then
+  unrolls the exact geometry on the CPU while the GPU works. Only then does
+  it call `gl.getError()` (in `checkErrors`) and post the preview, because
+  `getError` and `transferToImageBitmap` wait for queued GPU work. Auto
+  levels keep any extra preview levels; fixed levels restart if the preview
+  went past them, so the result stays exact. Progress is weighted between
+  the preview, feedback levels and the reference draw (`*_PROGRESS` in
+  `webgl.ts`).
+- Frame messages say whether they are final. `resizeCanvas` redraws the
+  current frame, stretched, whenever it changes the resolution (which clears
+  the bitmap), with edit outlines at the new size. Picture-only toggles
+  that start or end fullscreen hold the layout (ignoring resize events)
+  until the fullscreen promise settles and, because Chrome reports
+  fullscreen before resizing the window, the window size has changed (at
+  most 500 ms), then lay out once in that resize event, before it paints.
+  Resizes and toggles
+  share one 150 ms render debounce and only render if the resolution then
+  differs from the shown or rendering one. Those renders keep the stretched
+  image until their final frame; the early preview is skipped unless the
+  shown frame is itself a preview.
+- Loading another definition clears the picture straight away, so the old
+  image is never shown stretched to a new shape. Applying an edit keeps the
+  old picture until the new one renders, unless the output aspect changed.
+- Frames are posted with `transferToImageBitmap` straight from the GL
+  canvas, after a blit from the resolved output texture; there are no pixel
+  readbacks.
 - The render worker is kept while idle and holds the last render's working
   state. A request that differs only by more fixed levels continues from it:
   it adds feedback levels and redraws the kept exact geometry (identical
@@ -364,10 +397,20 @@ files unless extracting a module clearly reduces complexity.
   level increase that arrives while busy waits and replaces any earlier
   waiting increase; any other change terminates the busy worker. The Custom
   Levels row has a +1 button that uses this path.
+- An idle worker keeps its WebGL context (module-level `gpu` in
+  `webgl.ts`) for the next render: compiled programs, the vertex buffer and
+  array, and pools of textures, renderbuffers and framebuffers keyed by size
+  and format. Disposing a render gives its resources back to the pools;
+  spares of other sizes are freed before allocating and unused spares after.
+  Each render resets the bound framebuffer, blending and texture units, and
+  clears what it takes, so output matches a new context exactly. A failed
+  render loses the context. This saves about 0.3 s per Print render.
 - Every render reports the fraction of display pixels that changed, compared
   premultiplied by more than rounding noise, between the final image and one
   step before it: the previous level (an extra output draw before the last
-  feedback level), including continuations.
+  feedback level), including continuations. A compare shader counts changed
+  pixels (any channel over 2.5/255) per 15x15 block on the GPU, so only the
+  small count texture is read back.
 - The progress bar is a thin overlay along the bottom of the window, outside
   the panel, so it stays visible when the panel is hidden and never moves
   controls. Render details live inside the Render settings section and list

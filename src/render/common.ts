@@ -59,7 +59,7 @@ export type StepChange = { fraction: number; levels: number };
 export type RenderMessage =
   | { type: 'start'; settings: RenderSettings }
   | { type: 'progress'; progress: number }
-  | { type: 'frame'; bitmap: ImageBitmap }
+  | { type: 'frame'; bitmap: ImageBitmap; final: boolean }
   | {
     type: 'done';
     levels: number;
@@ -71,10 +71,8 @@ export type RenderMessage =
   | { type: 'error'; message: string };
 
 export type FrameCallbacks = {
-  // `levels` is the total recursion shown by the image.
-  frame: (canvas: OffscreenCanvas, levels: number) => void;
-  // An image one step before the final one, used only for comparison.
-  reference: (canvas: OffscreenCanvas, levels: number) => void;
+  // Earlier frames are rougher previews of the final one.
+  frame: (canvas: OffscreenCanvas, final: boolean) => void;
   progress: (progress: number) => void;
 };
 
@@ -91,31 +89,6 @@ export type RenderResult = {
   continueTo: (settings: RenderSettings, callbacks: FrameCallbacks) => RenderOutcome;
   dispose: () => void;
 };
-
-// Channel differences up to this are rounding noise between equivalent renders.
-const CHANGE_THRESHOLD = 2;
-
-// Inputs are unpremultiplied ImageData pixels. Colours are compared
-// premultiplied so rounding in nearly transparent pixels is not counted.
-export function changedFraction(before: ArrayLike<number>, after: ArrayLike<number>): number {
-  let changed = 0;
-  for (let index = 0; index < before.length; index += 4) {
-    const beforeAlpha = before[index + 3];
-    const afterAlpha = after[index + 3];
-    const channelChanged = (offset: number) => Math.abs(
-      before[index + offset] * beforeAlpha - after[index + offset] * afterAlpha,
-    ) > CHANGE_THRESHOLD * 255;
-    if (
-      Math.abs(beforeAlpha - afterAlpha) > CHANGE_THRESHOLD
-      || channelChanged(0)
-      || channelChanged(1)
-      || channelChanged(2)
-    ) {
-      changed += 1;
-    }
-  }
-  return changed / (before.length / 4);
-}
 
 // Requests with equal keys differ only in levels, so a render can continue
 // from an earlier one with fewer fixed levels.
