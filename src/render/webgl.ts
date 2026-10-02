@@ -184,6 +184,8 @@ const COMPARE_UNIT = BACKDROP_UNIT + 1;
 const SCENE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
+// Glow masks keep coverage in the red channel alone.
+uniform bool singleChannel;
 uniform sampler2D backdrop;
 uniform int blendMode;
 // Where the backdrop's first texel lies in the framebuffer being drawn.
@@ -217,7 +219,7 @@ vec4 blendOver(vec4 s, vec4 d) {
   return vec4(color, s.a + d.a - s.a * d.a);
 }
 void main() {
-  vec4 sampled = texture(source, uv);
+  vec4 sampled = singleChannel ? vec4(texture(source, uv).r) : texture(source, uv);
   vec4 color = drawMode < 1.5
     ? tint * mix(vec4(1.0), sampled, drawMode)
     : drawMode < 2.5
@@ -244,7 +246,7 @@ float alphaAt(vec2 coords) {
   if (any(lessThan(coords, vec2(0.0))) || any(greaterThan(coords, vec2(1.0)))) {
     return 0.0;
   }
-  float alpha = hasSource ? textureLod(source, coords, lod).a : constantAlpha;
+  float alpha = hasSource ? textureLod(source, coords, lod).r : constantAlpha;
   // Zero treats any visible source as fully covered; one keeps its alpha.
   return alpha > 0.0 ? mix(1.0, alpha, sourceOpacity) : 0.0;
 }
@@ -302,6 +304,8 @@ const MIP_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
 uniform float detail;
+// Glow masks keep coverage in the red channel alone.
+uniform bool singleChannel;
 out vec4 outColor;
 void main() {
   ivec2 size = textureSize(source, 0);
@@ -313,6 +317,7 @@ void main() {
   for (int y = 0; y < 2; y++) {
     for (int x = 0; x < 2; x++) {
       vec4 texel = texelFetch(source, min(origin + ivec2(x, y), size - 1), 0);
+      texel = singleChannel ? vec4(texel.r) : texel;
       colorTotal += texel.rgb;
       alphaTotal += texel.a;
       minAlpha = min(minAlpha, texel.a);
@@ -707,10 +712,6 @@ function drawWebgl(
     return texture;
   };
   const textures = [levelTexture(format), levelTexture(format)];
-  // Zoom glows spread from what a copy shows, not from its glows, so scenes
-  // with zoom glows also build a mask of the shapes' coverage.
-  const zoomGlows = !density && scene.elements.some((element) => element.kind === 'zoom' && element.glow);
-  const masks = zoomGlows ? [levelTexture(gl.RGBA8), levelTexture(gl.RGBA8)] : [];
   // Output images stay on the GPU: they are compared there and copied to the
   // canvas, which is posted without reading pixels back.
   const outputTarget = (targetWidth: number, targetHeight: number) => {
@@ -900,6 +901,17 @@ function drawWebgl(
     ? premultiplied(parseColor(element.glow.color), element.glow.opacity)
     : null);
   const glowFields = createGlowFields();
+  // Zoom glows spread from what a copy shows, not from its glows, so scenes
+  // with zoom glows also build a mask of the shapes' coverage. Coverage needs
+  // one channel. Only the latest mask is kept, for continuations; it is
+  // pooled with the level textures.
+  const maskKey = `${width}x${height} ${gl.R8}`;
+  const newMask = (pooled: LevelTexture | undefined) => {
+    const mask = pooled ?? createLevelTexture(gl, width, height, gl.R8);
+    clearTexture(mask.texture, width, height, mask.levels);
+    return mask;
+  };
+  let spareMask = glowFields.used ? newMask(gpu.levelTextures.spare.get(maskKey)?.pop()) : null;
   // Everything is allocated now, so spares this render did not need go.
   const unused = () => false;
   freeSpares(gpu.levelTextures, unused);
@@ -1092,7 +1104,7 @@ function drawWebgl(
   const feedbackLevelsFor = (levels: number) => Math.max(0, levels - finalUnroll().shallowestLeaf);
 
   const paintDetail = shading.mode === 'paint' ? shading.detail : 0;
-  const generateMips = ({ texture, levels }: LevelTexture, detail = paintDetail) => {
+  const generateMips = ({ texture, levels }: LevelTexture, detail = paintDetail, singleChannel = false) => {
     if (density) {
       // Plain averages keep the mean count over each texel.
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -1101,6 +1113,7 @@ function drawWebgl(
     }
     gl.useProgram(mipProgram);
     gl.uniform1f(gl.getUniformLocation(mipProgram, 'detail'), detail);
+    gl.uniform1i(gl.getUniformLocation(mipProgram, 'singleChannel'), singleChannel ? 1 : 0);
     gl.bindVertexArray(emptyVertexArray);
     gl.disable(gl.BLEND);
     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -1138,6 +1151,7 @@ function drawWebgl(
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target.texture, 0);
     gl.useProgram(sceneProgram);
     gl.uniform2f(gl.getUniformLocation(sceneProgram, 'resolution'), width, height);
+    gl.uniform1i(gl.getUniformLocation(sceneProgram, 'singleChannel'), mask ? 1 : 0);
     glowFields.bind();
     gl.bindTexture(gl.TEXTURE_2D, source?.texture ?? null);
     // Painting composites over what is below; density adds up hits.
@@ -1222,12 +1236,17 @@ function drawWebgl(
       return;
     }
     for (; maskLevels < levels; maskLevels += 1) {
-      const target = lastMask === masks[0] ? masks[1] : masks[0];
+      const target = spareMask ?? newMask(undefined);
       drawLevel(target, lastMask, levelItems, true);
       // Any visible detail should glow, however small.
-      generateMips(target, 1);
+      generateMips(target, 1, true);
       waitForGpu();
+      spareMask = lastMask;
       lastMask = target;
+    }
+    if (spareMask) {
+      gl.deleteTexture(spareMask.texture);
+      spareMask = null;
     }
     glowFields.compute(lastMask);
     fieldsReady = true;
@@ -1405,6 +1424,11 @@ function drawWebgl(
     outcome: renderLevels(settings.levels, callbacks),
     // Exact geometry is kept from the first render; only feedback levels are added.
     continueTo: (next, frameCallbacks) => renderLevels(next.levels, frameCallbacks),
-    dispose: () => owned.forEach((giveBack) => giveBack()),
+    dispose: () => {
+      owned.forEach((giveBack) => giveBack());
+      if (lastMask) {
+        gpu.levelTextures.spare.set(maskKey, [...(gpu.levelTextures.spare.get(maskKey) ?? []), lastMask]);
+      }
+    },
   };
 }

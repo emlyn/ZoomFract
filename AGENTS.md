@@ -284,7 +284,8 @@ files unless extracting a module clearly reduces complexity.
   dilated at the coarsest mip where the blur still spans a texel (bounded
   by the dilation radius) then separably blurred, deduplicated by margin and
   softness (at most 8 fields). A shallower mask shows seeds as blocks that
-  the glow would outline as steps.
+  the glow would outline as steps. Masks are single-channel R8 (read `.r`;
+  WebGL2 has no swizzle), and only the latest is kept, for continuations.
 
 ## Rendering invariants
 
