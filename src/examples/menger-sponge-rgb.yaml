@@ -1,0 +1,158 @@
+info:
+  title: RGB Menger Sponge
+  author: Emlyn Corrin
+  date: 2026
+  links:
+    - https://en.wikipedia.org/wiki/Menger_sponge
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+view:
+  overflow: auto
+  aspect: 1
+  coordinates:
+    x: [0, 9]
+    y: [0, 9]
+
+seed:
+  colour: "#ccc"
+
+variables:
+  - name: sx
+    value: 0.9
+  - name: sy
+    value: 0.4
+
+scene:
+  - type: zoom
+    name: z002
+    bottomLeft: [2*sx, 2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z102
+    bottomLeft: [3+2*sx, 2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z202
+    bottomLeft: [6+2*sx, 2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z012
+    bottomLeft: [2*sx, 3+2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z212
+    bottomLeft: [6+2*sx, 3+2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z022
+    bottomLeft: [2*sx, 6+2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z122
+    bottomLeft: [3+2*sx, 6+2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z222
+    bottomLeft: [6+2*sx, 6+2*sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z001
+    bottomLeft: [sx, sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z201
+    bottomLeft: [6+sx, sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z021
+    bottomLeft: [sx, 6+sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z221
+    bottomLeft: [6+sx, 6+sy]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z000
+    bottomLeft: [0, 0]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z100
+    bottomLeft: [3, 0]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z200
+    bottomLeft: [6, 0]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z010
+    bottomLeft: [0, 3]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z210
+    bottomLeft: [6, 3]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z020
+    bottomLeft: [0, 6]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z120
+    bottomLeft: [3, 6]
+    width: 3
+    height: 3
+  - type: zoom
+    name: z220
+    bottomLeft: [6, 6]
+    width: 3
+    height: 3
+  - type: rect
+    name: front
+    bottomLeft: [0, 0]
+    width: 9
+    height: 9
+    colour: "green"
+    opacity: 0.1
+  - type: polygon
+    name: top
+    points:
+      - [0, 9]
+      - [9, 9]
+      - [9+2*sx, 9+2*sy]
+      - [2*sx, 9+2*sy]
+    colour: "red"
+    opacity: 0.1
+  - type: polygon
+    name: right
+    points:
+      - [9, 0]
+      - [9, 9]
+      - [9+2*sx, 9+2*sy]
+      - [9+2*sx, 2*sy]
+    colour: "blue"
+    opacity: 0.1

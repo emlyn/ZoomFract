@@ -4,6 +4,7 @@ import pythagorasTreeDensityText from './examples/pythagoras-tree-density.yaml?r
 import pythagorasTreeInteractiveText from './examples/pythagoras-tree-interactive.yaml?raw';
 import pythagorasTreeText from './examples/pythagoras-tree.yaml?raw';
 import mengerSpongeText from './examples/menger-sponge.yaml?raw';
+import mengerSpongeRgbText from './examples/menger-sponge-rgb.yaml?raw';
 import sierpinskiCirclesText from './examples/sierpinski-circles.yaml?raw';
 import sierpinskiCarpetText from './examples/sierpinski-carpet.yaml?raw';
 import sierpinskiText from './examples/sierpinski.yaml?raw';
@@ -35,6 +36,7 @@ export const EXAMPLES: ExampleDefinition[] = [
   example('pythagoras-tree-density', pythagorasTreeDensityText),
   example('pythagoras-tree-interactive', pythagorasTreeInteractiveText),
   example('menger-sponge', mengerSpongeText),
+  example('menger-sponge-rgb', mengerSpongeRgbText),
 ];
 
 export const DEFAULT_EXAMPLE = EXAMPLES[0];
