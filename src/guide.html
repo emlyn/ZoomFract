@@ -126,6 +126,17 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
   <ul>
     <li>Links are web addresses starting with <code>http://</code> or <code>https://</code>, with an optional <code>title</code> to show instead.</li>
     <li>The label also lists what the picture is made of, its size in pixels, and how it was rendered.</li>
+    <li>
+      It also gives the fractal dimension of the shape the zooms make, which says how
+      quickly detail fills space: 1 for a line, 2 for a filled area, and in between for
+      fractals. When the copies do not overlap, or overlap only by chance, it is exact,
+      written as a formula where possible, such as <code>log(3) / log(2) ≈ 1.585</code> for
+      Sierpinski's triangle. Otherwise it is estimated, shown with two decimal places.
+      Copies that land exactly on top of each other count once. When overlapping copies
+      lower the dimension, the label also gives the <em>similarity dimension</em>: what it
+      would be if no copies overlapped. For a picture of a 3D fractal, such as the Menger
+      sponge, that is usually the dimension of the 3D shape itself.
+    </li>
     <li>The label goes beside the picture, or underneath when that leaves more room. Turn it off with <em>Show label</em>.</li>
     <li>For built-in examples, the title and description also appear in the example list.</li>
   </ul>

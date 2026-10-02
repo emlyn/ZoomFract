@@ -50,6 +50,7 @@ Do not commit generated or local artifacts:
 - `src/pptx.ts`: PowerPoint export, a hand-written OOXML package in an
   uncompressed zip with no dependencies.
 - `src/expression.ts`: arithmetic expression parser and evaluator.
+- `src/dimension.ts`: fractal dimension of the zooms for the wall label.
 - `src/guide.html`: user guide for the definition language, shown from the
   panel. Keep it in simple English and update it whenever the scene language
   changes.
@@ -81,6 +82,17 @@ files unless extracting a module clearly reduces complexity.
   rendering. It is shown on a gallery-style wall label beside the frame,
   together with a generated medium line (contents, resolution, renderer and
   levels). The label is hidden when `info` is empty or "Show label" is off.
+- The medium lines include the fractal dimension of the zooms' attractor
+  (`src/dimension.ts`, main thread, memoised per scene; previews keep the
+  last value). Exactly coinciding maps merge first. Copies covering the
+  attractor hull give 2. Similarities solve Moran's equation, capped at 2,
+  shown as a formula when one scale (log n / log(1/r)) or scales r and r^2
+  fit, else to 3 decimals. That is exact for separated copies and, by
+  Hochman, for overlaps unless deeper compositions coincide exactly; then
+  the growth of distinct compositions is the estimate. Non-similar maps use
+  box counting. Estimates show 2 decimals. For similarities, the similarity
+  (Moran) dimension is shown on its own line when it exceeds the picture's
+  dimension, e.g. a projected 3D Menger sponge.
 - `frame` controls presentation in CSS pixels: border `width`, corner `radius`,
   border `colour`, outer `wall`, inner `background`, canvas `padding`, and
   window-edge `margin`.

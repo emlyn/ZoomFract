@@ -1,6 +1,7 @@
 import './style.css';
 import { createSceneEditor } from './editor';
 import { createShareDialog, type LinkOptions } from './share-dialog';
+import { fractalDimension, type FractalDimension } from './dimension';
 import GUIDE_HTML from './guide.html?raw';
 import {
   DEFAULT_EXAMPLE,
@@ -1288,9 +1289,13 @@ async function loadDefinitionFromAddressBar() {
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
+// The dimension shown last, kept while previews change inputs because it can
+// take a noticeable time to calculate.
+let shownDimension: FractalDimension | null = null;
+
 // The "medium" lines of the label: what the picture is made of and how it was
 // rendered, like the materials line on a gallery label.
-function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered): string[] {
+function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered, preview: boolean): string[] {
   const count = (kind: string) => scene.elements.filter((element) => element.kind === kind).length;
   const parts = [
     ...(count('rect') > 0 ? [plural(count('rect'), 'rectangle')] : []),
@@ -1301,8 +1306,13 @@ function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered)
     ...(scene.shading.mode === 'density' ? ['density shading'] : []),
   ];
   const { width, height } = canvas;
+  if (!preview) {
+    shownDimension = fractalDimension(scene);
+  }
   return [
     ...(parts.length > 0 ? [parts.join(', ')] : []),
+    ...(shownDimension ? [`Fractal dimension ${shownDimension.text}`] : []),
+    ...(shownDimension?.similarity ? [`Similarity dimension ${shownDimension.similarity}`] : []),
     `${width} × ${height} px`,
     ...(rendered ? [plural(rendered.levels, 'level')] : []),
   ];
@@ -1324,7 +1334,7 @@ function linkText(address: string) {
   return article ? `Wikipedia \u203a ${article}` : address.replace(/^https?:\/\//, '');
 }
 
-function updateWallLabel() {
+function updateWallLabel(preview = false) {
   const { info } = state.scene;
   const byline = [info.author, info.date].filter((text) => text !== undefined).join(', ');
   const links = document.createElement('ul');
@@ -1342,7 +1352,7 @@ function updateWallLabel() {
   wallLabel.replaceChildren(
     ...(info.title ? [labelElement('h2', 'wall-label-title', info.title)] : []),
     ...(byline ? [labelElement('p', 'wall-label-byline', byline)] : []),
-    labelElement('p', 'wall-label-medium', describeMedium(state.scene, state.rendered).join('\n')),
+    labelElement('p', 'wall-label-medium', describeMedium(state.scene, state.rendered, preview).join('\n')),
     ...(info.description ? [labelElement('p', 'wall-label-description', info.description)] : []),
     ...(info.links.length > 0 ? [links] : []),
     wallLabelShare,
@@ -2032,7 +2042,7 @@ function startRender(request: RenderRequest) {
         let labelChangedResolution = false;
         if (started) {
           state.rendered = { levels: message.levels };
-          labelChangedResolution = updateWallLabel();
+          labelChangedResolution = updateWallLabel(previewRequests.has(request));
         }
         syncQualityControls();
         const limitReached = started !== null && message.limitReached;

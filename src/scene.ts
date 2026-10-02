@@ -533,7 +533,7 @@ export const viewFrame = ({ x, y }: ViewRanges): ViewFrame => ({
 });
 
 // Where a zoom places a point of the area it copies.
-const zoomMap = (zoom: ZoomElement, view: ViewFrame) => (point: Vec2): Vec2 =>
+export const zoomMap = (zoom: ZoomElement, view: ViewFrame) => (point: Vec2): Vec2 =>
   add(zoom.center, zoomOffset(point, view, zoom.width, zoom.height, zoom.rotation));
 
 // The same zoom transform, described as copying `to` instead of `from`.
@@ -547,7 +547,7 @@ export const reframeZoom = (zoom: ZoomElement, from: ViewFrame, to: ViewFrame): 
 const cross = (origin: Vec2, a: Vec2, b: Vec2) =>
   (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
 
-function convexHull(points: Vec2[]): Vec2[] {
+export function convexHull(points: Vec2[]): Vec2[] {
   const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
   const chain = (ordered: Vec2[]) => ordered.reduce<Vec2[]>((hull, point) => {
     while (hull.length >= 2 && cross(hull[hull.length - 2], hull[hull.length - 1], point) <= 0) {
@@ -914,7 +914,7 @@ type PointPart = CornerName | 'centre' | 'top' | 'bottom' | 'left' | 'right';
 type PointResolver = (value: unknown, label: string) => Vec2 | undefined;
 
 // Signed extents: width and height are negative when an axis runs backwards.
-type ViewFrame = {
+export type ViewFrame = {
   centre: Vec2;
   width: number;
   height: number;
