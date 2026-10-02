@@ -17,6 +17,7 @@ import {
   type Command,
   ViewPlugin,
   type ViewUpdate,
+  tooltips,
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
@@ -59,6 +60,10 @@ const theme = EditorView.theme({
     color: '#f4f4f5',
     border: '1px solid rgba(212, 212, 216, 0.18)',
     borderRadius: '0.4rem',
+    // A width that does not depend on position, so the tooltip is measured
+    // once instead of re-wrapping each time it is moved to fit.
+    width: 'max-content',
+    maxWidth: 'min(16rem, calc(100vw - 1rem))',
   },
 }, { dark: true });
 
@@ -196,6 +201,8 @@ export function createSceneEditor(text: string, onEdit: () => void): SceneEditor
         }),
         sceneLinter,
         lintGutter(),
+        // In the body, tooltips are not clipped by the editor's scroll area.
+        tooltips({ parent: document.body }),
         theme,
         EditorView.editorAttributes.of({ class: 'scene-input' }),
         EditorView.updateListener.of((update) => {
