@@ -65,6 +65,7 @@ function selectRow<T extends string | number>(
   row.className = `select-row ${className}`;
   row.innerHTML = `<span>${label}</span>`;
   const select = document.createElement('select');
+  select.name = className.replace(/-row$/, '');
   for (const [value, text] of choices) {
     const option = document.createElement('option');
     option.value = String(value);
@@ -587,7 +588,6 @@ const qualityControl = selectRow<QualityMode>(
 );
 qualityControl.select.className = 'quality-select';
 qualityControl.select.setAttribute('aria-label', 'Render quality');
-qualityControl.select.addEventListener('click', (event) => event.stopPropagation());
 
 const supersamplingControl = selectRow<number>(
   'supersampling-row',
@@ -614,6 +614,7 @@ function resolutionInput(label: string) {
   caption.textContent = label;
   const input = document.createElement('input');
   input.type = 'number';
+  input.name = label.toLowerCase();
   input.min = '1';
   input.step = '1';
   input.inputMode = 'numeric';
@@ -646,6 +647,7 @@ levelsRow.title = 'How many times the picture repeats inside itself. More levels
 levelsRow.innerHTML = '<span>Levels</span>';
 const levelsSlider = document.createElement('input');
 levelsSlider.type = 'range';
+levelsSlider.name = 'levels';
 levelsSlider.min = '1';
 levelsSlider.max = String(AUTO_LEVELS_POSITION);
 levelsSlider.step = '1';
@@ -690,21 +692,19 @@ extendLevelsButton.className = 'add-level extend-levels';
 extendLevelsButton.textContent = `+${EXTRA_LEVELS_STEP} levels`;
 extendLevelsButton.title = 'Continue the current image with more iterations';
 extendLevelsButton.hidden = true;
-extendLevelsButton.addEventListener('click', (event) => {
-  event.preventDefault();
-  event.stopPropagation();
+extendLevelsButton.addEventListener('click', () => {
   if (!activeRequest && renderOptions().levels === 'auto' && state.resolvedLevels !== null) {
     extraAutoLevels += EXTRA_LEVELS_STEP;
     render();
   }
 });
-customSettingsSummary.append(
-  renderSettingsLabel,
-  levelLimitWarning,
-  textureLimitWarning,
-  extendLevelsButton,
-  qualityControl.select,
-);
+customSettingsSummary.append(renderSettingsLabel);
+// Controls inside a summary are not allowed, so these sit beside its row instead.
+const renderSettingsActions = document.createElement('div');
+renderSettingsActions.className = 'render-settings-actions';
+renderSettingsActions.append(levelLimitWarning, textureLimitWarning, extendLevelsButton, qualityControl.select);
+const renderSettingsGroup = document.createElement('div');
+renderSettingsGroup.className = 'render-settings-group';
 const customSettingsBody = document.createElement('div');
 customSettingsBody.className = 'render-settings-body';
 const qualityDetails = document.createElement('div');
@@ -731,6 +731,7 @@ customSettingsBody.append(
   qualityDetails,
 );
 customSettings.append(customSettingsSummary, customSettingsBody);
+renderSettingsGroup.append(renderSettingsActions, customSettings);
 
 // The collapsed settings header shows what the latest render actually used.
 const setSettingsTitle = (text: string) => {
@@ -780,6 +781,7 @@ editModeRow.innerHTML = '<span>Edit mode</span>';
 
 const editModeToggle = document.createElement('input');
 editModeToggle.type = 'checkbox';
+editModeToggle.name = 'edit-mode';
 editModeRow.append(editModeToggle);
 
 editModeToggle.addEventListener('change', () => {
@@ -792,6 +794,7 @@ exampleRow.className = 'example-row';
 exampleRow.innerHTML = '<span>Example</span>';
 
 const exampleSelect = document.createElement('select');
+exampleSelect.name = 'example';
 const customExampleOption = document.createElement('option');
 customExampleOption.value = '';
 customExampleOption.textContent = 'Custom';
@@ -891,6 +894,7 @@ wrapRow.innerHTML = '<span>Wrap lines</span>';
 
 const wrapToggle = document.createElement('input');
 wrapToggle.type = 'checkbox';
+wrapToggle.name = 'wrap-lines';
 wrapToggle.checked = true;
 wrapRow.append(wrapToggle);
 wrapToggle.addEventListener('change', () => {
@@ -922,6 +926,7 @@ labelRow.innerHTML = '<span>Show label</span>';
 
 const labelToggle = document.createElement('input');
 labelToggle.type = 'checkbox';
+labelToggle.name = 'show-label';
 labelToggle.checked = true;
 labelRow.append(labelToggle);
 labelToggle.addEventListener('change', () => {
@@ -1083,7 +1088,7 @@ window.addEventListener('keydown', (event) => {
 }, { capture: true });
 
 controls.append(
-  customSettings,
+  renderSettingsGroup,
   exampleRow,
   sceneLabelRow,
   sceneEditor.element,
@@ -1345,6 +1350,7 @@ function buildInputPanel() {
     if (input.type === 'slider') {
       const slider = document.createElement('input');
       slider.type = 'range';
+      slider.name = input.name;
       slider.min = String(input.min);
       slider.max = String(input.max);
       slider.step = input.step === undefined ? 'any' : String(input.step);

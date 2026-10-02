@@ -175,11 +175,12 @@ function button(className: string, text: string) {
   return node;
 }
 
-function checkboxRow(label: string, checked: boolean) {
+function checkboxRow(name: string, label: string, checked: boolean) {
   const row = element('label', 'edit-mode-row');
   row.append(element('span', '', label));
   const input = document.createElement('input');
   input.type = 'checkbox';
+  input.name = name;
   input.checked = checked;
   row.append(input);
   return { row, input };
@@ -253,8 +254,9 @@ export function createShareDialog(options: ShareDialogOptions) {
   const sizeRow = element('label', 'select-row');
   sizeRow.append(element('span', '', 'Size'));
   const sizeSelect = document.createElement('select');
+  sizeSelect.name = 'image-size';
   sizeRow.append(sizeSelect);
-  const transparent = checkboxRow('Transparent background', false);
+  const transparent = checkboxRow('transparent', 'Transparent background', false);
   const copyImage = button('apply-scene', 'Copy');
   const downloadImage = button('apply-scene', 'Download');
   const imageButtons = element('div', 'share-buttons');
@@ -264,14 +266,16 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   // The link options are shared by the Link and QR code tabs, and move to
   // whichever of them is shown.
-  const includeInputs = checkboxRow('Include input values', true);
-  const includeSettings = checkboxRow('Include app settings', false);
+  const includeInputs = checkboxRow('include-inputs', 'Include input values', true);
+  const includeSettings = checkboxRow('include-settings', 'Include app settings', false);
   includeSettings.row.title = 'Quality, render settings and whether the label is shown';
   const linkOptions = element('div', 'share-options');
   linkOptions.append(includeInputs.row, includeSettings.row);
 
   // Link tab.
   const linkText = element('textarea', 'share-link-text');
+  linkText.name = 'link';
+  linkText.setAttribute('aria-label', 'Link');
   linkText.readOnly = true;
   linkText.rows = 4;
   linkText.spellcheck = false;
@@ -281,7 +285,7 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   // QR code tab.
   const qrPreview = element('canvas', 'share-preview share-qr');
-  const qrPicture = checkboxRow('Include preview', true);
+  const qrPicture = checkboxRow('qr-preview', 'Include preview', true);
   const copyQr = button('apply-scene', 'Copy');
   const downloadQr = button('apply-scene', 'Download');
   const qrButtons = element('div', 'share-buttons');
@@ -291,6 +295,8 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   // Definition tab.
   const definitionText = element('textarea', 'share-link-text share-definition-text');
+  definitionText.name = 'definition';
+  definitionText.setAttribute('aria-label', 'Definition');
   definitionText.readOnly = true;
   definitionText.rows = 8;
   definitionText.spellcheck = false;
@@ -298,6 +304,8 @@ export function createShareDialog(options: ShareDialogOptions) {
   const openDefinition = button('apply-scene', 'Open file...');
   const definitionFile = document.createElement('input');
   definitionFile.type = 'file';
+  definitionFile.name = 'definition-file';
+  definitionFile.setAttribute('aria-label', 'Definition file');
   definitionFile.accept = '.yaml,.yml,.txt,text/yaml,text/plain';
   definitionFile.hidden = true;
   const definitionButtons = element('div', 'share-buttons');

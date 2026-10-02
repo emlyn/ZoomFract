@@ -540,8 +540,13 @@ canvas {
   opacity: 0.4;
 }
 
+.render-settings-group {
+  --settings-row: 2rem;
+  display: flow-root;
+}
+
 .render-settings summary {
-  width: 100%;
+  min-height: var(--settings-row);
   display: flex;
   align-items: center;
   gap: 0.45rem;
@@ -571,10 +576,18 @@ canvas {
   transform: rotate(90deg);
 }
 
-.render-settings summary .quality-select {
+/* Floated so the summary row, a flex box, narrows to sit beside it. */
+.render-settings-actions {
+  float: right;
+  height: var(--settings-row);
+  display: flex;
+  align-items: center;
+}
+
+.render-settings-actions .quality-select {
   height: 2rem;
   min-width: 7rem;
-  margin-left: auto;
+  margin-left: 0.45rem;
   border: 1px solid rgba(212, 212, 216, 0.18);
   border-radius: 0.6rem;
   background: rgba(63, 63, 66, 0.78);
@@ -1115,9 +1128,12 @@ code {
     min-height: 2.75rem;
   }
 
-  .guide-button,
-  .render-settings summary {
+  .guide-button {
     padding: 0.75rem 0;
+  }
+
+  .render-settings-group {
+    --settings-row: 2.75rem;
   }
 
   .edit-mode-row {
