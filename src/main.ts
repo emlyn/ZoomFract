@@ -1643,6 +1643,8 @@ function showTextureLimit(resolution: OutputResolution, options: QualityOptions)
 // The preset then chooses the independent bitmap resolution for that CSS size.
 function resizeCanvas() {
   const host = canvasHost.getBoundingClientRect();
+  const mobile = !pictureOnly && host.width <= 700;
+  canvasHost.classList.toggle('mobile-artwork', mobile);
   const aspect = outputAspect(state.scene);
   // Alone, the picture drops its border, margin and cards but keeps its padding and background.
   const frame = pictureOnly
@@ -1654,7 +1656,7 @@ function resizeCanvas() {
     .map((side) => `calc(${frame.margin}px + env(safe-area-inset-${side}))`).join(' ');
   const hostStyle = getComputedStyle(canvasHost);
   const inset = (side: 'Top' | 'Right' | 'Bottom' | 'Left') => parseFloat(hostStyle[`padding${side}`]);
-  const availableWidth = Math.max(1, host.width - inset('Left') - inset('Right') - frameSpace);
+  const availableWidth = Math.max(1, canvasHost.clientWidth - inset('Left') - inset('Right') - frameSpace);
   const availableHeight = Math.max(1, host.height - inset('Top') - inset('Bottom') - frameSpace);
   // Cards stack beside the picture and sit side by side underneath it.
   const cards = pictureOnly ? [] : [inputPanel, wallLabel].filter((card) => !card.hidden);
@@ -1663,8 +1665,10 @@ function resizeCanvas() {
   const sideHeight = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetHeight)) + WALL_LABEL_GAP_PX;
   const beside = fitAspect(aspect, availableWidth - sideWidth, availableHeight);
   const below = fitAspect(aspect, availableWidth, availableHeight - sideHeight);
-  const labelBelow = below.width * below.height > beside.width * beside.height;
-  const display = labelBelow ? below : beside;
+  const labelBelow = mobile || below.width * below.height > beside.width * beside.height;
+  const display = mobile
+    ? fitAspect(aspect, availableWidth, availableHeight)
+    : labelBelow ? below : beside;
   const options = renderOptions();
   const resolution = outputResolution(state.scene, display, options);
   showTextureLimit(resolution, options);

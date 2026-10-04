@@ -123,6 +123,35 @@ canvas:focus-visible {
   display: none;
 }
 
+.canvas-host.mobile-artwork {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.mobile-artwork .artwork.label-below {
+  flex: none;
+  width: 100%;
+  margin: auto 0;
+  align-items: center;
+}
+
+.mobile-artwork .canvas-frame {
+  flex: none;
+}
+
+.mobile-artwork .artwork.label-below .artwork-side {
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+}
+
+.mobile-artwork .wall-label {
+  max-width: 100%;
+}
+
 .input-panel {
   display: grid;
   gap: 0.7rem;

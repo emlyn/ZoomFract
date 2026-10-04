@@ -316,6 +316,9 @@ files unless extracting a module clearly reduces complexity.
   Input controls are a matching card, stacked above the label beside the
   frame or to its left below it. Pressing the picture moves the nearest point
   input; drag inputs follow the pointer until release.
+  At widths up to 700 px, the picture, input card and label stack vertically
+  in that order. The artwork host scrolls vertically when they do not fit;
+  picture-only mode keeps its screen-fitting, non-scrolling layout.
 - While inputs change, previews render at Fast quality with 1x supersampling
   and at most 0.5 megapixels, scaled up for display, without progress. A
   running preview finishes before the newest starts instead of restarting
