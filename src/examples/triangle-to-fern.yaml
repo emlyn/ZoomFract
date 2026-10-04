@@ -17,6 +17,9 @@ variables:
   - name: mix
     value: 0
     input: { type: slider, min: 0, max: 1, step: 0.01, label: Triangle to fern }
+  - name: showStem
+    value: true
+    input: { type: checkbox, label: Show stem }
   - name: fernOffsetX
     value: 0.005215
   - name: fernOffsetY
@@ -29,19 +32,19 @@ view:
     y: [-1.2, 1.2]
 
 seed:
-  colour: "#000"
-  opacity: 0.1 * (1 - mix)
+  colour: "rgb(68 * mix, 204 * mix, 68 * mix)"
+  opacity: 0.01
 
 shading:
-  detail: 0.9 - 0.2 * mix
+  detail: 0.7
 
 scene:
   - type: rect
     name: stem
     bottomLeft: [-0.01 + (-0.1 + fernOffsetX) * mix, -1 + fernOffsetY * mix]
     topRight: [0.01 + (-0.1 + fernOffsetX) * mix, -1 + (0.3 + fernOffsetY) * mix]
-    colour: "#4c4"
-    opacity: mix
+    colour: "rgb(68 * mix, 204 * mix, 68 * mix)"
+    opacity: mix * showStem
   - type: zoom
     name: top
     glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }

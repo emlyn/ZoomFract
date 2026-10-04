@@ -47,7 +47,9 @@ const roundValue = (value: number) => Number(value.toPrecision(6));
 
 const inputJson = (value: InputValue) => typeof value === 'number'
   ? roundValue(value)
-  : [roundValue(value.x), roundValue(value.y)];
+  : typeof value === 'boolean'
+    ? value
+    : [roundValue(value.x), roundValue(value.y)];
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -64,7 +66,7 @@ function parseInputs(values: unknown): InputValues {
     invalid('input values');
   }
   return new Map(Object.entries(values).map(([name, value]): [string, InputValue] => {
-    if (typeof value === 'number') {
+    if (typeof value === 'number' || typeof value === 'boolean') {
       return [name, value];
     }
     if (Array.isArray(value) && value.length === 2 && value.every((part) => typeof part === 'number')) {

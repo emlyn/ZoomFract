@@ -372,9 +372,10 @@ export type SceneInfo = {
 // `name.x` and `name.y`. `initial` is the value from the definition.
 export type SceneInput =
   | { type: 'slider'; name: string; label: string; min: number; max: number; step?: number; value: number; initial: number }
-  | { type: 'click' | 'drag'; name: string; label: string; value: Vec2; initial: Vec2 };
+  | { type: 'click' | 'drag'; name: string; label: string; value: Vec2; initial: Vec2 }
+  | { type: 'checkbox'; name: string; label: string; value: boolean; initial: boolean };
 
-export type InputValue = number | Vec2;
+export type InputValue = number | boolean | Vec2;
 export type InputValues = ReadonlyMap<string, InputValue>;
 
 export type SceneDefinition = {
@@ -1865,7 +1866,8 @@ function lazy<T>(label: string, compute: () => T): () => T {
 // Variables with an `input` can also be changed while viewing.
 type InputSpec =
   | { type: 'slider'; label?: string; min: unknown; max: unknown; step: unknown }
-  | { type: 'click' | 'drag'; label?: string };
+  | { type: 'click' | 'drag'; label?: string }
+  | { type: 'checkbox'; label?: string };
 type VariableDefinition = { value: unknown; index: number; input?: InputSpec };
 
 const isPointInput = (input: InputSpec | undefined): input is Extract<InputSpec, { type: 'click' | 'drag' }> =>
@@ -1877,7 +1879,7 @@ function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec
   }
   const record = typeof node === 'string' ? { type: node } : isRecord(node) ? node : undefined;
   if (!record) {
-    throw new PathError(`Variable "${name}" input must be slider, click, drag, or an object with a type`, path);
+    throw new PathError(`Variable "${name}" input must be slider, click, drag, checkbox, or an object with a type`, path);
   }
   const { type, label, min, max, step } = record;
   if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
@@ -1890,7 +1892,7 @@ function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec
     }
     return { type, label, min, max, step };
   }
-  if (type === 'click' || type === 'drag') {
+  if (type === 'click' || type === 'drag' || type === 'checkbox') {
     const unused = Object.entries({ min, max, step }).find(([, value]) => value !== undefined);
     if (unused) {
       throw new PathError(`${type} inputs do not use ${unused[0]}`, [...path, unused[0]]);
@@ -1898,7 +1900,7 @@ function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec
     return { type, label };
   }
   throw new PathError(
-    `Variable "${name}" input type must be slider, click, or drag`,
+    `Variable "${name}" input type must be slider, click, drag, or checkbox`,
     typeof node === 'string' ? path : [...path, 'type'],
   );
 }
@@ -1933,8 +1935,14 @@ function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition
       if (!Array.isArray(value) && !isRecord(value)) {
         throw at('value', `Variable "${name}" value must be a point [x, y]`);
       }
-    } else if (typeof value !== 'number' && typeof value !== 'string') {
-      throw at('value', `Variable "${name}" value must be a number or an expression`);
+    } else if (input?.type === 'checkbox') {
+      if (typeof value !== 'boolean') {
+        throw at('value', `Variable "${name}" value must be true or false`);
+      }
+    } else if (typeof value === 'boolean' && input) {
+      throw at('value', `Variable "${name}" value must be a number or an expression for a ${input.type}`);
+    } else if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'boolean') {
+      throw at('value', `Variable "${name}" value must be a number, an expression, true, or false`);
     }
     definitions.set(name, { value, index, input });
   }));
@@ -2034,6 +2042,18 @@ function defineVariable(
     return {
       cells: [[`${name}.x`, () => current().x], [`${name}.y`, () => current().y]],
       input: () => ({ type: input.type, name, label, value: current(), initial: initial() }),
+    };
+  }
+
+  // true and false are 1 and 0 in expressions.
+  if (typeof definition.value === 'boolean') {
+    const initial = definition.value;
+    const current = () => typeof override === 'boolean' ? override : initial;
+    return {
+      cells: [[name, () => Number(current())]],
+      input: input?.type === 'checkbox'
+        ? () => ({ type: 'checkbox', name, label, value: current(), initial })
+        : undefined,
     };
   }
 

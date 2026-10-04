@@ -1372,13 +1372,16 @@ const formatInputNumber = (value: number) => String(Number(value.toPrecision(4))
 
 const describeInputValue = (input: SceneInput) => input.type === 'slider'
   ? formatInputNumber(input.value)
-  : `(${formatInputNumber(input.value.x)}, ${formatInputNumber(input.value.y)})`;
+  : input.type === 'checkbox'
+    ? ''
+    : `(${formatInputNumber(input.value.x)}, ${formatInputNumber(input.value.y)})`;
 
 type PointInput = Extract<SceneInput, { type: 'click' | 'drag' }>;
-const isPointInput = (input: SceneInput): input is PointInput => input.type !== 'slider';
+const isPointInput = (input: SceneInput): input is PointInput => input.type === 'click' || input.type === 'drag';
 
 const inputReadouts = new Map<string, HTMLOutputElement>();
 const inputSliders = new Map<string, HTMLInputElement>();
+const inputCheckboxes = new Map<string, HTMLInputElement>();
 const inputError = labelElement('p', 'input-error', '');
 const inputReset = document.createElement('button');
 inputReset.type = 'button';
@@ -1392,9 +1395,20 @@ function buildInputPanel() {
   const { inputs } = state.scene;
   inputReadouts.clear();
   inputSliders.clear();
+  inputCheckboxes.clear();
   const rows = inputs.map((input) => {
     const row = document.createElement('label');
     row.className = 'input-control';
+    if (input.type === 'checkbox') {
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.name = input.name;
+      checkbox.addEventListener('change', () => setInputValue(input.name, checkbox.checked, true));
+      inputCheckboxes.set(input.name, checkbox);
+      row.classList.add('input-checkbox');
+      row.append(checkbox, labelElement('span', 'input-name', input.label));
+      return row;
+    }
     const readout = document.createElement('output');
     inputReadouts.set(input.name, readout);
     row.append(labelElement('span', 'input-name', input.label), readout);
@@ -1422,6 +1436,10 @@ function buildInputPanel() {
 
 function refreshInputPanel() {
   state.scene.inputs.forEach((input) => {
+    if (input.type === 'checkbox') {
+      inputCheckboxes.get(input.name)!.checked = input.value;
+      return;
+    }
     inputReadouts.get(input.name)!.textContent = describeInputValue(input);
     const slider = inputSliders.get(input.name);
     if (slider && input.type === 'slider' && Number(slider.value) !== input.value) {

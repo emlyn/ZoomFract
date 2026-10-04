@@ -565,20 +565,28 @@ scene:
     The <em>Triangle to Fern</em> example uses a slider from 0 to 1 to blend two
     pictures. Expressions of the form <code>(1 - mix) * start + mix * end</code>
     interpolate each zoom's scale, translation and rotation. The stem's opacity
-    and length follow <code>mix</code>, while the triangle's seed fades out.
+    and length follow <code>mix</code>. The stem and faint seed change colour
+    from black to green.
     The view stays fixed throughout the transition, with the fern centred.
     Zero-size zoom glows keep fine detail bold, changing from black to green
-    with the slider without extending past the picture's shapes.
+    with the slider without extending past the picture's shapes. A checkbox
+    multiplies the stem's opacity to hide it.
   </p>
   <table>
     <tr><th><code>slider</code></th><td>a number between <code>min</code> and <code>max</code>, with an optional <code>step</code> between values. These may be expressions.</td></tr>
     <tr><th><code>click</code></th><td>a point, moved to wherever the picture is clicked</td></tr>
     <tr><th><code>drag</code></th><td>a point that follows the pointer while the button is held down</td></tr>
+    <tr><th><code>checkbox</code></th><td>a value of <code>true</code> or <code>false</code>, switched by ticking a box</td></tr>
   </table>
   <ul>
     <li>
       A point's value is <code>[x, y]</code> in view coordinates. Use it in expressions as
       <code>apex.x</code> and <code>apex.y</code>.
+    </li>
+    <li>
+      Any variable may be <code>true</code> or <code>false</code>, which count as 1 and 0 in
+      expressions. For example, <code>opacity: mix * showStem</code> hides a shape when
+      <code>showStem</code> is false.
     </li>
     <li>
       With more than one point, pressing the picture moves the nearest one. Write

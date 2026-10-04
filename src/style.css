@@ -186,6 +186,17 @@ canvas:focus-visible {
   accent-color: #52525b;
 }
 
+.input-control.input-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.input-control input[type='checkbox'] {
+  margin: 0;
+  accent-color: #52525b;
+}
+
 .input-hint {
   grid-column: 1 / -1;
   color: #71717a;

@@ -192,7 +192,9 @@ files unless extracting a module clearly reduces complexity.
   sets a number (the definition's value must lie in range; values set while
   viewing are clamped), and `click` or `drag` (string shorthand allowed) set a
   point whose `value` is `[x, y]` and which expressions use as `name.x` and
-  `name.y`. `parseScene(text, inputValues)` replaces input values and returns
+  `name.y`. `checkbox` toggles a variable whose `value` is `true` or `false`;
+  any variable may be boolean, counting as 1 or 0 in expressions.
+  `parseScene(text, inputValues)` replaces input values and returns
   them in `scene.inputs`. Values are kept when the edited definition is
   applied and reset when another definition loads.
 - Expressions may also use dotted view values: `view.left`, `view.right`
