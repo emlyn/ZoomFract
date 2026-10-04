@@ -329,15 +329,14 @@ function parseStopPosition(key: string): ColorStop['at'] {
 
 // Colours are a list spread evenly, or a mapping from hit counts or
 // percentages to colours.
-function parseColorStops(colors: unknown): ColorStop[] {
+function parseColorStops(colors: unknown, variables: Variables): ColorStop[] {
   const path = ['shading', 'colours'];
   const range = `2 to ${MAXIMUM_DENSITY_COLORS}`;
   if (Array.isArray(colors)) {
     if (colors.length < 2 || colors.length > MAXIMUM_DENSITY_COLORS || !colors.every((color) => typeof color === 'string')) {
       throw new Error(`shading colours must be a list of ${range} colours`);
     }
-    colors.forEach((color, index) => atPath([...path, index], () => asColour(color, '')));
-    return evenStops(colors);
+    return evenStops(colors.map((color, index) => atPath([...path, index], () => asColour(color, '', variables))));
   }
   if (!colors || typeof colors !== 'object') {
     throw new Error(`shading colours must be a list or mapping of ${range} colours`);
@@ -350,7 +349,7 @@ function parseColorStops(colors: unknown): ColorStop[] {
     if (typeof color !== 'string') {
       throw new Error(`shading colours position "${key}" must have a colour`);
     }
-    return { at: parseStopPosition(key), color: asColour(color, '') };
+    return { at: parseStopPosition(key), color: asColour(color, '', variables) };
   }));
 }
 
@@ -510,14 +509,42 @@ function isColour(value: string): boolean {
   return parsed('#000') === parsed('#fff');
 }
 
-function asColour(value: unknown, fallback: string): string {
+function asColour(value: unknown, fallback: string, variables: Variables): string {
   if (value === undefined) {
     return fallback;
   }
-  if (typeof value !== 'string' || !isColour(value)) {
-    throw new Error(`${JSON.stringify(value)} is not a colour; use a name, #rgb, #rrggbbaa, rgb(), hsl() or similar`);
+  if (typeof value === 'string' && isColour(value)) {
+    return value;
   }
-  return value;
+  const rgb = typeof value === 'string' ? /^rgb\((.*)\)$/is.exec(value.trim()) : null;
+  if (rgb) {
+    const channels: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let index = 0; index < rgb[1].length; index += 1) {
+      const character = rgb[1][index];
+      if (character === '(') depth += 1;
+      if (character === ')') depth -= 1;
+      if (character === ',' && depth === 0) {
+        channels.push(rgb[1].slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+    channels.push(rgb[1].slice(start).trim());
+    if (channels.length !== 3) {
+      throw new Error('rgb() expressions need three comma-separated channels');
+    }
+    const resolved = channels.map((channel) => {
+      const percent = channel.endsWith('%');
+      const number = evaluateExpression(percent ? channel.slice(0, -1) : channel, variables);
+      return percent ? `${number}%` : String(number);
+    });
+    const colour = `rgb(${resolved.join(', ')})`;
+    if (isColour(colour)) {
+      return colour;
+    }
+  }
+  throw new Error(`${JSON.stringify(value)} is not a colour; use a name, #rgb, #rrggbbaa, rgb(), hsl() or similar`);
 }
 
 // Grows an axis by the overflow on both sides, keeping its direction.
@@ -1393,7 +1420,7 @@ function parseGlow(
     throw new PathError(`${elementName} glow softness must be from 0 to 1`, [...path, 'softness']);
   }
   return {
-    color: atPath([...path, 'colour'], () => asColour(colour, '')),
+    color: atPath([...path, 'colour'], () => asColour(colour, '', variables)),
     opacity: parseOpacity(value, DEFAULT_GLOW_OPACITY, variables, path),
     size,
     softness,
@@ -1432,7 +1459,7 @@ function parseRectElement(
   }
   const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables, path);
   const opacity = parseOpacity(rect, 1, variables, path);
-  const color = at('colour', () => asColour(rect.colour, '#000'));
+  const color = at('colour', () => asColour(rect.colour, '#000', variables));
 
   return {
     kind: 'rect',
@@ -1471,7 +1498,7 @@ function parseShapeStyle<K extends 'circle' | 'polygon'>(
   return {
     kind,
     name,
-    color: atPath([...path, 'colour'], () => asColour(record.colour, '#000')),
+    color: atPath([...path, 'colour'], () => asColour(record.colour, '#000', variables)),
     opacity: parseOpacity(record, 1, variables, path),
     weight,
   };
@@ -1960,7 +1987,7 @@ function parseShading(node: unknown, variables: Variables): Shading {
     scale: scale ?? 'log',
     colors: colours === undefined
       ? evenStops(DEFAULT_DENSITY_COLORS)
-      : atPath(['shading', 'colours'], () => parseColorStops(colours)),
+      : atPath(['shading', 'colours'], () => parseColorStops(colours, variables)),
   };
 }
 
@@ -2249,9 +2276,9 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
     const frame: FrameDefinition = {
       width: frameSize('width'),
       radius: frameSize('radius'),
-      color: atPath(['frame', 'colour'], () => asColour(frameNode.colour, fallback.frame.color)),
-      wall: atPath(['frame', 'wall'], () => asColour(frameNode.wall, fallback.frame.wall)),
-      background: atPath(['frame', 'background'], () => asColour(frameNode.background, fallback.frame.background)),
+      color: atPath(['frame', 'colour'], () => asColour(frameNode.colour, fallback.frame.color, variables)),
+      wall: atPath(['frame', 'wall'], () => asColour(frameNode.wall, fallback.frame.wall, variables)),
+      background: atPath(['frame', 'background'], () => asColour(frameNode.background, fallback.frame.background, variables)),
       padding: frameSize('padding'),
       margin: frameSize('margin'),
     };
@@ -2292,8 +2319,8 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
       frame,
       seed: {
         color: typeof sceneRoot.seed === 'string'
-          ? atPath(['seed'], () => asColour(sceneRoot.seed, fallback.seed.color))
-          : atPath(['seed', 'colour'], () => asColour(seedNode.colour, fallback.seed.color)),
+          ? atPath(['seed'], () => asColour(sceneRoot.seed, fallback.seed.color, variables))
+          : atPath(['seed', 'colour'], () => asColour(seedNode.colour, fallback.seed.color, variables)),
         opacity: parseOpacity(seedNode, fallback.seed.opacity, variables, ['seed']),
       },
       view: {

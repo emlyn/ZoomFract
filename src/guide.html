@@ -261,6 +261,12 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     transparency combines with <code>opacity</code>.
   </p>
   <p>
+    The three comma-separated channels in <code>rgb()</code> may also be
+    expressions, such as <code>rgb(68 * mix, 204 * mix, 68 * mix)</code>.
+    Channels use numbers from 0 to 255, or expressions ending in
+    <code>%</code> for percentages. Other colour functions use ordinary CSS syntax.
+  </p>
+  <p>
     Anywhere <code>opacity</code> is allowed you can write <code>transparency</code>
     instead, which is 1 minus the opacity (use one or the other). Both take a number
     from 0 to 1 or a percentage, so <code>opacity: 80%</code> and
@@ -554,6 +560,15 @@ scene:
     align:
       - [base.bottomLeft, base.topLeft]
       - [base.bottomRight, [apex.x, apex.y]]</code></pre>
+  <p>
+    The <em>Triangle to Fern</em> example uses a slider from 0 to 1 to blend two
+    pictures. Expressions of the form <code>(1 - mix) * start + mix * end</code>
+    interpolate each zoom's scale, translation and rotation. The stem's opacity
+    and length follow <code>mix</code>, while the triangle's seed fades out.
+    The view stays fixed throughout the transition, with the fern centred.
+    Zero-size zoom glows keep fine detail bold, changing from black to green
+    with the slider without extending past the picture's shapes.
+  </p>
   <table>
     <tr><th><code>slider</code></th><td>a number between <code>min</code> and <code>max</code>, with an optional <code>step</code> between values. These may be expressions.</td></tr>
     <tr><th><code>click</code></th><td>a point, moved to wherever the picture is clicked</td></tr>

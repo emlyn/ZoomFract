@@ -220,6 +220,9 @@ files unless extracting a module clearly reduces complexity.
   functions such as `rgb()`, `hsl()`, `hwb()`, `lab()` and `oklch()`. The
   parser validates each against a canvas, so unknown colours are errors.
   Colour alpha multiplies with opacity.
+  Comma-separated `rgb()` channels also accept numeric expressions (including
+  variables, nested function calls and trailing percentages); resolve them in
+  `asColour` before canvas validation. All colour settings use this helper.
 - Wherever `opacity` is accepted (items, glows, seed), `transparency`
   (1 - opacity) may be used instead, but not both. Either may be a number
   from 0 to 1, an expression, or a percentage such as `40%`; values are

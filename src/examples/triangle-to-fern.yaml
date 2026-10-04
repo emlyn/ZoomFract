@@ -1,0 +1,74 @@
+info:
+  title: Triangle to Fern
+  author: Emlyn Corrin
+  date: 2026
+  description: Move the slider from the Sierpinski triangle to the fern. The three copies change size, position and rotation while the stem grows and fades in.
+
+frame:
+  width: 12
+  radius: 6
+  colour: "#444"
+  wall: "#ddd"
+  background: "#fff"
+  padding: 12
+  margin: 24
+
+variables:
+  - name: mix
+    value: 0
+    input: { type: slider, min: 0, max: 1, step: 0.01, label: Triangle to fern }
+  - name: fernOffsetX
+    value: 0.005215
+  - name: fernOffsetY
+    value: 0.07821
+
+view:
+  aspect: auto
+  coordinates:
+    x: [-2.4/sqrt(3), 2.4/sqrt(3)]
+    y: [-1.2, 1.2]
+
+seed:
+  colour: "#000"
+  opacity: 0.1 * (1 - mix)
+
+shading:
+  detail: 0.9 - 0.2 * mix
+
+scene:
+  - type: rect
+    name: stem
+    bottomLeft: [-0.01 + (-0.1 + fernOffsetX) * mix, -1 + fernOffsetY * mix]
+    topRight: [0.01 + (-0.1 + fernOffsetX) * mix, -1 + (0.3 + fernOffsetY) * mix]
+    colour: "#4c4"
+    opacity: mix
+  - type: zoom
+    name: top
+    glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }
+    scale: 0.5 + 0.36 * mix
+    rotation: 4 * mix
+    align:
+      from: [0, 0]
+      to:
+        - mix * (-0.11 + fernOffsetX + 0.86 * ((0.11 - fernOffsetX) * cos(4*pi/180) + (1 - fernOffsetY) * sin(4*pi/180)))
+        - (1 - mix) * 0.5 + mix * (-0.7 + fernOffsetY + 0.86 * ((1 - fernOffsetY) * cos(4*pi/180) - (0.11 - fernOffsetX) * sin(4*pi/180)))
+  - type: zoom
+    name: left
+    glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }
+    scale: 0.5 - 0.18 * mix
+    rotation: -80 * mix
+    align:
+      from: [0, 0]
+      to:
+        - -(1 - mix)/sqrt(3) + mix * (-0.11 + fernOffsetX + 0.32 * ((0.1 - fernOffsetX) * cos(80*pi/180) - (1 - fernOffsetY) * sin(80*pi/180)))
+        - -(1 - mix) * 0.5 + mix * (-0.85 + fernOffsetY + 0.32 * ((0.1 - fernOffsetX) * sin(80*pi/180) + (1 - fernOffsetY) * cos(80*pi/180)))
+  - type: zoom
+    name: right
+    glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }
+    scale: 0.5 - 0.18 * mix
+    rotation: 80 * mix
+    align:
+      from: [0, 0]
+      to:
+        - (1 - mix)/sqrt(3) + mix * (-0.1 + fernOffsetX + 0.32 * ((0.1 - fernOffsetX) * cos(80*pi/180) + (1 - fernOffsetY) * sin(80*pi/180)))
+        - -(1 - mix) * 0.5 + mix * (-0.7 + fernOffsetY + 0.32 * (-(0.1 - fernOffsetX) * sin(80*pi/180) + (1 - fernOffsetY) * cos(80*pi/180)))
