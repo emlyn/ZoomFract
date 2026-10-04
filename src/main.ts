@@ -369,6 +369,9 @@ let pictureGestured = false;
 const picturePointers = new Map<number, Vec2>();
 let pictureGesture: { zoom: PictureZoom; origin: Vec2; centre: Vec2; spread: number } | null = null;
 
+const isInInputPanel = (event: Event) =>
+  event.target instanceof Element && inputPanel.contains(event.target);
+
 const midpoint = (points: Vec2[]): Vec2 => ({
   x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
   y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
@@ -415,7 +418,7 @@ function startPictureGesture() {
 }
 
 canvasHost.addEventListener('pointerdown', (event) => {
-  if (!pictureOnly || event.pointerType === 'mouse') {
+  if (!pictureOnly || event.pointerType === 'mouse' || isInInputPanel(event)) {
     return;
   }
   if (picturePointers.size === 0) {
@@ -462,7 +465,7 @@ canvasHost.addEventListener('pointercancel', endPicturePointer);
 // Scrolling down zooms in and up zooms out, about the mouse.
 const WHEEL_ZOOM_PER_PIXEL = 0.002;
 canvasHost.addEventListener('wheel', (event) => {
-  if (!pictureOnly) {
+  if (!pictureOnly || isInInputPanel(event)) {
     return;
   }
   event.preventDefault();
@@ -546,7 +549,7 @@ document.addEventListener('fullscreenchange', () => {
 
 canvasHost.addEventListener('click', (event) => {
   if (pictureOnly) {
-    if (!pictureGestured) {
+    if (!pictureGestured && !isInInputPanel(event)) {
       setPictureOnly(false);
     }
     return;
@@ -1664,9 +1667,11 @@ function resizeCanvas() {
   const mobile = !pictureOnly && host.width <= 700;
   canvasHost.classList.toggle('mobile-artwork', mobile);
   const aspect = outputAspect(state.scene);
-  // Alone, the picture drops its border, margin and cards but keeps its padding and background.
+  // Alone, the picture drops its border, margin, frame and label but keeps its
+  // padding, background and any inputs, which need a little room from the edge.
+  const showInputs = !inputPanel.hidden;
   const frame = pictureOnly
-    ? { ...state.scene.frame, width: 0, margin: 0, radius: 0, wall: state.scene.frame.background }
+    ? { ...state.scene.frame, width: 0, margin: showInputs ? WALL_LABEL_GAP_PX / 2 : 0, radius: 0, wall: state.scene.frame.background }
     : state.scene.frame;
   const frameSpace = 2 * (frame.width + frame.padding);
   // Notched phones add safe-area insets to the margin.
@@ -1677,7 +1682,7 @@ function resizeCanvas() {
   const availableWidth = Math.max(1, canvasHost.clientWidth - inset('Left') - inset('Right') - frameSpace);
   const availableHeight = Math.max(1, host.height - inset('Top') - inset('Bottom') - frameSpace);
   // Cards stack beside the picture and sit side by side underneath it.
-  const cards = pictureOnly ? [] : [inputPanel, wallLabel].filter((card) => !card.hidden);
+  const cards = (pictureOnly ? [inputPanel] : [inputPanel, wallLabel]).filter((card) => !card.hidden);
   artworkSide.hidden = cards.length === 0;
   const sideWidth = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetWidth)) + WALL_LABEL_GAP_PX;
   const sideHeight = cards.length === 0 ? 0 : Math.max(...cards.map((card) => card.offsetHeight)) + WALL_LABEL_GAP_PX;

@@ -486,9 +486,10 @@ files unless extracting a module clearly reduces complexity.
   picture or its cards) reveals or hides it, and it fades after 3 s if
   unused. Reopening reverses the transition.
 - Tapping or clicking the picture (not when it has point inputs) shows
-  it alone: no border, margin, cards or toggle, filling the window (and the
+  it alone: no border, margin, label or toggle, filling the window (and the
   screen, where fullscreen is allowed) on the frame background, keeping the
-  frame padding around it. There,
+  frame padding around it. An input card stays beside or below it, as on
+  the wall, with a small margin; using it never exits or pans. There,
   touch pinches zoom (up to 8x) and drags pan, and scrolling down zooms in
   (up zooms out) about the mouse, via a CSS transform on the frame. It is
   clamped to keep covering the on-screen area it fills unzoomed, so zooming
