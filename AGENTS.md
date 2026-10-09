@@ -37,10 +37,12 @@ Do not commit generated or local artifacts:
 ## Repository layout
 
 - `src/main.ts`: UI creation, definition loading, render-worker orchestration,
-  progress, and edit-mode outlines on the display canvas.
+  progress, and edit-mode outlines on a separate transparent overlay canvas.
 - `src/scene.ts`: scene types, YAML parsing, error locations, and geometry
   resolution.
 - `src/editor.ts`: CodeMirror definition editor with inline diagnostics.
+- `src/definition-form.ts`: primary graphical definition editor, using YAML
+  document nodes so expressions, references and comments survive form edits.
 - `src/share.ts`: shared-link encoding, loaded on demand with its dictionary.
 - `src/share-dialog.ts`: the Share dialog for images, links, QR codes,
   definition files and PowerPoint files.
@@ -466,11 +468,16 @@ files unless extracting a module clearly reduces complexity.
   supersampling, mip generation, and texture size all compound.
   Working images are limited by both the device texture size and a
   96-million-pixel practical allocation budget (Print at 16:9 fits).
-- Edit mode is an application setting, not scene syntax. It fades top-level
-  zoom contents and outlines each zoom, marking its top-left corner and any
-  `align` target points. Levels used for recursion must stay unfaded, so only
-  the final displayed level is faded, and outlines are drawn on the display
-  canvas.
+- Edit mode follows expanded items in the Visual editor, not a checkbox or
+  scene syntax. The expanded Scene items heading holds a compact + menu.
+  Expanded items get outlines on a separate transparent, pointer-transparent
+  overlay, marking their top-left corner and any `align` target points.
+  Selection changes never redraw or fade the artwork or affect worker requests.
+  The overlay follows display resizing and picture transforms and stays out of
+  captures and exports.
+  When declared view and output bounds differ, selected zooms show the
+  transformed declared view dashed and the transformed full canvas dotted in
+  the same colour; the corner marker stays on the declared view.
 
 ## Panel behaviour
 
@@ -506,7 +513,13 @@ files unless extracting a module clearly reduces complexity.
   When the scene has point inputs, arrows on the focused canvas move the
   last-pressed one (1% of the view, Shift 10%) and Space picks the next.
 - The toggle has a constant label with `aria-expanded`. The wall label has a
-  share button in its top-right corner.
+  share button in its top-right corner. The panel header has a matching share
+  icon beside the close control instead of a full-width Share button.
+  Show label is an app setting inside the Visual editor's Frame and wall
+  section, not a scene definition key.
+  Render quality sits with the Visual definition sections and above the YAML
+  editor in YAML mode; the same controls move between them, retaining their
+  settings and disclosure state. Quality stays out of scene syntax.
 - Share dialog tabs use a roving tabindex: one Tab stop, arrows and
   Home/End move between tabs.
 - `viewport-fit=cover` lets the page reach under notches; the toggle,
@@ -565,6 +578,15 @@ files unless extracting a module clearly reduces complexity.
   visible rect or glow, PowerPoint's repeated cache updates can fade the picture out. Colours are normalised by drawing them to a 1x1
   canvas.
 - Keep the YAML editor monospace and tall enough to show useful context.
+- Visual is the default definition editor; YAML is the secondary view of the
+  same draft. Visual changes auto-apply after 500 ms; YAML waits for Apply or
+  switching back to Visual. Invalid drafts retain the last valid picture.
+  Collapsible sections edit every top-level setting, including variables and view.
+  Scene cards have subtle type-specific tints and arrow/bin controls in their
+  headings. Headings drag via mouse/touch with a horizontal insertion marker.
+  Cards expand, add/remove and reorder via headings, buttons or
+  Alt+Up/Down on their headings. Form edits have Undo/Redo. Do not resolve
+  expressions into numbers or discard unsupported settings when switching modes.
 - Editor wrapping is on by default with a "Wrap lines" toggle. Long unbroken
   runs such as URLs may break at any character; prose wraps between words.
 - Blocks and list items can be folded from the gutter or with Ctrl+Shift+[ / ].

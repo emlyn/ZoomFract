@@ -98,7 +98,7 @@ function render(request: RenderRequest) {
   try {
     const settings = resolveRenderSettings(request.scene, request.options, request.additionalLevels);
     post({ type: 'start', settings });
-    const result = renderWebgl(request.scene, settings, request.editMode, frameCallbacks);
+    const result = renderWebgl(request.scene, settings, frameCallbacks);
     const { outcome } = result;
     const milliseconds = performance.now() - startedAt;
     session = {

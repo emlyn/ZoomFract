@@ -41,7 +41,6 @@ export type RenderSettings = {
 export type RenderRequest = {
   scene: ResolvedSceneDefinition;
   options: RenderOptions;
-  editMode: boolean;
   // Extra generations requested after automatic levels hit their limit.
   additionalLevels?: number;
   // Why WebGL2 must not be used, once the GPU has stopped responding.
@@ -100,8 +99,8 @@ export type RenderResult = {
 
 // Requests with equal keys differ only in levels, so a render can continue
 // from an earlier one with fewer fixed levels.
-export const continuationKey = ({ scene, options, editMode }: RenderRequest) =>
-  JSON.stringify([scene, options.supersampling, options.recursionDepth, editMode]);
+export const continuationKey = ({ scene, options }: RenderRequest) =>
+  JSON.stringify([scene, options.supersampling, options.recursionDepth]);
 
 export const canContinue = (from: RenderRequest, to: RenderRequest) =>
   continuationKey(from) === continuationKey(to)
@@ -114,7 +113,6 @@ export const canContinue = (from: RenderRequest, to: RenderRequest) =>
       && (to.additionalLevels ?? 0) > (from.additionalLevels ?? 0))
   );
 
-export const EDIT_MODE_ZOOM_OPACITY = 0.6;
 
 export const MAXIMUM_LEVELS = 256;
 export const EXTRA_LEVELS_STEP = 256;

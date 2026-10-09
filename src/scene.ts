@@ -1075,7 +1075,7 @@ function isPointLike(value: unknown, variables: Variables): boolean {
   if (Array.isArray(value)) {
     return value.length === 2 && value.every((part) => isNumeric(part, variables));
   }
-  return Boolean(value) && typeof value === 'object';
+  return isRecord(value) && 'x' in value && 'y' in value;
 }
 
 function parseAlignPairs(

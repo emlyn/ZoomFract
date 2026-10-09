@@ -25,7 +25,8 @@
 <section id="guide-overview">
   <h3>Overview</h3>
   <p>
-    A definition is written in <a href="https://yaml.org" target="_blank" rel="noreferrer">YAML</a>.
+    Edit a definition with the <em>Visual</em> forms, or write it in
+    <a href="https://yaml.org" target="_blank" rel="noreferrer">YAML</a>.
     It describes a picture made of shapes, plus <em>zooms</em>: smaller copies of the
     whole picture placed inside itself. Each copy contains its own copies, and so on,
     which makes a fractal.
@@ -52,9 +53,9 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     or unknown setting is a mistake, and the message suggests the closest known name.
   </p>
   <p>
-    Mistakes are underlined in the editor as you type; hover over one to see what is
-    wrong. When you apply a definition with a mistake, the message is also shown in red
-    under the buttons, and nothing is drawn until it is fixed.
+    Mistakes are shown in red, and the last valid picture stays visible while you
+    repair them. YAML also underlines mistakes as you type; hover over one to see
+    what is wrong.
   </p>
   <p>
     Automatic quality renders enough levels for the smallest visible details, and keeps
@@ -83,6 +84,44 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
 
 <section id="guide-editor">
   <h3>Editor</h3>
+  <p>
+    <em>Visual</em> is the default editor. Expand a section to edit picture information,
+    frame and wall, view, seed, shading, or variables. Use <em>Add setting</em> for
+    optional settings; removing a setting restores its normal default. Number fields
+    accept expressions, including variables. Colour fields accept CSS colours and
+    expressions in <code>rgb()</code>, just like YAML.
+  </p>
+  <p>
+    Render quality appears with the Visual sections, or above the YAML editor.
+    It is still an app setting, not part of the saved YAML definition.
+  </p>
+  <p>
+    In <em>Scene items</em>, use the <em>+</em> menu on the heading to add a rectangle, circle,
+    polygon or zoom. Click an item's heading to expand its settings. Drag its
+    heading to change the drawing order; a horizontal line shows where it will be
+    inserted. The arrows and bin on the right of the heading move or delete the item.
+    Alt+Up and Alt+Down also reorder an item while its heading has focus.
+    Later items draw on top of earlier ones. <em>Undo</em> and <em>Redo</em> can
+    restore removed settings and items.
+  </p>
+  <p>
+    Expanding an item shows its outline and any zoom alignment points on a
+    transparent overlay. This does not redraw or fade the picture, and the
+    overlay is not included in shared images or exports.
+    When overflow makes the canvas differ from the declared view, a zoom has
+    a dashed outline for its copy of the declared view and a same-colour dotted
+    outline for its copy of the whole canvas.
+    Closing the item, closing Scene items or switching to YAML removes the highlight.
+  </p>
+  <p>
+    Visual edits update the picture after a short pause. The <em>Visual</em> and
+    <em>YAML</em> tabs share one draft, including expressions, references and comments.
+    YAML edits wait for <em>Apply scene</em> or Ctrl+Enter, or are applied when
+    switching back to Visual. If YAML has a syntax error, repair it in the YAML
+    tab before using the forms. Neither mode replaces the last valid picture with
+    an invalid definition.
+  </p>
+  <p><strong>YAML shortcuts</strong></p>
   <p>
     Click the arrow beside a line number to fold a block, such as <code>info</code> or
     one scene item, and focus on the rest. Untick <em>Wrap lines</em> to scroll long
@@ -137,7 +176,7 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
       would be if no copies overlapped. For a picture of a 3D fractal, such as the Menger
       sponge, that is usually the dimension of the 3D shape itself.
     </li>
-    <li>The label goes beside the picture, or underneath when that leaves more room. Turn it off with <em>Show label</em>.</li>
+    <li>The label goes beside the picture, or underneath when that leaves more room. Turn it off with <em>Show label</em> in <em>Frame and wall</em>.</li>
     <li>On narrow screens, input controls go below the picture and above the label. Scroll vertically to reach the cards when they do not fit on screen.</li>
     <li>For built-in examples, the title and description also appear in the example list.</li>
   </ul>
@@ -633,7 +672,7 @@ scene:
 
 <section id="guide-sharing">
   <h3>Sharing</h3>
-  <p><em>Share</em> opens a window with five tabs:</p>
+  <p>The share icon at the top of the settings panel or on the picture label opens a window with five tabs:</p>
   <ul>
     <li>
       <strong>Image</strong> copies or downloads the picture as a PNG, at full size or
@@ -689,7 +728,6 @@ scene:
     <tr><th>S</th><td>open Share</td></tr>
     <tr><th>?</th><td>open or close this guide</td></tr>
     <tr><th>L</th><td>show or hide the wall label</td></tr>
-    <tr><th>E</th><td>turn edit mode on or off</td></tr>
     <tr><th>+, -</th><td>switch to High quality or Fast</td></tr>
     <tr><th>Ctrl+Enter</th><td>apply the definition</td></tr>
     <tr><th>Ctrl+S</th><td>download the applied definition as a YAML file</td></tr>

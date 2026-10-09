@@ -71,6 +71,19 @@ textarea {
   overflow: hidden;
 }
 
+.canvas-surface {
+  position: relative;
+  display: grid;
+}
+
+.edit-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .picture-only .canvas-frame {
   box-shadow: none;
   transform-origin: 0 0;
@@ -498,6 +511,46 @@ canvas {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.5rem;
+  padding-right: 2.6rem;
+}
+
+.panel-share {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: #a1a1aa;
+  cursor: pointer;
+}
+
+.panel-share:hover,
+.panel-share:focus-visible {
+  color: #fafafa;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.panel-share:focus-visible {
+  outline: 2px solid #60a5fa;
+}
+
+.panel-share svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.definition-section-body > .edit-mode-row {
+  margin-bottom: 0.75rem;
 }
 
 .panel-header h1 {
@@ -925,6 +978,354 @@ canvas {
   font-weight: 500;
   white-space: nowrap;
   color: #e4e4e7;
+}
+
+.definition-modes {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.2rem;
+  background: #27272a;
+  border-radius: 0.6rem;
+}
+
+.definition-modes button {
+  flex: 1;
+  padding: 0.4rem;
+  border: 0;
+  border-radius: 0.4rem;
+  color: #a1a1aa;
+  background: transparent;
+  cursor: pointer;
+}
+
+.definition-modes button[aria-selected='true'] {
+  color: #fafafa;
+  background: #52525b;
+}
+
+.definition-form {
+  font-size: 0.85rem;
+  color: #e4e4e7;
+}
+
+.definition-form[hidden],
+.definition-yaml[hidden],
+.controls > [hidden] {
+  display: none;
+}
+
+.definition-history,
+.definition-item-tools,
+.definition-field-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.definition-history {
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+.definition-form button,
+.definition-form select,
+.definition-form input,
+.definition-form textarea {
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid #52525b;
+  border-radius: 0.35rem;
+  color: #f4f4f5;
+  background: #27272a;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
+
+.definition-form input:not([type='checkbox']),
+.definition-form textarea,
+.definition-form select {
+  width: 100%;
+}
+
+.definition-form textarea {
+  resize: vertical;
+}
+
+.definition-form button,
+.definition-form select {
+  cursor: pointer;
+}
+
+.definition-form button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.definition-form :focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.definition-section {
+  margin-bottom: 0.5rem;
+  border: 1px solid #3f3f46;
+  border-radius: 0.5rem;
+  background: rgba(39, 39, 42, 0.35);
+}
+
+.definition-form > .render-settings-group {
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #3f3f46;
+  border-radius: 0.5rem;
+  background: rgba(39, 39, 42, 0.35);
+}
+
+.definition-form .render-settings summary {
+  color: #e4e4e7;
+  font-size: 0.85rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.definition-form .render-settings-actions .quality-select {
+  width: auto;
+  min-width: 0;
+  max-width: 8rem;
+}
+
+.definition-form .resolution-row input {
+  width: 7rem;
+}
+
+.definition-yaml > .render-settings-group {
+  margin-bottom: 0.75rem;
+}
+
+.definition-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.65rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  list-style: none;
+}
+
+.definition-section > summary::before {
+  flex: none;
+  width: 0.75rem;
+  content: '\25b6';
+  color: #a1a1aa;
+  font-size: 0.65rem;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.definition-section[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.definition-section > summary::marker {
+  content: '';
+}
+
+.definition-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.definition-section[open] > summary {
+  border-bottom: 1px solid #3f3f46;
+}
+
+.definition-section-body {
+  padding: 0.6rem;
+}
+
+.definition-value {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.definition-field {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+
+.definition-field-heading {
+  justify-content: space-between;
+}
+
+.definition-form .definition-remove {
+  padding: 0.15rem 0.3rem;
+  color: #a1a1aa;
+  background: transparent;
+  font-size: 0.75rem;
+  border-color: transparent;
+}
+
+.definition-remove:hover {
+  color: #fca5a5;
+}
+
+.definition-list-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.2rem;
+  align-items: start;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #3f3f46;
+}
+
+.definition-item {
+  --item-tint: 161, 161, 170;
+  margin-top: 0.6rem;
+  border-color: rgba(var(--item-tint), 0.3);
+  background: rgba(var(--item-tint), 0.07);
+}
+
+.definition-scene-section > summary > span {
+  flex: 1;
+}
+
+.definition-form .definition-add-item {
+  width: 2.5rem;
+  height: 1.9rem;
+  padding: 0 0.15rem 0 0.35rem;
+  text-align: left;
+  line-height: normal;
+}
+
+.definition-scene-section:not([open]) .definition-add-item {
+  display: none;
+}
+
+.definition-add-item option:not(:first-child) {
+  color: rgb(var(--item-tint));
+  background: #27272a;
+}
+
+.definition-item-rect {
+  --item-tint: 147, 197, 253;
+}
+
+.definition-item-circle {
+  --item-tint: 196, 181, 253;
+}
+
+.definition-item-polygon {
+  --item-tint: 253, 211, 141;
+}
+
+.definition-item-zoom {
+  --item-tint: 134, 239, 172;
+}
+
+.definition-item > summary {
+  cursor: grab;
+  touch-action: none;
+  background: rgba(var(--item-tint), 0.06);
+}
+
+.definition-item-caption {
+  flex: 1;
+  min-width: 0;
+}
+
+.definition-item-tools {
+  flex: none;
+  gap: 0.05rem;
+}
+
+.definition-form .definition-item-action {
+  display: grid;
+  place-items: center;
+  padding: 0.15rem;
+  width: 1.5rem;
+  height: 1.7rem;
+  border-color: transparent;
+  background: transparent;
+  color: #b8b8c0;
+}
+
+.definition-item-action svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.definition-item-action:hover:not(:disabled) {
+  background: rgba(var(--item-tint), 0.15);
+  color: #fafafa;
+}
+
+.definition-scene-list {
+  position: relative;
+}
+
+.definition-insertion-line {
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  height: 2px;
+  background: #93c5fd;
+  pointer-events: none;
+  z-index: 1;
+  box-shadow: 0 0 3px rgba(147, 197, 253, 0.4);
+}
+
+.definition-stop-entry {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.definition-coordinate-label {
+  padding-top: 0.35rem;
+  color: #a1a1aa;
+}
+
+.definition-colour-value {
+  grid-template-columns: minmax(0, 1fr) 2.5rem;
+}
+
+.definition-form .definition-colour {
+  padding: 0.15rem;
+  height: 2rem;
+}
+
+.definition-hint {
+  margin: 0 0 0.5rem;
+  color: #a1a1aa;
+}
+
+.definition-error {
+  color: #fca5a5;
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .panel-share {
+    width: 44px;
+    height: 44px;
+  }
+
+  .definition-form .definition-item-action {
+    width: 32px;
+    height: 44px;
+  }
+
+  .definition-form button,
+  .definition-form select,
+  .definition-form input:not([type='checkbox']),
+  .definition-section > summary,
+  .definition-modes button {
+    min-height: 44px;
+  }
 }
 
 .scene-input {

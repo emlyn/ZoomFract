@@ -7,7 +7,6 @@ import {
 } from '../scene';
 import {
   MAX_WEBGL_WORKING_PIXELS,
-  EDIT_MODE_ZOOM_OPACITY,
   GPU_LOST_MESSAGE,
   type FrameCallbacks,
   type RenderOutcome,
@@ -616,7 +615,6 @@ function countPercentile(values: Float32Array, fraction: number): number {
 export function renderWebgl(
   scene: ResolvedSceneDefinition,
   settings: RenderSettings,
-  editMode: boolean,
   callbacks: FrameCallbacks,
 ): RenderResult {
   const { width, height } = scene.view.resolution;
@@ -629,7 +627,7 @@ export function renderWebgl(
   // Chrome keeps only a few contexts per page and drops the oldest, so a
   // failed render releases its context straight away.
   try {
-    return drawWebgl(current, scene, settings, editMode, callbacks);
+    return drawWebgl(current, scene, settings, callbacks);
   } catch (error) {
     current.gl.getExtension('WEBGL_lose_context')?.loseContext();
     gpu = null;
@@ -641,7 +639,6 @@ function drawWebgl(
   gpu: Gpu,
   scene: ResolvedSceneDefinition,
   settings: RenderSettings,
-  editMode: boolean,
   callbacks: FrameCallbacks,
 ): RenderResult {
   const { gl, output } = gpu;
@@ -1138,16 +1135,6 @@ function drawWebgl(
     uniform: false,
     budget: 0,
     minimumZoomPixels: Infinity,
-    topLevelZoomOpacity: 1,
-  }).items;
-  // Fading copies would change density counts; edit mode outlines are enough.
-  const topLevelZoomOpacity = editMode && !density ? EDIT_MODE_ZOOM_OPACITY : 1;
-  const previewItems = topLevelZoomOpacity === 1 ? levelItems : unrollScene(scene, factor, {
-    maximumDepth: 0,
-    uniform: false,
-    budget: 0,
-    minimumZoomPixels: Infinity,
-    topLevelZoomOpacity,
   }).items;
   // Exact geometry draws copies item by item, which only matches feedback for
   // normal blending, so blended scenes recurse by feedback alone. It is
@@ -1158,7 +1145,6 @@ function drawWebgl(
     uniform: !settings.autoLevels,
     budget: UNROLL_BUDGET,
     minimumZoomPixels: settings.autoLevels ? UNROLL_MINIMUM_ZOOM_PIXELS : 0,
-    topLevelZoomOpacity,
   });
   // A leaf at generation g sampling the texture after F feedback levels ends
   // with seed zooms at generation g + F, so the shallowest leaf sets F.
@@ -1455,7 +1441,7 @@ function drawWebgl(
     while (completedFeedbackLevels < previewLevels) {
       addFeedbackLevel();
     }
-    drawOutput(finalOutput, previewItems);
+    drawOutput(finalOutput, levelItems);
     copyToCanvas(finalOutput);
   };
 

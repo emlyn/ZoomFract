@@ -29,7 +29,6 @@ export type UnrollOptions = {
   uniform: boolean;
   budget: number;
   minimumZoomPixels: number;
-  topLevelZoomOpacity: number;
 };
 
 const IDENTITY: Affine = [1, 0, 0, 1, 0, 0];
@@ -216,7 +215,7 @@ export function unrollScene(
     return { x: viewPoint.x / width, y: 1 - viewPoint.y / height };
   };
 
-  const expand = (node: ZoomNode, isRoot: boolean) => {
+  const expand = (node: ZoomNode) => {
     node.children = scene.elements.map((element, index) => {
       const zoomTransform = zoomTransforms[index];
       if (element.kind !== 'zoom' || !zoomTransform) {
@@ -230,7 +229,7 @@ export function unrollScene(
       return {
         transform: composeAffine(node.transform, zoomTransform),
         clip,
-        alpha: node.alpha * element.opacity * (isRoot ? options.topLevelZoomOpacity : 1),
+        alpha: node.alpha * element.opacity,
         size: maximumEdge(quad),
         generation: node.generation + 1,
         children: null,
@@ -246,7 +245,7 @@ export function unrollScene(
     generation: 0,
     children: null,
   };
-  expand(root, true);
+  expand(root);
 
   const heap: ZoomNode[] = [];
   const enqueueChildren = (node: ZoomNode) => node.children?.forEach((child) => {
@@ -267,7 +266,7 @@ export function unrollScene(
       if (itemCount + frontier.length * expandCost > options.budget) {
         break;
       }
-      frontier.forEach((node) => expand(node, false));
+      frontier.forEach(expand);
       itemCount += frontier.length * expandCost;
       expandedZooms += frontier.length;
       frontier = frontier.flatMap((node) => (node.children ?? []).filter((child): child is ZoomNode => child !== null));
@@ -275,7 +274,7 @@ export function unrollScene(
   }
   while (heap.length > 0 && itemCount + expandCost <= options.budget) {
     const node = heapPop(heap)!;
-    expand(node, false);
+    expand(node);
     itemCount += expandCost;
     expandedZooms += 1;
     enqueueChildren(node);
@@ -337,8 +336,8 @@ export function unrollScene(
       if (!child) {
         return;
       }
-      // A glow is independent of its item's opacity, but fades with edit mode.
-      emitGlow(node, index, node.alpha * (node === root ? options.topLevelZoomOpacity : 1), child);
+      // A glow is independent of its item's opacity.
+      emitGlow(node, index, node.alpha, child);
       if (child.children) {
         emit(child);
         return;

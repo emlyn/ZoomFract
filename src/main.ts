@@ -1,5 +1,6 @@
 import './style.css';
 import { createSceneEditor } from './editor';
+import { createDefinitionForm } from './definition-form';
 import { createShareDialog, type LinkOptions } from './share-dialog';
 import { fractalDimension, type FractalDimension } from './dimension';
 import GUIDE_HTML from './guide.html?raw';
@@ -19,7 +20,7 @@ import {
   SUPERSAMPLING_CHOICES,
   canContinue,
   continuationKey,
-  elementCorners,
+  elementPoints,
   scenePointToCanvas,
   type QualityMode,
   type QualityOptions,
@@ -41,7 +42,6 @@ import {
   type SceneDefinition,
   type SceneInput,
   type Vec2,
-  type ZoomElement,
 } from './scene';
 
 type DefinitionLocation =
@@ -235,6 +235,13 @@ const canvas = document.createElement('canvas');
 canvas.tabIndex = 0;
 canvas.setAttribute('role', 'img');
 const displayContext = canvas.getContext('2d')!;
+const editOverlay = document.createElement('canvas');
+editOverlay.className = 'edit-overlay';
+editOverlay.setAttribute('aria-hidden', 'true');
+const editContext = editOverlay.getContext('2d')!;
+const canvasSurface = document.createElement('div');
+canvasSurface.className = 'canvas-surface';
+canvasSurface.append(canvas, editOverlay);
 
 // A gallery-style label beside the framed picture, centred with it as a group.
 // Controls for the definition's inputs sit on a matching card next to it.
@@ -258,7 +265,7 @@ const artwork = document.createElement('div');
 artwork.className = 'artwork';
 artwork.style.gap = `${WALL_LABEL_GAP_PX}px`;
 
-canvasFrame.append(canvas);
+canvasFrame.append(canvasSurface);
 artworkSide.append(inputPanel, wallLabel);
 artwork.append(canvasFrame, artworkSide);
 canvasHost.append(artwork);
@@ -807,20 +814,6 @@ function syncQualityControls() {
   customSettingsBody.classList.toggle('read-only', !isCustom);
 }
 
-const editModeRow = document.createElement('label');
-editModeRow.className = 'edit-mode-row';
-editModeRow.innerHTML = '<span>Edit mode</span>';
-
-const editModeToggle = document.createElement('input');
-editModeToggle.type = 'checkbox';
-editModeToggle.name = 'edit-mode';
-editModeRow.append(editModeToggle);
-
-editModeToggle.addEventListener('change', () => {
-  state.editMode = editModeToggle.checked;
-  render();
-});
-
 const exampleRow = document.createElement('label');
 exampleRow.className = 'example-row';
 exampleRow.innerHTML = '<span>Example</span>';
@@ -916,6 +909,86 @@ guideBody.addEventListener('click', (event) => {
 const sceneEditor = createSceneEditor(DEFAULT_SCENE_TEXT, () => {
   exampleSelect.value = '';
 });
+let definitionEditTimer: number | undefined;
+let editedItems: number[] = [];
+const labelRow = document.createElement('label');
+labelRow.className = 'edit-mode-row';
+labelRow.innerHTML = '<span>Show label</span>';
+
+const labelToggle = document.createElement('input');
+labelToggle.type = 'checkbox';
+labelToggle.name = 'show-label';
+labelToggle.checked = true;
+labelRow.append(labelToggle);
+labelToggle.addEventListener('change', () => {
+  updateWallLabel();
+  render();
+});
+
+const definitionForm = createDefinitionForm(DEFAULT_SCENE_TEXT, (text) => {
+  sceneEditor.setText(text);
+  exampleSelect.value = '';
+  window.clearTimeout(definitionEditTimer);
+  definitionEditTimer = window.setTimeout(() => applySceneButton.click(), 500);
+}, (indices) => {
+  editedItems = indices;
+  drawEditOverlay();
+}, labelRow, renderSettingsGroup);
+const definitionModes = document.createElement('div');
+definitionModes.className = 'definition-modes';
+definitionModes.setAttribute('role', 'tablist');
+definitionModes.setAttribute('aria-label', 'Definition editor');
+const graphicalMode = document.createElement('button');
+const yamlMode = document.createElement('button');
+const yamlPanel = document.createElement('div');
+yamlPanel.className = 'definition-yaml';
+yamlPanel.append(sceneEditor.element);
+let definitionMode: 'graphical' | 'yaml' = 'graphical';
+const setDefinitionMode = (mode: 'graphical' | 'yaml') => {
+  window.clearTimeout(definitionEditTimer);
+  const changed = definitionMode !== mode;
+  definitionMode = mode;
+  definitionForm.setActive(mode === 'graphical');
+  if (mode === 'yaml') yamlPanel.prepend(renderSettingsGroup);
+  if (mode === 'graphical') definitionForm.setText(sceneEditor.text());
+  definitionForm.element.hidden = mode !== 'graphical';
+  yamlPanel.hidden = mode !== 'yaml';
+  wrapRow.hidden = mode !== 'yaml';
+  applySceneButton.hidden = mode !== 'yaml';
+  graphicalMode.setAttribute('aria-selected', String(mode === 'graphical'));
+  yamlMode.setAttribute('aria-selected', String(mode === 'yaml'));
+  graphicalMode.tabIndex = mode === 'graphical' ? 0 : -1;
+  yamlMode.tabIndex = mode === 'yaml' ? 0 : -1;
+  if (changed && mode === 'graphical') {
+    definitionEditTimer = window.setTimeout(() => {
+      if (sceneEditor.text().trim() !== state.definitionText.trim()) applySceneButton.click();
+    }, 500);
+  }
+};
+for (const [button, mode, label] of [
+  [graphicalMode, 'graphical', 'Visual'],
+  [yamlMode, 'yaml', 'YAML'],
+] as const) {
+  button.type = 'button';
+  button.textContent = label;
+  button.id = `definition-tab-${mode}`;
+  button.setAttribute('role', 'tab');
+  const panel = mode === 'graphical' ? definitionForm.element : yamlPanel;
+  panel.id = `definition-panel-${mode}`;
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', button.id);
+  button.setAttribute('aria-controls', panel.id);
+  button.addEventListener('click', () => setDefinitionMode(mode));
+  button.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 'graphical' : event.key === 'End' ? 'yaml'
+      : definitionMode === 'graphical' ? 'yaml' : 'graphical';
+    setDefinitionMode(next);
+    (next === 'graphical' ? graphicalMode : yamlMode).focus();
+  });
+  definitionModes.append(button);
+}
 // Input values from an invalid shared definition wait here until its text is
 // repaired. The visible controls continue to belong to the last valid scene.
 let pendingEditorInputValues: InputValues | null = null;
@@ -943,6 +1016,7 @@ sceneStatus.className = 'scene-status';
 sceneStatus.setAttribute('role', 'status');
 
 applySceneButton.addEventListener('click', () => {
+  window.clearTimeout(definitionEditTimer);
   definitionLoadRevision += 1;
   applyDefinition(
     sceneEditor.text(),
@@ -953,25 +1027,15 @@ applySceneButton.addEventListener('click', () => {
     true,
   );
 });
-
-const labelRow = document.createElement('label');
-labelRow.className = 'edit-mode-row';
-labelRow.innerHTML = '<span>Show label</span>';
-
-const labelToggle = document.createElement('input');
-labelToggle.type = 'checkbox';
-labelToggle.name = 'show-label';
-labelToggle.checked = true;
-labelRow.append(labelToggle);
-labelToggle.addEventListener('change', () => {
-  updateWallLabel();
-  render();
-});
+setDefinitionMode('graphical');
 
 const shareButton = document.createElement('button');
 shareButton.type = 'button';
-shareButton.className = 'apply-scene share-button';
-shareButton.textContent = 'Share';
+shareButton.className = 'panel-share';
+shareButton.title = 'Share (S)';
+shareButton.setAttribute('aria-label', 'Share');
+shareButton.innerHTML = wallLabelShare.innerHTML;
+panelHeader.append(shareButton);
 
 // The link holds the applied definition, with the current input values and
 // app settings when they are chosen.
@@ -1073,7 +1137,6 @@ const LETTER_SHORTCUTS: Record<string, () => void> = {
     setGuideOpen(guide.hidden);
   },
   l: () => toggleCheckbox(labelToggle),
-  e: () => toggleCheckbox(editModeToggle),
   '+': () => setQuality('high'),
   '=': () => setQuality('high'),
   '-': () => setQuality('fast'),
@@ -1122,15 +1185,13 @@ window.addEventListener('keydown', (event) => {
 }, { capture: true });
 
 controls.append(
-  renderSettingsGroup,
   exampleRow,
   sceneLabelRow,
-  sceneEditor.element,
+  definitionModes,
+  definitionForm.element,
+  yamlPanel,
   wrapRow,
-  editModeRow,
-  labelRow,
   applySceneButton,
-  shareButton,
   sceneStatus,
 );
 panel.append(panelHeader, controls, panelResizeHandle);
@@ -1142,7 +1203,6 @@ const state = {
   quality: 'display' as QualityMode,
   custom: null as QualityOptions | null,
   resolvedLevels: null as number | null,
-  editMode: false,
   offsetX: 0,
   offsetY: -10,
   scene: baseScene,
@@ -1158,6 +1218,7 @@ syncQualityControls();
 function showSceneStatus(message: string, isError = false) {
   sceneStatus.textContent = message;
   sceneStatus.classList.toggle('error', isError);
+  definitionForm.setError(isError ? message : '');
   // The panel starts hidden for preloaded pictures, so reveal problems.
   if (isError) {
     setPanelOpen(true);
@@ -1177,6 +1238,7 @@ function applyDefinition(
   // renders, unless its shape changed; other definitions start blank.
   keepPicture = false,
 ): boolean {
+  window.clearTimeout(definitionEditTimer);
   try {
     const nextScene = parseScene(text, inputValues);
     // Info only changes the label, so the current picture can stay.
@@ -1193,6 +1255,7 @@ function applyDefinition(
     state.definitionLocation = location;
     pendingEditorInputValues = null;
     sceneEditor.setText(text.trim());
+    definitionForm.setText(text.trim());
 
     exampleSelect.value = location.kind === 'example' ? findExample(location.id)?.id ?? '' : '';
 
@@ -1210,6 +1273,7 @@ function applyDefinition(
     if (keepInvalidText) {
       pendingEditorInputValues = inputValues;
       sceneEditor.setText(text.trim());
+      definitionForm.setText(text.trim());
       exampleSelect.value = '';
       if (updateUrl) {
         updateDefinitionUrl(location);
@@ -1221,6 +1285,7 @@ function applyDefinition(
 }
 
 async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: boolean) {
+  window.clearTimeout(definitionEditTimer);
   const revision = ++definitionLoadRevision;
 
   if (location.kind === 'example') {
@@ -1714,6 +1779,8 @@ function resizeCanvas() {
     canvas.width = resolution.width;
     canvas.height = resolution.height;
     drawDisplay();
+  } else {
+    drawEditOverlay();
   }
   return resolutionChanged;
 }
@@ -1721,79 +1788,97 @@ function resizeCanvas() {
 const resolvedScene = (): ResolvedSceneDefinition =>
   withResolution(state.scene, { width: canvas.width, height: canvas.height });
 function tracePolygon(points: { x: number; y: number }[]) {
-  displayContext.beginPath();
-  displayContext.moveTo(points[0].x, points[0].y);
-  points.slice(1).forEach((point) => displayContext.lineTo(point.x, point.y));
-  displayContext.closePath();
+  editContext.beginPath();
+  editContext.moveTo(points[0].x, points[0].y);
+  points.slice(1).forEach((point) => editContext.lineTo(point.x, point.y));
+  editContext.closePath();
 }
 
-function drawZoomOutlines(scene: ResolvedSceneDefinition) {
+function drawEditOutlines(scene: ResolvedSceneDefinition) {
   const cssWidth = canvas.getBoundingClientRect().width;
   const pixelsPerCssPixel = cssWidth > 0 ? canvas.width / cssWidth : 1;
   const lineWidth = EDIT_MODE_OUTLINE_CSS_PIXELS * pixelsPerCssPixel;
-  // Zooms and coordinates include the overflow; outline them as declared.
+  // Resolved zooms copy the full canvas; reframing recovers the declared view.
   const { coordinates, declared } = scene.view;
-  const zooms = scene.elements
-    .filter((element): element is ZoomElement => element.kind === 'zoom')
-    .map((zoom) => reframeZoom(zoom, viewFrame(coordinates), viewFrame(declared)));
+  const boundsDiffer = JSON.stringify(coordinates) !== JSON.stringify(declared);
+  const elements = scene.elements.filter((_, index) => editedItems.includes(index));
+  const outline = (points: Vec2[], dash: number[]) => {
+    tracePolygon(points);
+    editContext.setLineDash([]);
+    editContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    editContext.lineWidth = lineWidth * 3;
+    editContext.stroke();
+    editContext.setLineDash(dash);
+    editContext.strokeStyle = '#e11d48';
+    editContext.lineWidth = lineWidth;
+    editContext.stroke();
+  };
 
-  displayContext.save();
-  displayContext.setTransform(1, 0, 0, 1, 0, 0);
-  displayContext.lineJoin = 'miter';
-  if (JSON.stringify(coordinates) !== JSON.stringify(declared)) {
+  editContext.save();
+  editContext.setTransform(1, 0, 0, 1, 0, 0);
+  editContext.lineJoin = 'miter';
+  if (boundsDiffer) {
     const from = scenePointToCanvas({ x: declared.x.from, y: declared.y.to }, scene);
     const to = scenePointToCanvas({ x: declared.x.to, y: declared.y.from }, scene);
-    displayContext.setLineDash([lineWidth * 2, lineWidth * 2]);
-    displayContext.strokeStyle = 'rgba(128, 128, 128, 0.9)';
-    displayContext.lineWidth = lineWidth;
-    displayContext.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
+    editContext.setLineDash([]);
+    editContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    editContext.lineWidth = lineWidth * 3;
+    editContext.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
+    editContext.setLineDash([lineWidth * 2, lineWidth * 2]);
+    editContext.strokeStyle = 'rgba(128, 128, 128, 0.9)';
+    editContext.lineWidth = lineWidth;
+    editContext.strokeRect(from.x, from.y, to.x - from.x, to.y - from.y);
   }
-  for (const zoom of zooms) {
-    const corners = elementCorners(zoom, scene);
-    tracePolygon(corners);
-    displayContext.setLineDash([]);
-    displayContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    displayContext.lineWidth = lineWidth * 3;
-    displayContext.stroke();
-    displayContext.setLineDash([lineWidth * 4, lineWidth * 3]);
-    displayContext.strokeStyle = '#e11d48';
-    displayContext.lineWidth = lineWidth;
-    displayContext.stroke();
+  for (const element of elements) {
+    const declaredElement = element.kind === 'zoom'
+      ? reframeZoom(element, viewFrame(coordinates), viewFrame(declared)) : element;
+    if (element.kind === 'zoom' && boundsDiffer) {
+      outline(elementPoints(element, scene), [lineWidth, lineWidth * 2]);
+    }
+    const corners = elementPoints(declaredElement, scene);
+    outline(corners, [lineWidth * 4, lineWidth * 3]);
 
-    displayContext.setLineDash([]);
-    displayContext.beginPath();
-    displayContext.arc(corners[0].x, corners[0].y, lineWidth * 3, 0, Math.PI * 2);
-    displayContext.fillStyle = '#e11d48';
-    displayContext.fill();
-    displayContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-    displayContext.lineWidth = lineWidth;
-    displayContext.stroke();
+    editContext.setLineDash([]);
+    editContext.beginPath();
+    editContext.arc(corners[0].x, corners[0].y, lineWidth * 3, 0, Math.PI * 2);
+    editContext.fillStyle = '#e11d48';
+    editContext.fill();
+    editContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    editContext.lineWidth = lineWidth;
+    editContext.stroke();
 
-    for (const target of zoom.alignTargets.map((point) => scenePointToCanvas(point, scene))) {
+    for (const target of (element.kind === 'zoom' ? element.alignTargets : []).map((point) => scenePointToCanvas(point, scene))) {
       const size = lineWidth * 5;
-      displayContext.beginPath();
-      displayContext.moveTo(target.x - size, target.y);
-      displayContext.lineTo(target.x + size, target.y);
-      displayContext.moveTo(target.x, target.y - size);
-      displayContext.lineTo(target.x, target.y + size);
-      displayContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-      displayContext.lineWidth = lineWidth * 3;
-      displayContext.stroke();
-      displayContext.strokeStyle = '#2563eb';
-      displayContext.lineWidth = lineWidth;
-      displayContext.stroke();
+      editContext.beginPath();
+      editContext.moveTo(target.x - size, target.y);
+      editContext.lineTo(target.x + size, target.y);
+      editContext.moveTo(target.x, target.y - size);
+      editContext.lineTo(target.x, target.y + size);
+      editContext.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+      editContext.lineWidth = lineWidth * 3;
+      editContext.stroke();
+      editContext.strokeStyle = '#2563eb';
+      editContext.lineWidth = lineWidth;
+      editContext.stroke();
     }
   }
-  displayContext.restore();
+  editContext.restore();
 }
 
+function drawEditOverlay() {
+  if (editOverlay.width !== canvas.width) editOverlay.width = canvas.width;
+  if (editOverlay.height !== canvas.height) editOverlay.height = canvas.height;
+  editContext.clearRect(0, 0, editOverlay.width, editOverlay.height);
+  if (displayedFrame && editedItems.length) {
+    drawEditOutlines(withResolution(displayedFrame.scene, { width: canvas.width, height: canvas.height }));
+  }
+}
 
 const PROGRESS_DELAY_MS = 150;
 
 type DisplayedFrame = {
   bitmap: ImageBitmap;
   scene: ResolvedSceneDefinition;
-  editMode: boolean;
   // Previews are reduced, so they are never downloaded.
   preview: boolean;
 };
@@ -1807,6 +1892,7 @@ function clearDisplay() {
 }
 
 function drawDisplay() {
+  drawEditOverlay();
   displayContext.setTransform(1, 0, 0, 1, 0, 0);
   displayContext.clearRect(0, 0, canvas.width, canvas.height);
   if (!displayedFrame) {
@@ -1815,10 +1901,6 @@ function drawDisplay() {
   displayContext.imageSmoothingEnabled = true;
   displayContext.imageSmoothingQuality = 'high';
   displayContext.drawImage(displayedFrame.bitmap, 0, 0, canvas.width, canvas.height);
-  if (displayedFrame.editMode) {
-    // A frame stretched to a resized canvas keeps outlines at the new size.
-    drawZoomOutlines(withResolution(displayedFrame.scene, { width: canvas.width, height: canvas.height }));
-  }
 }
 
 function setRenderProgress(progress: number | null) {
@@ -1917,7 +1999,6 @@ function renderPreview(settle: boolean) {
   const request: RenderRequest = {
     scene: previewScene(scene),
     options: PREVIEW_OPTIONS,
-    editMode: state.editMode,
     webglDisabled,
   };
   previewRequests.set(request, scene);
@@ -1969,7 +2050,6 @@ function render(resized = false) {
   const baseRequest: RenderRequest = {
     scene: resolvedScene(),
     options: renderOptions(),
-    editMode: state.editMode,
     webglDisabled,
   };
   const key = continuationKey(baseRequest);
@@ -2053,7 +2133,6 @@ function startRender(request: RenderRequest) {
         displayedFrame = {
           bitmap: message.bitmap,
           scene: previewRequests.get(request) ?? request.scene,
-          editMode: request.editMode,
           preview: previewRequests.has(request),
         };
         drawDisplay();
