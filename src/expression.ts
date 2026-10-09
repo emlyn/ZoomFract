@@ -38,6 +38,8 @@ const FUNCTIONS = {
   ln: Math.log,
   exp: Math.exp,
   abs: Math.abs,
+  min: Math.min,
+  max: Math.max,
   sin: Math.sin,
   cos: Math.cos,
   tan: Math.tan,
@@ -163,7 +165,7 @@ export function parseExpression(text: string): Expression {
         }
         expect(')');
         const arity = FUNCTIONS[token.text].length;
-        if (args.length !== arity) {
+        if (token.text !== 'min' && token.text !== 'max' && args.length !== arity) {
           throw new Error(`${token.text} takes ${arity} argument${arity === 1 ? '' : 's'}, not ${args.length}`);
         }
         return { kind: 'call', name: token.text, args };

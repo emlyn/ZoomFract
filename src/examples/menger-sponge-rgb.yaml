@@ -143,8 +143,8 @@ scene:
     points:
       - [0, 9]
       - [9, 9]
-      - [9+2*sx, 9+2*sy]
-      - [2*sx, 9+2*sy]
+      - [9+3*sx, 9+3*sy]
+      - [3*sx, 9+3*sy]
     colour: "red"
     opacity: 0.1
   - type: polygon
@@ -152,7 +152,7 @@ scene:
     points:
       - [9, 0]
       - [9, 9]
-      - [9+2*sx, 9+2*sy]
-      - [9+2*sx, 2*sy]
+      - [9+3*sx, 9+3*sy]
+      - [9+3*sx, 3*sy]
     colour: "blue"
     opacity: 0.1

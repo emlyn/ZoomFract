@@ -179,7 +179,7 @@ files unless extracting a module clearly reduces complexity.
 - Any numeric value may be a number or an expression string such as
   `1/sqrt(2)`, using the infix syntax of emlyn/PowerPointFractals:
   `+ - * / ^`, parentheses, `sqrt`, `root(n, x)`, `log`/`ln` (natural),
-  `exp`, `abs`, radian trigonometry including `atan2`, and constants `pi`,
+  `exp`, `abs`, `min`/`max` (one or more arguments), radian trigonometry including `atan2`, and constants `pi`,
   `e`, `phi`. There is no implicit multiplication. Expressions parse to a
   syntax tree (`src/expression.ts`) so they can later be displayed as maths
   from the same tree; invalid or non-finite expressions are errors.

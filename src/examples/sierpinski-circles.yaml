@@ -3,6 +3,14 @@ info:
   author: Emlyn Corrin
   date: 2026
 
+variables:
+  - name: Radius
+    value: 1
+    input:
+      type: slider
+      min: 0
+      max: 2
+
 frame:
   width: 12
   radius: 6
@@ -14,19 +22,19 @@ frame:
 
 view:
   overflow: auto
-  aspect: auto
+  aspect: 2/sqrt(3)
   coordinates:
     x: [0, 1]
     y: [0, sqrt(3)/2]
 
 scene:
   - type: circle
-    centre: [0.5, sqrt(3)/4]
-    radius: sqrt(3)/2
+    centre: [0.5, sqrt(3)/6]
+    radius: max(Radius, 0.001)*sqrt(3)/3
     opacity: 0.05
   - type: zoom
     name: top
-    centre: [1/2, sqrt(3)/2]
+    centre: [1/2, 3*sqrt(3)/8]
     scale: 0.5
     glow:
       colour: cyan
@@ -34,7 +42,7 @@ scene:
       size: 0
   - type: zoom
     name: bottom-left
-    centre: [1/8, sqrt(3)/8]
+    centre: [1/4, sqrt(3)/8]
     scale: 0.5
     glow:
       colour: magenta
@@ -42,7 +50,7 @@ scene:
       size: 0
   - type: zoom
     name: bottom-right
-    centre: [7/8, sqrt(3)/8]
+    centre: [3/4, sqrt(3)/8]
     scale: 0.5
     glow:
       colour: yellow
