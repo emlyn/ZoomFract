@@ -584,6 +584,7 @@ files unless extracting a module clearly reduces complexity.
   Collapsible sections edit every top-level setting, including variables and view.
   Scene cards have subtle type-specific tints and arrow/bin controls in their
   headings. Headings drag via mouse/touch with a horizontal insertion marker.
+  Touch requires a one-second hold that lifts the card; earlier swipes scroll normally.
   Cards expand, add/remove and reorder via headings, buttons or
   Alt+Up/Down on their headings. Form edits have Undo/Redo. Do not resolve
   expressions into numbers or discard unsupported settings when switching modes.

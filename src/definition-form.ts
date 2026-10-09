@@ -194,6 +194,7 @@ export function createDefinitionForm(
   let document = parseDocument(source);
   let editKey = '';
   let dragging: number | null = null;
+  let cancelTouchDrag: (() => void) | undefined;
   let density = false;
   let active = true;
   let selected = '[]';
@@ -523,6 +524,7 @@ export function createDefinitionForm(
   }
 
   function render() {
+    cancelTouchDrag?.();
     body.replaceChildren();
     undo.disabled = undoStack.length === 0;
     redo.disabled = redoStack.length === 0;
@@ -671,26 +673,84 @@ export function createDefinitionForm(
         handle.addEventListener('dragstart', (event) => {
           suppressClick = true;
           dragging = index;
+          card.classList.add('definition-item-lifted');
           event.dataTransfer?.setData('text/plain', String(index));
           if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
         });
         handle.addEventListener('dragend', () => {
           dragging = null;
+          card.classList.remove('definition-item-lifted');
           clearInsertion();
           window.setTimeout(() => { suppressClick = false; }, 0);
         });
-        let touchMoved = false;
+        let touchPointer: number | undefined;
+        let holdTimer: number | undefined;
+        let touchDragging = false;
         let touchOrigin = { x: 0, y: 0 };
+        let touchPreview: HTMLDivElement | undefined;
+        const positionTouchPreview = (x: number, y: number) => {
+          if (touchPreview) {
+            touchPreview.style.transform = `translate(${x - touchOrigin.x}px, ${y - touchOrigin.y}px)`;
+          }
+        };
+        const cancelTouch = () => {
+          window.clearTimeout(holdTimer);
+          holdTimer = undefined;
+          touchPreview?.remove();
+          touchPreview = undefined;
+          if (touchPointer !== undefined && handle.hasPointerCapture(touchPointer)) {
+            handle.releasePointerCapture(touchPointer);
+          }
+          touchPointer = undefined;
+          touchDragging = false;
+          handle.draggable = true;
+          card.classList.remove('definition-item-lifted');
+          clearInsertion();
+          if (cancelTouchDrag === cancelTouch) cancelTouchDrag = undefined;
+        };
         handle.addEventListener('pointerdown', (event) => {
           if (event.pointerType === 'mouse') return;
-          touchMoved = false;
+          cancelTouchDrag?.();
+          suppressClick = false;
+          if (!event.isPrimary) return;
+          touchPointer = event.pointerId;
           touchOrigin = { x: event.clientX, y: event.clientY };
-          handle.setPointerCapture(event.pointerId);
+          handle.draggable = false;
+          cancelTouchDrag = cancelTouch;
+          holdTimer = window.setTimeout(() => {
+            holdTimer = undefined;
+            touchDragging = true;
+            suppressClick = true;
+            const bounds = card.getBoundingClientRect();
+            touchPreview = make('div', 'definition-form definition-drag-preview');
+            touchPreview.setAttribute('aria-hidden', 'true');
+            touchPreview.inert = true;
+            touchPreview.style.left = `${bounds.left}px`;
+            touchPreview.style.top = `${bounds.top}px`;
+            touchPreview.style.width = `${bounds.width}px`;
+            const previewCard = make('details', card.className);
+            previewCard.classList.add('definition-item-lifted');
+            previewCard.append(handle.cloneNode(true));
+            touchPreview.append(previewCard);
+            window.document.body.append(touchPreview);
+            card.classList.add('definition-item-lifted');
+            handle.setPointerCapture(event.pointerId);
+            showInsertion(touchOrigin.x, touchOrigin.y);
+          }, 1000);
+        });
+        handle.addEventListener('touchmove', (event) => {
+          if (touchDragging) event.preventDefault();
+        }, { passive: false });
+        handle.addEventListener('contextmenu', (event) => {
+          if (touchPointer !== undefined) event.preventDefault();
         });
         handle.addEventListener('pointermove', (event) => {
-          if (!handle.hasPointerCapture(event.pointerId)) return;
-          touchMoved ||= Math.hypot(event.clientX - touchOrigin.x, event.clientY - touchOrigin.y) > 8;
-          if (!touchMoved) return;
+          if (event.pointerId !== touchPointer) return;
+          if (!touchDragging) {
+            if (Math.hypot(event.clientX - touchOrigin.x, event.clientY - touchOrigin.y) > 8) cancelTouch();
+            return;
+          }
+          positionTouchPreview(event.clientX, event.clientY);
           showInsertion(event.clientX, event.clientY);
           const controls = root.closest('.controls');
           if (controls) {
@@ -700,15 +760,16 @@ export function createDefinitionForm(
           }
         });
         handle.addEventListener('pointerup', (event) => {
-          if (!handle.hasPointerCapture(event.pointerId)) return;
-          handle.releasePointerCapture(event.pointerId);
-          suppressClick = touchMoved;
-          if (touchMoved) insert(index);
-          else clearInsertion();
+          if (event.pointerId !== touchPointer) return;
+          if (touchDragging) insert(index);
+          cancelTouch();
           window.setTimeout(() => { suppressClick = false; }, 0);
         });
-        handle.addEventListener('pointercancel', () => {
-          clearInsertion();
+        handle.addEventListener('pointercancel', (event) => {
+          if (event.pointerId === touchPointer) cancelTouch();
+        });
+        handle.addEventListener('lostpointercapture', () => {
+          if (touchPointer !== undefined) cancelTouch();
         });
         summary.addEventListener('keydown', (event) => {
           if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
@@ -775,6 +836,7 @@ export function createDefinitionForm(
     },
     setError,
     setActive: (next) => {
+      if (!next) cancelTouchDrag?.();
       active = next;
       if (active) root.insertBefore(renderControl, body);
       notifySelection();

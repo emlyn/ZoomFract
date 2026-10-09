@@ -1225,8 +1225,34 @@ canvas {
 
 .definition-item > summary {
   cursor: grab;
-  touch-action: none;
+  touch-action: pan-y;
+  -webkit-touch-callout: none;
+  user-select: none;
   background: rgba(var(--item-tint), 0.06);
+}
+
+.definition-item-lifted {
+  position: relative;
+  z-index: 2;
+  transform: scale(1.025);
+  box-shadow: 0 8px 20px #0008;
+  border-color: rgb(var(--item-tint));
+}
+
+.definition-item-lifted > summary {
+  cursor: grabbing;
+  background: rgba(var(--item-tint), 0.2);
+}
+
+.definition-drag-preview {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+.definition-drag-preview .definition-item {
+  margin: 0;
 }
 
 .definition-item-caption {
