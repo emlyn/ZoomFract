@@ -38,6 +38,7 @@ const QR_SCALE_STEPS = 4;
 // highest error correction a code can lose about 30% of its data, and the
 // picture hides under 10% of it, leaving room for smudges and glare.
 const QR_PICTURE_FRACTION = 0.3;
+const QR_REDUCED_PICTURE_FRACTION = 0.15;
 // The white halo around the preview, in QR squares: solid, then fading out.
 const QR_HALO_SOLID = 0.5;
 const QR_HALO_RADIUS = 1;
@@ -219,15 +220,20 @@ function downloadBlob(blob: Blob, fileName: string) {
 
 // The smallest code that holds the text, using the highest error correction
 // when part of it will be hidden by the picture.
-function makeQrCode(text: string, withPicture: boolean, qrcode: QrCodeFactory) {
-  const code = qrcode(0, withPicture ? 'H' : 'M');
-  code.addData(text, 'Byte');
-  try {
-    code.make();
-  } catch {
-    throw new Error(withPicture ? 'The link is too long for a QR code with a preview' : 'The link is too long for a QR code');
+function makeQrCode(prefix: string, payload: string, withPicture: boolean, qrcode: QrCodeFactory) {
+  const levels = withPicture ? ['H', 'M'] as const : ['M', 'L'] as const;
+  for (const level of levels) {
+    const code = qrcode(0, level);
+    code.addData(prefix, 'Byte');
+    code.addData(payload, 'Alphanumeric');
+    try {
+      code.make();
+      return { code, reduced: level === levels[1], level };
+    } catch (error) {
+      if (!String(error).startsWith('code length overflow.')) throw error;
+    }
   }
-  return code;
+  throw new Error(withPicture ? 'The link is too long for a QR code with a preview' : 'The link is too long for a QR code');
 }
 
 export function createShareDialog(options: ShareDialogOptions) {
@@ -423,7 +429,9 @@ export function createShareDialog(options: ShareDialogOptions) {
   // picture over the middle on a white backing that follows its shape.
   async function drawQrCode(target: HTMLCanvasElement, text: string, withPicture: boolean) {
     const { default: qrcode } = await import('qrcode-generator');
-    const code = makeQrCode(text, withPicture, qrcode);
+    const { qrSharedUrl } = await import('./share');
+    const { prefix, payload } = qrSharedUrl(text);
+    const { code, reduced, level } = makeQrCode(prefix, payload, withPicture, qrcode);
     const count = code.getModuleCount();
     // A multiple of the smallest preview step, so every square stays a whole
     // number of pixels when the preview shrinks it.
@@ -445,7 +453,7 @@ export function createShareDialog(options: ShareDialogOptions) {
     }
     const bounds = withPicture ? opaqueBounds(canvas) : null;
     if (bounds) {
-      const box = Math.floor(count * QR_PICTURE_FRACTION) * cell;
+      const box = Math.floor(count * (reduced ? QR_REDUCED_PICTURE_FRACTION : QR_PICTURE_FRACTION)) * cell;
       const fit = Math.min((box - 2 * cell) / bounds.width, (box - 2 * cell) / bounds.height);
       const width = Math.max(1, Math.round(bounds.width * fit));
       const height = Math.max(1, Math.round(bounds.height * fit));
@@ -472,7 +480,7 @@ export function createShareDialog(options: ShareDialogOptions) {
       }
       context.drawImage(picture, x, y);
     }
-    return { image: target, count };
+    return { image: target, count, reduced, level };
   }
 
   let linkRevision = 0;
@@ -542,7 +550,7 @@ export function createShareDialog(options: ShareDialogOptions) {
         showStatus('Available when rendering finishes');
         return;
       }
-      const { image, count } = await drawQrCode(document.createElement('canvas'), url, qrPicture.input.checked);
+      const { image, count, reduced, level } = await drawQrCode(document.createElement('canvas'), url, qrPicture.input.checked);
       if (revision !== linkRevision) {
         return;
       }
@@ -550,7 +558,10 @@ export function createShareDialog(options: ShareDialogOptions) {
       showQrCode();
       copyQr.disabled = false;
       downloadQr.disabled = false;
-      showStatus(`${count} \u00d7 ${count} squares${largeLinkWarning(url.length)}${unapplied}`);
+      const warning = reduced
+        ? `; warning: reduced error correction${level === 'M' ? ' and smaller preview' : ''}; less resistant to damage`
+        : '';
+      showStatus(`${count} \u00d7 ${count} squares, correction ${level}${warning}${unapplied}`);
     } catch (error) {
       if (revision === linkRevision) {
         clearQrPreview();

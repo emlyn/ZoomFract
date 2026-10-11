@@ -927,6 +927,12 @@ scene:
       <strong>QR code</strong> shows the link as a QR code to copy or download, with the
       same options as the link. By default it includes a small preview of the drawn
       part of the picture in the centre; the code is then made more robust so it still scans.
+      QR links use an uppercase encoding to fit more of the definition; ordinary links
+      keep their shorter encoding. With a preview, error correction starts at H. If the
+      link is too long, it falls back to M with a smaller preview. Without a preview,
+      it starts at M and falls back to L. A warning appears when correction is reduced:
+      these codes are less resistant to damage. Links too long for either level cannot
+      be made into a QR code.
       Click the code to see it larger, and again to go back.
     </li>
     <li>

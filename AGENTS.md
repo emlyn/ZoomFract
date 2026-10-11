@@ -186,6 +186,10 @@ files unless extracting a module clearly reduces complexity.
   improve compression, add a new dictionary under a new version character and
   keep the old ones decodable. Only one of `example`, `source`, `q` and a
   fragment may be given.
+  QR links use `A<version><base43>` instead: the alphabet is
+  `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ$*+-./:`, packing two bytes as three
+  least-significant-first digits (one final byte as two). The compressed
+  bytes and dictionaries are unchanged; ordinary links remain base64url.
 - Invalid, ambiguous, conflicting, or underdetermined definitions must produce
   a visible error. Do not silently invent missing geometry.
 - Any numeric value may be a number or an expression string such as
@@ -621,7 +625,10 @@ files unless extracting a module clearly reduces complexity.
   also carries the same warning in the slide's speaker notes.
   QR codes use `qrcode-generator`, loaded on demand, with
   error correction H when the preview covers the middle (at most 30% of the
-  width) and M otherwise. The QR square size is rounded up to a multiple of 4
+  width) and M otherwise. The URL prefix is Byte mode and the `A<version>`
+  payload is Alphanumeric. Capacity overflow falls back to M with a preview
+  reduced to 15% of the width, or L without a preview, with a visible warning.
+  Other generation errors are not swallowed. The QR square size is rounded up to a multiple of 4
   pixels so the preview, which shows the code at exactly a quarter of full size,
   keeps sharp edges; clicking it toggles to a half.
   The preview is the transparent picture cropped to its

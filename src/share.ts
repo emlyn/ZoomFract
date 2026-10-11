@@ -12,6 +12,8 @@ import type { InputValue, InputValues } from './scene';
 
 // A shared definition is the definition text, compressed against a preset
 // dictionary and written in URL-safe base64 after a version character.
+// QR links add an A before the version and use base43: two bytes in three
+// QR-alphanumeric characters, excluding space and % so fragments stay intact.
 // Dictionaries are frozen once released, so old links keep working: a new
 // dictionary gets a new version.
 //
@@ -25,6 +27,46 @@ import type { InputValue, InputValues } from './scene';
 const DICTIONARIES: Record<string, string> = { 1: dictionary1 };
 const CURRENT_VERSION = '1';
 const EXTRAS_SEPARATOR = '\0';
+const ALPHANUMERIC = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ$*+-./:';
+
+function toAlphanumeric(bytes: Uint8Array): string {
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 2) {
+    let value = bytes[i] * (i + 1 < bytes.length ? 256 : 1) + (bytes[i + 1] ?? 0);
+    const count = i + 1 < bytes.length ? 3 : 2;
+    for (let digit = 0; digit < count; digit += 1) {
+      text += ALPHANUMERIC[value % 43];
+      value = Math.floor(value / 43);
+    }
+  }
+  return text;
+}
+
+function fromAlphanumeric(text: string): Uint8Array {
+  if (text.length % 3 === 1) throw new Error('Incomplete alphanumeric payload');
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i += 3) {
+    const digits = text.slice(i, i + 3);
+    let value = 0;
+    for (let j = 0; j < digits.length; j += 1) {
+      const digit = ALPHANUMERIC.indexOf(digits[j]);
+      if (digit < 0) throw new Error('Invalid alphanumeric character');
+      value += digit * 43 ** j;
+    }
+    if (value > (digits.length === 3 ? 65535 : 255)) throw new Error('Invalid alphanumeric value');
+    if (digits.length === 3) bytes.push(Math.floor(value / 256), value % 256);
+    else bytes.push(value);
+  }
+  return new Uint8Array(bytes);
+}
+
+export function qrSharedUrl(url: string): { prefix: string; payload: string } {
+  const hash = url.indexOf('#');
+  if (hash < 0) throw new Error('QR sharing needs a fragment link');
+  const code = url.slice(hash + 1);
+  if (!Object.hasOwn(DICTIONARIES, code[0])) throw new Error('Unknown shared dictionary');
+  return { prefix: url.slice(0, hash + 1), payload: `A${code[0]}${toAlphanumeric(fromBase64Url(code.slice(1)))}` };
+}
 
 export type SharedSettings = { quality: QualityMode; custom: QualityOptions | null; label: boolean };
 
@@ -148,13 +190,15 @@ export function encodeSharedDefinition({ text, inputs, settings }: SharedDefinit
 }
 
 export function decodeSharedDefinition(code: string): SharedDefinition {
+  const alphanumeric = code.startsWith('A');
+  if (alphanumeric) code = code.slice(1);
   const dictionary = DICTIONARIES[code.charAt(0)];
   if (dictionary === undefined) {
     throw new Error('Shared link was made by a newer version of ZoomFract, or is damaged');
   }
   let payload: string;
   try {
-    const bytes = inflateSync(fromBase64Url(code.slice(1)), { dictionary: encoder.encode(dictionary) });
+    const bytes = inflateSync(alphanumeric ? fromAlphanumeric(code.slice(1)) : fromBase64Url(code.slice(1)), { dictionary: encoder.encode(dictionary) });
     payload = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch {
     throw new Error('Shared link is damaged or incomplete');
