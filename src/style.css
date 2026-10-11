@@ -1376,6 +1376,25 @@ canvas {
   grid-template-columns: minmax(0, 1fr) 2.5rem;
 }
 
+.definition-suggested-value {
+  position: relative;
+}
+
+.definition-form .definition-suggested-value input {
+  padding-right: 2.5rem;
+}
+
+.definition-form .definition-suggested-value select {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 2.5rem;
+  padding: 0;
+  border-left: 0;
+  border-radius: 0 4px 4px 0;
+}
+
 .definition-form .definition-colour {
   padding: 0.15rem;
   height: 2rem;

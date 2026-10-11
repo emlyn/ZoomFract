@@ -11,6 +11,7 @@ type Field = {
   choices?: string[];
   multiline?: boolean;
   colour?: boolean;
+  suggestions?: string[];
   variants?: Record<string, Field>;
   labels?: string[];
   accept?: (value: unknown) => boolean;
@@ -113,7 +114,7 @@ const variableValueField = (type: string): Field => {
   if (type === 'text') return text();
   if (type === 'point') return point;
   if (type === 'gradient') return gradientSpec;
-  if (type === 'boolean') return variants(true, { Boolean: { initial: true }, Expression: text('true') });
+  if (type === 'boolean') return { ...text('true'), suggestions: ['true', 'false'] };
   return number(0);
 };
 const gradientSpec = variants('palette', {
@@ -678,7 +679,7 @@ export function createDefinitionForm(
     const input = field.multiline ? make('textarea') : make('input');
     input.setAttribute('aria-label', label);
     input.dataset.path = JSON.stringify(path);
-    if (input instanceof HTMLInputElement && typeof value === 'boolean') {
+    if (input instanceof HTMLInputElement && typeof value === 'boolean' && !field.suggestions) {
       input.type = 'checkbox';
       input.checked = value;
       input.addEventListener('change', () => set(path, input.checked));
@@ -699,7 +700,9 @@ export function createDefinitionForm(
           });
           return;
         }
-        const next = typeof field.initial === 'number' || typeof value === 'number'
+        const next = field.suggestions && /^(true|false)$/.test(written.trim())
+          ? written.trim() === 'true'
+          : typeof field.initial === 'number' || typeof value === 'number'
           ? (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(written.trim()) ? Number(written) : written)
           : written;
         set(path, next);
@@ -719,6 +722,21 @@ export function createDefinitionForm(
       });
     }
     container.append(input);
+    if (field.suggestions && input instanceof HTMLInputElement) {
+      const suggestions = select([['', ''], ...field.suggestions.map((value): [string, string] => [value, value])],
+        '', `${label} suggestions`);
+      suggestions.options[0].hidden = true;
+      suggestions.options[0].disabled = true;
+      suggestions.addEventListener('change', () => {
+        input.value = suggestions.value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        suggestions.value = '';
+        input.focus();
+      });
+      input.autocomplete = 'off';
+      container.classList.add('definition-suggested-value');
+      container.append(suggestions);
+    }
     if (field.colour && typeof value === 'string') {
       const picker = make('input', 'definition-colour');
       picker.type = 'color';
