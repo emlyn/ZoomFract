@@ -247,6 +247,23 @@ const stopWithOpacity = (colour: string, opacity: number) => colour.startsWith('
   ? `rgba(${[1, 3, 5].map((start) => parseInt(colour.slice(start, start + 2), 16)).join(', ')}, ${opacity})`
   : colour.replace(/\)$/, ` / ${opacity})`);
 
+function colourHsv(hex: string): { hue: number; saturation: number; brightness: number } {
+  const [r, g, b] = [1, 3, 5].map((start) => parseInt(hex.slice(start, start + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+  const hue = delta === 0 ? 0 : 60 * (max === r ? ((g - b) / delta + 6) % 6
+    : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4);
+  return { hue, saturation: max === 0 ? 0 : delta / max, brightness: max };
+}
+
+function hsvHex(hue: number, saturation: number, brightness: number): string {
+  const channel = (offset: number) => {
+    const k = (offset + hue / 60) % 6;
+    return Math.round(255 * brightness * (1 - saturation * Math.max(0, Math.min(k, 4 - k, 1))))
+      .toString(16).padStart(2, '0');
+  };
+  return `#${channel(5)}${channel(3)}${channel(1)}`;
+}
+
 export type DefinitionForm = {
   element: HTMLElement;
   setText: (text: string) => void;
@@ -270,6 +287,10 @@ export function createDefinitionForm(
   const undoStack: string[] = [];
   const redoStack: string[] = [];
   let source = initialText;
+  let swatchSource = '';
+  let swatchScene: ReturnType<typeof parseScene> | undefined;
+  let swatchError = '';
+  const swatchRefreshers: (() => void)[] = [];
   let document = parseDocument(source);
   let editKey = '';
   let dragging: number | null = null;
@@ -358,6 +379,7 @@ export function createDefinitionForm(
     undo.disabled = undoStack.length === 0;
     redo.disabled = true;
     if (structural) render();
+    else swatchRefreshers.forEach((refresh) => refresh());
     onEdit(source);
   }
   // Object keys from toJS are strings; YAML density stops may have numeric keys.
@@ -891,25 +913,181 @@ export function createDefinitionForm(
       container.append(suggestions);
     }
     if (field.colour && typeof value === 'string') {
-      const picker = make('input', 'definition-colour');
-      picker.type = 'color';
+      const picker = make('button', 'definition-colour');
+      picker.type = 'button';
+      const popup = make('div', 'definition-colour-popup');
+      popup.popover = 'auto';
+      popup.setAttribute('role', 'dialog');
+      popup.setAttribute('aria-label', `${label} and opacity`);
+      picker.setAttribute('aria-haspopup', 'dialog');
+      picker.setAttribute('aria-expanded', 'false');
+      let hueValue = 0;
+      const area = make('button', 'definition-colour-area');
+      area.type = 'button';
+      area.setAttribute('aria-label', `${label} saturation and brightness; use arrow keys to adjust`);
+      const marker = make('span', 'definition-colour-marker');
+      marker.setAttribute('aria-hidden', 'true');
+      area.append(marker);
+      const hue = make('input', 'definition-colour-hue');
+      hue.type = 'range';
+      hue.min = '0';
+      hue.max = '360';
+      hue.step = '1';
+      hue.setAttribute('aria-label', `${label} hue`);
+      const preview = make('span', 'definition-colour-swatch definition-colour-preview');
+      preview.setAttribute('aria-hidden', 'true');
+      const previewOpaque = make('span');
+      const previewTransparent = make('span');
+      preview.append(previewOpaque, previewTransparent);
+      popup.append(area, hue, preview);
+      const channels = ['Red', 'Green', 'Blue', 'Opacity'].map((name, index) => {
+        const row = make('label');
+        const caption = make('span');
+        caption.textContent = index === 3 ? 'Opacity (%)' : name;
+        const slider = make('input');
+        slider.type = 'range';
+        slider.min = '0';
+        slider.max = index === 3 ? '100' : '255';
+        slider.step = index === 3 ? '0.1' : '1';
+        slider.setAttribute('aria-label', `${label} ${name.toLowerCase()}`);
+        const number = make('input');
+        number.type = 'number';
+        number.min = slider.min;
+        number.max = slider.max;
+        number.step = slider.step;
+        number.setAttribute('aria-label', `${label} ${name.toLowerCase()} value`);
+        row.append(caption, slider, number);
+        popup.append(row);
+        return { slider, number };
+      });
+      const swatch = make('span', 'definition-colour-swatch');
+      const opaque = make('span', 'definition-colour-opaque');
+      const transparent = make('span', 'definition-colour-transparent');
+      opaque.setAttribute('aria-hidden', 'true');
+      transparent.setAttribute('aria-hidden', 'true');
       picker.setAttribute('aria-label', `${label} picker`);
       const refresh = () => {
         const current = colourValue(input.value);
+        if (swatchSource !== source) {
+          swatchSource = source;
+          swatchError = '';
+          try {
+            swatchScene = parseScene(source);
+          } catch (cause) {
+            swatchScene = undefined;
+            swatchError = cause instanceof Error ? cause.message : String(cause);
+          }
+        }
+        let opacity = 1;
+        const layer = path[0];
+        if (swatchScene && (layer === 'scene' || layer === 'background')) {
+          const shape = (layer === 'scene' ? swatchScene.elements : swatchScene.background)[Number(path[1])];
+          if (shape) {
+            if (path[2] === 'glow') opacity = shape.glow?.opacity ?? 1;
+            else if (path[2] === 'outline' && shape.kind !== 'zoom') opacity = shape.opacity * (shape.outline?.opacity ?? 1);
+            else if (path.length === 3) opacity = shape.opacity;
+          }
+        } else if (swatchScene && layer === 'seed') opacity = swatchScene.seed.opacity;
         picker.disabled = !current;
         picker.title = current ? 'Choose a colour' : 'Edit this colour expression in the text field';
-        if (current) picker.value = current.hex;
+        swatch.title = swatchError ? `Opacity preview unavailable: ${swatchError}`
+          : 'Left: opaque colour. Right: colour with opacity over a chequerboard.';
+        swatch.classList.toggle('is-disabled', !current);
+        opaque.style.backgroundColor = current ? stopColour(input.value)?.colour ?? current.hex : '';
+        transparent.style.backgroundColor = current ? input.value : '';
+        transparent.style.opacity = String(opacity);
+        previewOpaque.style.backgroundColor = opaque.style.backgroundColor;
+        previewTransparent.style.backgroundColor = transparent.style.backgroundColor;
+        previewTransparent.style.opacity = transparent.style.opacity;
+        if (current) {
+          const stop = stopColour(input.value);
+          const rgb = stop ? colourValue(stop.colour)?.hex ?? current.hex : current.hex;
+          const alpha = stop?.opacity ?? (current.alpha ? parseInt(current.alpha, 16) / 255 : 1);
+          const hsv = colourHsv(rgb);
+          if (hsv.saturation > 0 && hsv.brightness > 0) hueValue = hsv.hue;
+          hue.value = String(hueValue);
+          area.style.backgroundColor = `hsl(${hueValue} 100% 50%)`;
+          marker.style.left = `${hsv.saturation * 100}%`;
+          marker.style.top = `${(1 - hsv.brightness) * 100}%`;
+          area.setAttribute('aria-description',
+            `Saturation ${Math.round(hsv.saturation * 100)}%, brightness ${Math.round(hsv.brightness * 100)}%`);
+          channels.forEach(({ slider, number }, index) => {
+            const value = index === 3 ? Math.round(alpha * 1000) / 10
+              : parseInt(rgb.slice(1 + index * 2, 3 + index * 2), 16);
+            slider.value = number.value = String(value);
+          });
+        }
       };
+      swatchRefreshers.push(refresh);
       refresh();
       input.addEventListener('input', refresh);
-      picker.addEventListener('input', () => {
-        input.value = gradientStop
-          ? stopWithOpacity(picker.value, stopColour(input.value)?.opacity ?? 1)
-          : picker.value + (colourValue(input.value)?.alpha ?? '');
+      picker.addEventListener('click', () => {
+        const bounds = swatch.getBoundingClientRect();
+        popup.style.left = `${Math.max(8, Math.min(bounds.right - 300, window.innerWidth - 308))}px`;
+        popup.style.top = `${Math.max(8, Math.min(bounds.bottom + 6, window.innerHeight - 480))}px`;
+        popup.showPopover();
+        area.focus();
+      });
+      popup.addEventListener('toggle', () => picker.setAttribute('aria-expanded', String(popup.matches(':popover-open'))));
+      const setColour = (hex: string) => {
+        const current = colourValue(input.value);
+        if (!current) return;
+        const alpha = stopColour(input.value)?.opacity ?? (current.alpha ? parseInt(current.alpha, 16) / 255 : 1);
+        input.value = stopWithOpacity(hex, alpha);
         set(path, input.value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      const areaColour = (event: PointerEvent) => {
+        const bounds = area.getBoundingClientRect();
+        const saturation = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+        const brightness = 1 - Math.max(0, Math.min(1, (event.clientY - bounds.top) / bounds.height));
+        setColour(hsvHex(hueValue, saturation, brightness));
+      };
+      area.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        area.setPointerCapture(event.pointerId);
+        area.focus();
+        areaColour(event);
+      });
+      area.addEventListener('pointermove', (event) => {
+        if (area.hasPointerCapture(event.pointerId)) areaColour(event);
+      });
+      area.addEventListener('pointerup', (event) => {
+        if (area.hasPointerCapture(event.pointerId)) area.releasePointerCapture(event.pointerId);
+      });
+      area.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const step = event.shiftKey ? 0.1 : 0.01;
+        const saturation = parseFloat(marker.style.left) / 100;
+        const brightness = 1 - parseFloat(marker.style.top) / 100;
+        setColour(hsvHex(hueValue,
+          Math.max(0, Math.min(1, saturation + (event.key === 'ArrowRight' ? step : event.key === 'ArrowLeft' ? -step : 0))),
+          Math.max(0, Math.min(1, brightness + (event.key === 'ArrowUp' ? step : event.key === 'ArrowDown' ? -step : 0)))));
+      });
+      hue.addEventListener('input', () => {
+        hueValue = hue.valueAsNumber;
+        setColour(hsvHex(hueValue, parseFloat(marker.style.left) / 100, 1 - parseFloat(marker.style.top) / 100));
+      });
+      channels.forEach(({ slider, number }, index) => {
+        for (const control of [slider, number]) control.addEventListener('input', () => {
+          if (!control.value || !control.checkValidity()) return;
+          slider.value = number.value = control.value;
+          const current = colourValue(input.value);
+          if (!current) return;
+          const hex = index === 3 ? stopColour(input.value)?.colour ?? current.hex
+            : '#' + channels.slice(0, 3).map(({ slider }) => Number(slider.value).toString(16).padStart(2, '0')).join('');
+          const alpha = index === 3 ? Number(channels[3].slider.value) / 100
+            : stopColour(input.value)?.opacity ?? (current.alpha ? parseInt(current.alpha, 16) / 255 : 1);
+          input.value = stopWithOpacity(hex, alpha);
+          set(path, input.value);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        });
       });
       container.classList.add('definition-colour-value');
-      container.append(picker);
+      swatch.append(opaque, transparent, picker);
+      container.append(swatch, popup);
       const gradientStop = path.includes('stops')
         || (['scene', 'background'].includes(String(path[0])) && ['colour', 'color'].includes(String(path[2])) && ['colours', 'colors'].includes(String(path[3])))
         || (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])));
@@ -931,7 +1109,7 @@ export function createDefinitionForm(
         };
         refreshOpacity();
         input.addEventListener('input', refreshOpacity);
-        picker.addEventListener('input', refreshOpacity);
+        swatchRefreshers.push(refreshOpacity);
         opacity.addEventListener('input', () => {
           const current = stopColour(input.value);
           if (!current || !opacity.value || !opacity.checkValidity()) return;
@@ -971,6 +1149,7 @@ export function createDefinitionForm(
 
   function render() {
     cancelTouchDrag?.();
+    swatchRefreshers.length = 0;
     inputSlots.clear();
     body.replaceChildren();
     undo.disabled = undoStack.length === 0;

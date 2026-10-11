@@ -1143,7 +1143,7 @@ const LETTER_SHORTCUTS: Record<string, () => void> = {
 };
 
 window.addEventListener('keydown', (event) => {
-  if (shareDialog.element.open || event.altKey) {
+  if (shareDialog.element.open || document.querySelector('.definition-colour-popup:popover-open') || event.altKey) {
     return;
   }
   const key = event.key.toLowerCase();
