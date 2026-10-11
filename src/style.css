@@ -1243,8 +1243,13 @@ canvas {
   color: #b8b8c0;
 }
 
-.definition-scene-section > summary > span {
+.definition-scene-section > summary > span,
+.definition-background-section > summary > span {
   flex: 1;
+}
+
+.definition-background-section > .definition-section-body {
+  padding: 0.3rem;
 }
 
 .definition-form .definition-add-item {
@@ -1255,7 +1260,8 @@ canvas {
   line-height: normal;
 }
 
-.definition-scene-section:not([open]) .definition-add-item {
+.definition-scene-section:not([open]) .definition-add-item,
+.definition-background-section:not([open]) .definition-add-item {
   display: none;
 }
 

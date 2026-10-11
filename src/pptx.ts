@@ -326,7 +326,8 @@ function polygonShapeXml(
 }
 
 // `picture` is a PNG of the rendered scene, with transparent background.
-export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blob {
+export function powerPointFile(scene: SceneDefinition, picture: Uint8Array, background?: Uint8Array): Blob {
+  if (scene.background.length && !background) throw new Error('PowerPoint export needs the rendered background image');
   const { width, height } = slideSize(scene.view.aspect);
   const mapping = slideMapping(scene, width, height);
   const shapes = scene.elements
@@ -342,7 +343,9 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
   const fadeWarning = powerPointFadeWarning(scene);
 
   const slide = xml(`<p:sld ${roots}><p:cSld${title}>`
-    + `<p:bg><p:bgPr><a:solidFill>${colorXml(scene.frame.background, 1)}</a:solidFill><a:effectLst/></p:bgPr></p:bg>`
+    + `<p:bg><p:bgPr>${background
+      ? '<a:blipFill><a:blip r:embed="rId5"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>'
+      : `<a:solidFill>${colorXml(scene.frame.background, 1)}</a:solidFill>`}<a:effectLst/></p:bgPr></p:bg>`
     + `${EMPTY_TREE}${shapes}</p:spTree>`
     + '<p:extLst><p:ext uri="{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}">'
     + `<p14:creationId xmlns:p14="${NS_P14}" val="${SLIDE_CREATION_ID}"/></p:ext></p:extLst>`
@@ -431,10 +434,12 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array): Blo
       data: rels(relation(1, 'slideLayout', '../slideLayouts/slideLayout1.xml')
         + relation(2, 'image', '../media/image1.png')
         + relation(3, 'slide', 'slide1.xml')
+        + (background ? relation(5, 'image', '../media/background.png') : '')
         + (fadeWarning ? relation(4, 'notesSlide', '../notesSlides/notesSlide1.xml') : '')),
     },
     { name: 'ppt/media/image1.png', data: picture },
   ];
+  if (background) entries.push({ name: 'ppt/media/background.png', data: background });
   if (fadeWarning && notesMaster && notesSlide) {
     entries.push(
       { name: 'ppt/notesMasters/notesMaster1.xml', data: notesMaster },

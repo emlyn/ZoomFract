@@ -77,7 +77,7 @@ files unless extracting a module clearly reduces complexity.
 
 ## Scene language invariants
 
-- The top-level model contains `info`, `variables`, `frame`, `view`, `seed`,
+- The top-level model contains `info`, `variables`, `frame`, `view`, `background`, `seed`,
   `shading`, `colourSpace`, and `scene`.
 - Optional `info` holds text-only `title`, `author`, `date`, `description`,
   and `links` (http(s) URL strings or `{ title, url }`). It never affects
@@ -129,6 +129,15 @@ files unless extracting a module clearly reduces complexity.
   transparent where no element is drawn.
 - Elements may have an optional `name`. Names must be unique, non-blank,
   contain no dots or spaces, and cannot be the reserved name `view`.
+- Optional top-level `background` is an ordered shape list, shown as a
+  collapsible subsection under Scene. It draws once beneath the recursive
+  image, always in paint mode, and is never included in zooms, density counts
+  or zoom-glow masks. Names are unique across both lists and point references
+  may cross lists. Auto overflow fits both layers, copying only scene content.
+  Exports include background shapes even with presentation transparency.
+  The worker posts the composite plus separate final foreground/background
+  bitmaps; PowerPoint uses the foreground cache for zooms and rasterises the
+  background over frame.background as a slide-background image.
 - `scene` is an ordered list of typed items. Every item has a `type`, currently
   `rect`, `circle`, `polygon` or `zoom`, and later items draw on top of earlier items. Planned
   syntax (more shapes, images, groups, gradients, zoom colour changes,

@@ -10,6 +10,7 @@ export type LinkOptions = { inputs: boolean; settings: boolean };
 
 type ShareDialogOptions = {
   canvas: HTMLCanvasElement;
+  powerPointLayers: () => { foreground: CanvasImageSource; background?: CanvasImageSource };
   scene: () => SceneDefinition;
   fileName: () => string;
   hasInputs: () => boolean;
@@ -368,7 +369,7 @@ export function createShareDialog(options: ShareDialogOptions) {
   });
 
   // The picture at the chosen size, on the background unless it is transparent.
-  function drawImage(target: HTMLCanvasElement, width: number, height: number, withBackground: boolean) {
+  function drawImage(target: HTMLCanvasElement, width: number, height: number, withBackground: boolean, source: CanvasImageSource = canvas) {
     target.width = width;
     target.height = height;
     const context = context2d(target);
@@ -377,7 +378,7 @@ export function createShareDialog(options: ShareDialogOptions) {
       context.fillRect(0, 0, width, height);
     }
     context.imageSmoothingQuality = 'high';
-    context.drawImage(canvas, 0, 0, width, height);
+    context.drawImage(source, 0, 0, width, height);
     return target;
   }
 
@@ -682,8 +683,13 @@ export function createShareDialog(options: ShareDialogOptions) {
   async function powerPointBlob() {
     const fit = Math.min(1, POWERPOINT_PICTURE_MAX_SIDE / Math.max(canvas.width, canvas.height));
     const { width, height } = imageSize(fit);
-    const picture = await pngBlob(drawImage(document.createElement('canvas'), width, height, false));
-    return powerPointFile(options.scene(), new Uint8Array(await picture.arrayBuffer()));
+    const layers = options.powerPointLayers();
+    const picture = await pngBlob(drawImage(document.createElement('canvas'), width, height, false, layers.foreground));
+    const background = layers.background
+      ? await pngBlob(drawImage(document.createElement('canvas'), width, height, true, layers.background))
+      : undefined;
+    return powerPointFile(options.scene(), new Uint8Array(await picture.arrayBuffer()),
+      background ? new Uint8Array(await background.arrayBuffer()) : undefined);
   }
 
   downloadPowerPoint.addEventListener('click', () => void (async () => {

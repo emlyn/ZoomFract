@@ -279,6 +279,30 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
 
 <section id="guide-shapes">
   <h3>Shapes</h3>
+  <p>Put shapes in the optional top-level <code>background</code> list to draw
+    them once, behind the recursive scene. Transparent parts of the scene reveal
+    these shapes, but zooms never copy them. Items in each list draw in order,
+    with later items on top. Background accepts rectangles, circles and polygons,
+    including gradients, opacity and rectangle glows, but not zooms.</p>
+  <pre><code>background:
+  - type: rect
+    centre: view.centre
+    width: view.width
+    height: view.height
+    colour: {gradient: radial, colours: [white, navy]}
+scene:
+  # Shapes and zooms that repeat</code></pre>
+  <p>The Visual editor has a collapsible Background subsection under Scene.
+    The layer button on a shape moves it between Background and Scene.
+    With density shading, background shapes still use ordinary colour fills,
+    not density weights; move items in YAML and adjust their settings.
+    Names must be unique across both lists, and point references can cross lists.
+    Automatic overflow fits both layers without including the background in copies.</p>
+  <p>Background shapes are picture content: image exports include them even
+    with Transparent background selected. <code>frame.background</code> is still
+    the presentation colour behind the canvas. PowerPoint renders background
+    shapes over that colour into a slide-background image; Slide Zooms and their
+    cached pictures exclude it.</p>
   <pre><code>- type: rect
   name: block
   centre: [0, 0]

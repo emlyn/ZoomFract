@@ -1058,6 +1058,7 @@ function loadDefinitionFile(text: string): boolean {
 
 const shareDialog = createShareDialog({
   canvas,
+  powerPointLayers: () => ({ foreground: displayedFrame?.foreground ?? canvas, background: displayedFrame?.background }),
   scene: () => state.scene,
   fileName: () => state.definitionLocation.kind === 'example' ? state.definitionLocation.id : 'custom',
   hasInputs: () => state.scene.inputs.length > 0,
@@ -1380,13 +1381,15 @@ let shownDimension: FractalDimension | null = null;
 // The "medium" paragraphs of the label: what the picture is and how it was
 // made, like the materials line on a gallery label.
 function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered, preview: boolean): string[] {
-  const count = (kind: string) => scene.elements.filter((element) => element.kind === kind).length;
+  const allElements = [...scene.elements, ...scene.background];
+  const count = (kind: string) => allElements.filter((element) => element.kind === kind).length;
   const parts = [
     ...(count('rect') > 0 ? [plural(count('rect'), 'rectangle')] : []),
     ...(count('circle') > 0 ? [plural(count('circle'), 'circle')] : []),
     ...(count('polygon') > 0 ? [plural(count('polygon'), 'polygon')] : []),
     ...(count('zoom') > 0 ? [plural(count('zoom'), 'zoom')] : []),
-    ...(scene.elements.some((element) => element.glow) ? ['glow'] : []),
+    ...(allElements.some((element) => element.glow) ? ['glow'] : []),
+    ...(scene.background.length ? ['background shapes'] : []),
     ...(scene.shading.mode === 'density' ? ['density shading'] : []),
   ];
   const contents = [
@@ -1843,7 +1846,7 @@ function drawEditOutlines(scene: ResolvedSceneDefinition) {
   // Resolved zooms copy the full canvas; reframing recovers the declared view.
   const { coordinates, declared } = scene.view;
   const boundsDiffer = JSON.stringify(coordinates) !== JSON.stringify(declared);
-  const elements = scene.elements.filter((_, index) => editedItems.includes(index));
+  const elements = [...scene.elements, ...scene.background].filter((_, index) => editedItems.includes(index));
   const outline = (points: Vec2[], dash: number[]) => {
     tracePolygon(points);
     editContext.setLineDash([]);
@@ -1920,6 +1923,8 @@ const PROGRESS_DELAY_MS = 150;
 
 type DisplayedFrame = {
   bitmap: ImageBitmap;
+  foreground?: ImageBitmap;
+  background?: ImageBitmap;
   scene: ResolvedSceneDefinition;
   // Previews are reduced, so they are never downloaded.
   preview: boolean;
@@ -1929,6 +1934,8 @@ let displayedFrame: DisplayedFrame | null = null;
 
 function clearDisplay() {
   displayedFrame?.bitmap.close();
+  displayedFrame?.foreground?.close();
+  displayedFrame?.background?.close();
   displayedFrame = null;
   drawDisplay();
 }
@@ -2149,6 +2156,11 @@ function startRender(request: RenderRequest) {
 
   worker.onmessage = (event: MessageEvent<RenderMessage>) => {
     if (activeRequest !== request) {
+      if (event.data.type === 'frame') {
+        event.data.bitmap.close();
+        event.data.foreground?.close();
+        event.data.background?.close();
+      }
       return;
     }
     const message = event.data;
@@ -2169,11 +2181,17 @@ function startRender(request: RenderRequest) {
       case 'frame':
         if (!message.final && resizeRequests.has(request) && displayedFrame && !displayedFrame.preview) {
           message.bitmap.close();
+          message.foreground?.close();
+          message.background?.close();
           break;
         }
         displayedFrame?.bitmap.close();
+        displayedFrame?.foreground?.close();
+        displayedFrame?.background?.close();
         displayedFrame = {
           bitmap: message.bitmap,
+          foreground: message.foreground,
+          background: message.background,
           scene: previewRequests.get(request) ?? request.scene,
           preview: previewRequests.has(request),
         };

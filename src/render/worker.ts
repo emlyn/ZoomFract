@@ -17,9 +17,17 @@ const errorMessage = (error: unknown) => error instanceof Error ? error.message 
 
 // The renderer draws each frame onto its canvas, which is posted as is.
 const frameCallbacks: FrameCallbacks = {
-  frame: (canvas, final) => {
+  frame: (canvas, final, layers) => {
     const bitmap = canvas.transferToImageBitmap();
-    post({ type: 'frame', bitmap, final }, [bitmap]);
+    if (layers) {
+      const foreground = layers.foreground.transferToImageBitmap();
+      const copy = new OffscreenCanvas(layers.background.width, layers.background.height);
+      const context = copy.getContext('2d');
+      if (!context) throw new Error('Background sharing needs a 2D canvas');
+      context.drawImage(layers.background, 0, 0);
+      const background = copy.transferToImageBitmap();
+      post({ type: 'frame', bitmap, final, foreground, background }, [bitmap, foreground, background]);
+    } else post({ type: 'frame', bitmap, final }, [bitmap]);
   },
   progress: (progress) => post({ type: 'progress', progress }),
 };

@@ -665,6 +665,36 @@ export function renderWebgl(
   settings: RenderSettings,
   callbacks: FrameCallbacks,
 ): RenderResult {
+  if (scene.background.length) {
+    const { width, height } = scene.view.resolution;
+    const background = new OffscreenCanvas(width, height);
+    const backgroundContext = background.getContext('2d');
+    const composite = new OffscreenCanvas(width, height);
+    const context = composite.getContext('2d');
+    if (!backgroundContext || !context) throw new Error('Background compositing needs a 2D canvas');
+    const painted = renderWebgl({
+      ...scene, background: [], elements: scene.background,
+      shading: { mode: 'paint', detail: 0 }, seed: { color: 'transparent', opacity: 1 },
+    }, { ...settings, recursionDepth: 0, levels: 1, autoLevels: false }, {
+      frame: (canvas, final) => { if (final) backgroundContext.drawImage(canvas, 0, 0); },
+      progress: () => {},
+    });
+    painted.dispose();
+    const compositeCallbacks = (target: FrameCallbacks): FrameCallbacks => ({
+      progress: target.progress,
+      frame: (foreground, final) => {
+        context.clearRect(0, 0, width, height);
+        context.drawImage(background, 0, 0);
+        context.drawImage(foreground, 0, 0);
+        target.frame(composite, final, final ? { foreground, background } : undefined);
+      },
+    });
+    const result = renderWebgl({ ...scene, background: [] }, settings, compositeCallbacks(callbacks));
+    return {
+      ...result,
+      continueTo: (next, target) => result.continueTo(next, compositeCallbacks(target)),
+    };
+  }
   const { width, height } = scene.view.resolution;
   const current = gpu && !gpu.gl.isContextLost() ? gpu : createGpu(width, height);
   gpu = current;

@@ -269,6 +269,7 @@ export function createDefinitionForm(
   let document = parseDocument(source);
   let editKey = '';
   let dragging: number | null = null;
+  let draggingLayer = 'scene';
   let cancelTouchDrag: (() => void) | undefined;
   let density = false;
   let active = true;
@@ -279,7 +280,10 @@ export function createDefinitionForm(
     const scene = body.querySelector<HTMLDetailsElement>('.definition-scene-section');
     const indices = active && scene?.open
       ? [...body.querySelectorAll<HTMLDetailsElement>('.definition-item')]
-        .filter((card) => card.open).map((card) => Number(card.dataset.item))
+        .filter((card) => card.open && (card.dataset.layer !== 'background'
+          || card.closest('.definition-background-section')?.hasAttribute('open')))
+        .map((card) => Number(card.dataset.item) + (card.dataset.layer === 'background'
+          ? body.querySelectorAll('[data-layer="scene"]').length : 0))
       : [];
     const key = JSON.stringify(indices);
     if (key !== selected) {
@@ -332,9 +336,9 @@ export function createDefinitionForm(
       return;
     }
     if (source === before) return;
-    if (path[0] === 'scene' && path[2] === 'name' && typeof path[1] === 'number') {
-      const summary = body.querySelector(`[data-item="${path[1]}"] summary`);
-      const node = document.getIn(['scene', path[1]], true);
+    if (['scene', 'background'].includes(String(path[0])) && path[2] === 'name' && typeof path[1] === 'number') {
+      const summary = body.querySelector(`[data-layer="${path[0]}"][data-item="${path[1]}"] summary`);
+      const node = document.getIn([path[0], path[1]], true);
       const item: unknown = isMap(node) ? node.toJSON() : undefined;
       if (summary && record(item)) {
         const shape = typeof item.type === 'string' ? SHAPES[item.type] : undefined;
@@ -540,13 +544,13 @@ export function createDefinitionForm(
     if (record(value)) {
       const fields = field.fields ?? {};
       const variableFields = path[0] === 'variables';
-      const fillFields = path[0] === 'scene' && ['colour', 'color'].includes(String(path[2])) && path.length === 3;
+      const fillFields = ['scene', 'background'].includes(String(path[0])) && ['colour', 'color'].includes(String(path[2])) && path.length === 3;
       const shown = { ...(fillFields && value.gradient === 'linear' && value.from === undefined && value.to === undefined ? { angle: 0 } : {}),
         ...(variableFields ? Object.fromEntries(Object.entries(fields)
         .filter(([key]) => key !== 'stops').map(([key, spec]) => [key, spec.initial])) : {}),
         ...(record(defaults) ? defaults : {}), ...value };
       Object.entries(shown).forEach(([key, child]) => {
-        if (key === 'type' && path[0] === 'scene') return;
+        if (key === 'type' && ['scene', 'background'].includes(String(path[0]))) return;
         if (!(key in value) && Object.keys(value).some((written) => SPELLINGS[written] === key)) return;
         let spec = fields[SPELLINGS[key] ?? key] ?? (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
         if (fillFields && (SPELLINGS[key] ?? key) === 'colours' && typeof child === 'string') {
@@ -587,9 +591,10 @@ export function createDefinitionForm(
           if (!density && ['scale', 'colours'].includes(key)) return false;
           if (density && key === 'detail') return false;
         }
-        if (path[0] === 'scene' && path.length === 2) {
-          if (!density && key === 'weight') return false;
-          if (density && ['colour', 'opacity', 'transparency', 'glow', 'blend'].includes(key)) return false;
+        if (['scene', 'background'].includes(String(path[0])) && path.length === 2) {
+          const itemDensity = density && path[0] === 'scene';
+          if (!itemDensity && key === 'weight') return false;
+          if (itemDensity && ['colour', 'opacity', 'transparency', 'glow', 'blend'].includes(key)) return false;
         }
         return !Object.keys(shown).some((written) => (SPELLINGS[written] ?? written) === key);
       });
@@ -705,7 +710,7 @@ export function createDefinitionForm(
       const input = select([...(optional ? [['', 'Default'] as [string, string]] : []),
         ...choices.map((key): [string, string] => [key, title(key)])], optional && document.getIn(documentPath(path)) === undefined ? '' : current, label);
       input.addEventListener('change', () => {
-        if (path[0] === 'scene' && ['colour', 'color'].includes(String(path[2])) && path[3] === 'gradient') {
+        if (['scene', 'background'].includes(String(path[0])) && ['colour', 'color'].includes(String(path[2])) && path[3] === 'gradient') {
           change(path, () => {
             setNode(path, input.value);
             const parent = path.slice(0, -1);
@@ -831,7 +836,7 @@ export function createDefinitionForm(
       container.classList.add('definition-colour-value');
       container.append(picker);
       const gradientStop = path.includes('stops')
-        || (path[0] === 'scene' && ['colour', 'color'].includes(String(path[2])) && ['colours', 'colors'].includes(String(path[3])))
+        || (['scene', 'background'].includes(String(path[0])) && ['colour', 'color'].includes(String(path[2])) && ['colours', 'colors'].includes(String(path[3])))
         || (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])));
       if (gradientStop) {
         const opacityRow = make('label', 'definition-stop-opacity');
@@ -866,27 +871,27 @@ export function createDefinitionForm(
     return container;
   }
 
-  function move(from: number, to: number) {
-    const node = document.get('scene', true);
+  function move(layer: 'scene' | 'background', from: number, to: number) {
+    const node = document.get(layer, true);
     if (!isSeq(node) || from === to || to < 0 || to >= node.items.length) return;
-    body.querySelectorAll<HTMLDetailsElement>('.definition-item').forEach((card) => {
-      const key = `scene.${card.dataset.item}`;
+    body.querySelectorAll<HTMLDetailsElement>(`[data-layer="${layer}"]`).forEach((card) => {
+      const key = `${layer}.${card.dataset.item}`;
       if (card.open) expanded.add(key);
       else expanded.delete(key);
     });
-    const openItems = [...expanded].filter((key) => key.startsWith('scene.'));
+    const openItems = [...expanded].filter((key) => key.startsWith(`${layer}.`));
     openItems.forEach((key) => expanded.delete(key));
     openItems.forEach((key) => {
-      const index = Number(key.slice('scene.'.length));
+      const index = Number(key.slice(layer.length + 1));
       const next = index === from ? to : from < to && index > from && index <= to ? index - 1
         : from > to && index >= to && index < from ? index + 1 : index;
-      expanded.add(`scene.${next}`);
+      expanded.add(`${layer}.${next}`);
     });
-    change(['scene'], () => {
+    change([layer], () => {
       const [item] = node.items.splice(from, 1);
       node.items.splice(to, 0, item);
     }, true);
-    body.querySelector<HTMLElement>(`[data-item="${to}"] summary`)?.focus();
+    body.querySelector<HTMLElement>(`[data-layer="${layer}"][data-item="${to}"] summary`)?.focus();
   }
 
   function render() {
@@ -917,268 +922,310 @@ export function createDefinitionForm(
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     }
-    const scene = disclosure('Scene', 'scene');
-    scene.classList.add('definition-scene-section');
-    const content = make('div', 'definition-section-body');
-      content.classList.add('definition-scene-list');
-      const insertionLine = make('div', 'definition-insertion-line');
-      insertionLine.hidden = true;
-      insertionLine.setAttribute('aria-hidden', 'true');
-      let insertionIndex: number | null = null;
-      const clearInsertion = () => {
+    const renderItems = (layer: 'scene' | 'background') => {
+      const scene = disclosure(title(layer), layer);
+      scene.classList.add(`definition-${layer}-section`);
+      const content = make('div', 'definition-section-body');
+        content.classList.add('definition-scene-list');
+        const insertionLine = make('div', 'definition-insertion-line');
         insertionLine.hidden = true;
-        insertionIndex = null;
-      };
-      const showInsertion = (x: number, y: number) => {
-        const bounds = content.getBoundingClientRect();
-        if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) {
-          clearInsertion();
-          return;
-        }
-        const cards = [...content.querySelectorAll<HTMLElement>('[data-item]')];
-        if (!cards.length) return;
-        const slot = cards.findIndex((card) => {
-          const rect = card.getBoundingClientRect();
-          return y < rect.top + rect.height / 2;
-        });
-        insertionIndex = slot === -1 ? cards.length : slot;
-        const previous = cards[insertionIndex - 1]?.getBoundingClientRect();
-        const next = cards[insertionIndex]?.getBoundingClientRect();
-        const top = previous && next ? (previous.bottom + next.top) / 2
-          : next ? next.top - 5 : previous!.bottom + 5;
-        insertionLine.style.top = `${top - bounds.top}px`;
-        insertionLine.hidden = false;
-      };
-      const insert = (from: number) => {
-        const slot = insertionIndex;
-        clearInsertion();
-        if (slot !== null) move(from, slot > from ? slot - 1 : slot);
-      };
-      content.addEventListener('dragover', (event) => {
-        if (dragging === null) return;
-        event.preventDefault();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-        showInsertion(event.clientX, event.clientY);
-      });
-      content.addEventListener('dragleave', (event) => {
-        if (!(event.relatedTarget instanceof Node) || !content.contains(event.relatedTarget)) clearInsertion();
-      });
-      content.addEventListener('drop', (event) => {
-        if (dragging === null) return;
-        event.preventDefault();
-        event.stopPropagation();
-        showInsertion(event.clientX, event.clientY);
-        const from = dragging;
-        dragging = null;
-        insert(from);
-      });
-    const add = select([['', '+ Add item'], ...Object.entries(SHAPES).map(([key, shape]): [string, string] => [key, shape.label])], '', 'Add scene item');
-    add.className = 'definition-add-item';
-    for (const option of add.options) {
-      if (SHAPES[option.value]) option.className = `definition-item-${option.value}`;
-    }
-    const addOption = add.options[0];
-    addOption.textContent = '+';
-    addOption.hidden = true;
-    addOption.disabled = true;
-    const sceneHeading = scene.querySelector('summary')!;
-    const sceneTitle = make('span');
-    sceneTitle.textContent = 'Scene';
-    sceneHeading.replaceChildren(sceneTitle, add);
-    add.addEventListener('click', (event) => event.stopPropagation());
-    add.addEventListener('keydown', (event) => event.stopPropagation());
-    const items = value.scene;
-    add.addEventListener('change', () => {
-      if (!add.value) return;
-      const index = Array.isArray(items) ? items.length : 0;
-      expanded.add(`scene.${index}`);
-      if (items === undefined) set(['scene'], [SHAPES[add.value].initial], true);
-      else if (Array.isArray(items)) set(['scene', index], SHAPES[add.value].initial, true);
-      body.querySelector<HTMLElement>(`[data-item="${index}"] summary`)?.focus();
-    });
-    if (Array.isArray(items)) {
-      items.forEach((item, index) => {
-        const shape = record(item) && typeof item.type === 'string' ? SHAPES[item.type] : undefined;
-        const label = `${index + 1}. ${shape?.label ?? 'Unknown item'}${record(item) && item.name ? ` - ${item.name}` : ''}`;
-        const card = disclosure(label, `scene.${index}`);
-        card.classList.add('definition-item');
-        if (record(item) && typeof item.type === 'string' && SHAPES[item.type]) {
-          card.classList.add(`definition-item-${item.type}`);
-        }
-        card.dataset.item = String(index);
-        const tools = make('div', 'definition-item-tools');
-        const summary = card.querySelector('summary')!;
-        const caption = make('span', 'definition-item-caption');
-        caption.textContent = label;
-        summary.replaceChildren(caption, tools);
-        const handle = summary;
-        handle.draggable = true;
-        handle.title = 'Drag to reorder; Alt+Up/Down moves this item';
-        let suppressClick = false;
-        tools.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        tools.addEventListener('pointerdown', (event) => event.stopPropagation());
-        tools.addEventListener('dragstart', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        summary.addEventListener('click', (event) => {
-          if (suppressClick) {
-            event.preventDefault();
-            suppressClick = false;
-          }
-        });
-        handle.addEventListener('dragstart', (event) => {
-          suppressClick = true;
-          dragging = index;
-          card.classList.add('definition-item-lifted');
-          event.dataTransfer?.setData('text/plain', String(index));
-          if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-        });
-        handle.addEventListener('dragend', () => {
-          dragging = null;
-          card.classList.remove('definition-item-lifted');
-          clearInsertion();
-          window.setTimeout(() => { suppressClick = false; }, 0);
-        });
-        let touchPointer: number | undefined;
-        let holdTimer: number | undefined;
-        let touchDragging = false;
-        let touchOrigin = { x: 0, y: 0 };
-        let touchPreview: HTMLDivElement | undefined;
-        const positionTouchPreview = (x: number, y: number) => {
-          if (touchPreview) {
-            touchPreview.style.transform = `translate(${x - touchOrigin.x}px, ${y - touchOrigin.y}px)`;
-          }
+        insertionLine.setAttribute('aria-hidden', 'true');
+        let insertionIndex: number | null = null;
+        const clearInsertion = () => {
+          insertionLine.hidden = true;
+          insertionIndex = null;
         };
-        const cancelTouch = () => {
-          window.clearTimeout(holdTimer);
-          holdTimer = undefined;
-          touchPreview?.remove();
-          touchPreview = undefined;
-          if (touchPointer !== undefined && handle.hasPointerCapture(touchPointer)) {
-            handle.releasePointerCapture(touchPointer);
-          }
-          touchPointer = undefined;
-          touchDragging = false;
-          handle.draggable = true;
-          card.classList.remove('definition-item-lifted');
-          clearInsertion();
-          if (cancelTouchDrag === cancelTouch) cancelTouchDrag = undefined;
-        };
-        handle.addEventListener('pointerdown', (event) => {
-          if (event.pointerType === 'mouse') return;
-          cancelTouchDrag?.();
-          suppressClick = false;
-          if (!event.isPrimary) return;
-          touchPointer = event.pointerId;
-          touchOrigin = { x: event.clientX, y: event.clientY };
-          handle.draggable = false;
-          cancelTouchDrag = cancelTouch;
-          holdTimer = window.setTimeout(() => {
-            holdTimer = undefined;
-            touchDragging = true;
-            suppressClick = true;
-            const bounds = card.getBoundingClientRect();
-            touchPreview = make('div', 'definition-form definition-drag-preview');
-            touchPreview.setAttribute('aria-hidden', 'true');
-            touchPreview.inert = true;
-            touchPreview.style.left = `${bounds.left}px`;
-            touchPreview.style.top = `${bounds.top}px`;
-            touchPreview.style.width = `${bounds.width}px`;
-            const previewCard = make('details', card.className);
-            previewCard.classList.add('definition-item-lifted');
-            previewCard.append(handle.cloneNode(true));
-            touchPreview.append(previewCard);
-            window.document.body.append(touchPreview);
-            card.classList.add('definition-item-lifted');
-            handle.setPointerCapture(event.pointerId);
-            showInsertion(touchOrigin.x, touchOrigin.y);
-          }, 1000);
-        });
-        handle.addEventListener('touchmove', (event) => {
-          if (touchDragging) event.preventDefault();
-        }, { passive: false });
-        handle.addEventListener('contextmenu', (event) => {
-          if (touchPointer !== undefined) event.preventDefault();
-        });
-        handle.addEventListener('pointermove', (event) => {
-          if (event.pointerId !== touchPointer) return;
-          if (!touchDragging) {
-            if (Math.hypot(event.clientX - touchOrigin.x, event.clientY - touchOrigin.y) > 8) cancelTouch();
+        const showInsertion = (x: number, y: number) => {
+          const bounds = content.getBoundingClientRect();
+          if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) {
+            clearInsertion();
             return;
           }
-          positionTouchPreview(event.clientX, event.clientY);
-          showInsertion(event.clientX, event.clientY);
-          const controls = root.closest('.controls');
-          if (controls) {
-            const bounds = controls.getBoundingClientRect();
-            if (event.clientY < bounds.top + 40) controls.scrollBy(0, -12);
-            else if (event.clientY > bounds.bottom - 40) controls.scrollBy(0, 12);
-          }
-        });
-        handle.addEventListener('pointerup', (event) => {
-          if (event.pointerId !== touchPointer) return;
-          if (touchDragging) insert(index);
-          cancelTouch();
-          window.setTimeout(() => { suppressClick = false; }, 0);
-        });
-        handle.addEventListener('pointercancel', (event) => {
-          if (event.pointerId === touchPointer) cancelTouch();
-        });
-        handle.addEventListener('lostpointercapture', () => {
-          if (touchPointer !== undefined) cancelTouch();
-        });
-        summary.addEventListener('keydown', (event) => {
-          if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
-          event.preventDefault();
-          move(index, index + (event.key === 'ArrowUp' ? -1 : 1));
-        });
-        const up = button('Move up', () => move(index, index - 1));
-        const down = button('Move down', () => move(index, index + 1));
-        up.disabled = index === 0;
-        down.disabled = index === items.length - 1;
-        const del = button('Delete', () => {
-          expanded.delete(`scene.${index}`);
-          const after = [...expanded].filter((key) => key.startsWith('scene.') && Number(key.slice(6)) > index);
-          after.forEach((key) => expanded.delete(key));
-          after.forEach((key) => expanded.add(`scene.${Number(key.slice(6)) - 1}`));
-          remove(['scene', index]);
-          body.querySelector<HTMLElement>(`[data-item="${Math.min(index, items.length - 2)}"] summary`)?.focus();
-        }, 'definition-remove');
-        const icon = (control: HTMLButtonElement, name: string, path: string) => {
-          control.setAttribute('aria-label', `${name}: ${label}`);
-          control.title = name;
-          control.className = 'definition-item-action';
-          const svg = window.document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-          svg.setAttribute('viewBox', '0 0 24 24');
-          svg.setAttribute('aria-hidden', 'true');
-          const drawing = window.document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          drawing.setAttribute('d', path);
-          svg.append(drawing);
-          control.replaceChildren(svg);
+          const cards = [...content.querySelectorAll<HTMLElement>(`[data-layer="${layer}"]`)];
+          if (!cards.length) return;
+          const slot = cards.findIndex((card) => {
+            const rect = card.getBoundingClientRect();
+            return y < rect.top + rect.height / 2;
+          });
+          insertionIndex = slot === -1 ? cards.length : slot;
+          const previous = cards[insertionIndex - 1]?.getBoundingClientRect();
+          const next = cards[insertionIndex]?.getBoundingClientRect();
+          const top = previous && next ? (previous.bottom + next.top) / 2
+            : next ? next.top - 5 : previous!.bottom + 5;
+          insertionLine.style.top = `${top - bounds.top}px`;
+          insertionLine.hidden = false;
         };
-        icon(up, 'Move up', 'M12 19V5M5 12l7-7 7 7');
-        icon(down, 'Move down', 'M12 5v14M5 12l7 7 7-7');
-        icon(del, 'Delete', 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7');
-        tools.append(up, down, del);
-        const settings = make('div', 'definition-section-body');
-        settings.append(fieldEditor(shape?.field ?? inferred(item), item, ['scene', index], label));
-        card.append(settings);
-        content.append(card);
-      });
-      if (!items.length) {
-        const hint = make('p', 'definition-hint');
-        hint.textContent = 'Add a shape or zoom to start your picture. Later items draw on top.';
-        content.append(hint);
+        const insert = (from: number) => {
+          const slot = insertionIndex;
+          clearInsertion();
+          if (slot !== null) move(layer, from, slot > from ? slot - 1 : slot);
+        };
+        content.addEventListener('dragover', (event) => {
+          if (dragging === null || draggingLayer !== layer) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+          showInsertion(event.clientX, event.clientY);
+        });
+        content.addEventListener('dragleave', (event) => {
+          if (!(event.relatedTarget instanceof Node) || !content.contains(event.relatedTarget)) clearInsertion();
+        });
+        content.addEventListener('drop', (event) => {
+          if (dragging === null || draggingLayer !== layer) return;
+          event.preventDefault();
+          event.stopPropagation();
+          showInsertion(event.clientX, event.clientY);
+          const from = dragging;
+          dragging = null;
+          insert(from);
+        });
+      const add = select([['', '+ Add item'], ...Object.entries(SHAPES)
+        .filter(([key]) => layer === 'scene' || key !== 'zoom')
+        .map(([key, shape]): [string, string] => [key, shape.label])], '', `Add ${layer} item`);
+      add.className = 'definition-add-item';
+      for (const option of add.options) {
+        if (SHAPES[option.value]) option.className = `definition-item-${option.value}`;
       }
-    } else if (items !== undefined) {
-      setError('Scene must be a list. Open YAML to repair it.');
-    }
-    content.append(insertionLine);
-    scene.append(content);
+      const addOption = add.options[0];
+      addOption.textContent = '+';
+      addOption.hidden = true;
+      addOption.disabled = true;
+      const sceneHeading = scene.querySelector('summary')!;
+      const sceneTitle = make('span');
+      sceneTitle.textContent = title(layer);
+      sceneHeading.replaceChildren(sceneTitle, add);
+      add.addEventListener('click', (event) => event.stopPropagation());
+      add.addEventListener('keydown', (event) => event.stopPropagation());
+      const items = value[layer];
+      add.addEventListener('change', () => {
+        if (!add.value) return;
+        const index = Array.isArray(items) ? items.length : 0;
+        expanded.add(`${layer}.${index}`);
+        if (items === undefined) set([layer], [SHAPES[add.value].initial], true);
+        else if (Array.isArray(items)) set([layer, index], SHAPES[add.value].initial, true);
+        body.querySelector<HTMLElement>(`[data-layer="${layer}"][data-item="${index}"] summary`)?.focus();
+      });
+      if (Array.isArray(items)) {
+        items.forEach((item, index) => {
+          const shape = record(item) && typeof item.type === 'string' ? SHAPES[item.type] : undefined;
+          const label = `${index + 1}. ${shape?.label ?? 'Unknown item'}${record(item) && item.name ? ` - ${item.name}` : ''}`;
+          const card = disclosure(label, `${layer}.${index}`);
+          card.classList.add('definition-item');
+          if (record(item) && typeof item.type === 'string' && SHAPES[item.type]) {
+            card.classList.add(`definition-item-${item.type}`);
+          }
+          card.dataset.item = String(index);
+          card.dataset.layer = layer;
+          const tools = make('div', 'definition-item-tools');
+          const summary = card.querySelector('summary')!;
+          const caption = make('span', 'definition-item-caption');
+          caption.textContent = label;
+          summary.replaceChildren(caption, tools);
+          const handle = summary;
+          handle.draggable = true;
+          handle.title = 'Drag to reorder; Alt+Up/Down moves this item';
+          let suppressClick = false;
+          tools.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+          tools.addEventListener('pointerdown', (event) => event.stopPropagation());
+          tools.addEventListener('dragstart', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          });
+          summary.addEventListener('click', (event) => {
+            if (suppressClick) {
+              event.preventDefault();
+              suppressClick = false;
+            }
+          });
+          handle.addEventListener('dragstart', (event) => {
+            suppressClick = true;
+            dragging = index;
+            draggingLayer = layer;
+            event.stopPropagation();
+            card.classList.add('definition-item-lifted');
+            event.dataTransfer?.setData('text/plain', String(index));
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+          });
+          handle.addEventListener('dragend', () => {
+            dragging = null;
+            card.classList.remove('definition-item-lifted');
+            clearInsertion();
+            window.setTimeout(() => { suppressClick = false; }, 0);
+          });
+          let touchPointer: number | undefined;
+          let holdTimer: number | undefined;
+          let touchDragging = false;
+          let touchOrigin = { x: 0, y: 0 };
+          let touchPreview: HTMLDivElement | undefined;
+          const positionTouchPreview = (x: number, y: number) => {
+            if (touchPreview) {
+              touchPreview.style.transform = `translate(${x - touchOrigin.x}px, ${y - touchOrigin.y}px)`;
+            }
+          };
+          const cancelTouch = () => {
+            window.clearTimeout(holdTimer);
+            holdTimer = undefined;
+            touchPreview?.remove();
+            touchPreview = undefined;
+            if (touchPointer !== undefined && handle.hasPointerCapture(touchPointer)) {
+              handle.releasePointerCapture(touchPointer);
+            }
+            touchPointer = undefined;
+            touchDragging = false;
+            handle.draggable = true;
+            card.classList.remove('definition-item-lifted');
+            clearInsertion();
+            if (cancelTouchDrag === cancelTouch) cancelTouchDrag = undefined;
+          };
+          handle.addEventListener('pointerdown', (event) => {
+            if (event.pointerType === 'mouse') return;
+            cancelTouchDrag?.();
+            suppressClick = false;
+            if (!event.isPrimary) return;
+            touchPointer = event.pointerId;
+            touchOrigin = { x: event.clientX, y: event.clientY };
+            handle.draggable = false;
+            cancelTouchDrag = cancelTouch;
+            holdTimer = window.setTimeout(() => {
+              holdTimer = undefined;
+              touchDragging = true;
+              suppressClick = true;
+              const bounds = card.getBoundingClientRect();
+              touchPreview = make('div', 'definition-form definition-drag-preview');
+              touchPreview.setAttribute('aria-hidden', 'true');
+              touchPreview.inert = true;
+              touchPreview.style.left = `${bounds.left}px`;
+              touchPreview.style.top = `${bounds.top}px`;
+              touchPreview.style.width = `${bounds.width}px`;
+              const previewCard = make('details', card.className);
+              previewCard.classList.add('definition-item-lifted');
+              previewCard.append(handle.cloneNode(true));
+              touchPreview.append(previewCard);
+              window.document.body.append(touchPreview);
+              card.classList.add('definition-item-lifted');
+              handle.setPointerCapture(event.pointerId);
+              showInsertion(touchOrigin.x, touchOrigin.y);
+            }, 1000);
+          });
+          handle.addEventListener('touchmove', (event) => {
+            if (touchDragging) event.preventDefault();
+          }, { passive: false });
+          handle.addEventListener('contextmenu', (event) => {
+            if (touchPointer !== undefined) event.preventDefault();
+          });
+          handle.addEventListener('pointermove', (event) => {
+            if (event.pointerId !== touchPointer) return;
+            if (!touchDragging) {
+              if (Math.hypot(event.clientX - touchOrigin.x, event.clientY - touchOrigin.y) > 8) cancelTouch();
+              return;
+            }
+            positionTouchPreview(event.clientX, event.clientY);
+            showInsertion(event.clientX, event.clientY);
+            const controls = root.closest('.controls');
+            if (controls) {
+              const bounds = controls.getBoundingClientRect();
+              if (event.clientY < bounds.top + 40) controls.scrollBy(0, -12);
+              else if (event.clientY > bounds.bottom - 40) controls.scrollBy(0, 12);
+            }
+          });
+          handle.addEventListener('pointerup', (event) => {
+            if (event.pointerId !== touchPointer) return;
+            if (touchDragging) insert(index);
+            cancelTouch();
+            window.setTimeout(() => { suppressClick = false; }, 0);
+          });
+          handle.addEventListener('pointercancel', (event) => {
+            if (event.pointerId === touchPointer) cancelTouch();
+          });
+          handle.addEventListener('lostpointercapture', () => {
+            if (touchPointer !== undefined) cancelTouch();
+          });
+          summary.addEventListener('keydown', (event) => {
+            if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+            event.preventDefault();
+            move(layer, index, index + (event.key === 'ArrowUp' ? -1 : 1));
+          });
+          const up = button('Move up', () => move(layer, index, index - 1));
+          const down = button('Move down', () => move(layer, index, index + 1));
+          up.disabled = index === 0;
+          down.disabled = index === items.length - 1;
+          const del = button('Delete', () => {
+            expanded.delete(`${layer}.${index}`);
+            const after = [...expanded].filter((key) => key.startsWith(`${layer}.`) && Number(key.slice(layer.length + 1)) > index);
+            after.forEach((key) => expanded.delete(key));
+            after.forEach((key) => expanded.add(`${layer}.${Number(key.slice(layer.length + 1)) - 1}`));
+            remove([layer, index]);
+            body.querySelector<HTMLElement>(`[data-layer="${layer}"][data-item="${Math.min(index, items.length - 2)}"] summary`)?.focus();
+          }, 'definition-remove');
+          const icon = (control: HTMLButtonElement, name: string, path: string) => {
+            control.setAttribute('aria-label', `${name}: ${label}`);
+            control.title = name;
+            control.className = 'definition-item-action';
+            const svg = window.document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('aria-hidden', 'true');
+            const drawing = window.document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            drawing.setAttribute('d', path);
+            svg.append(drawing);
+            control.replaceChildren(svg);
+          };
+          icon(up, 'Move up', 'M12 19V5M5 12l7-7 7 7');
+          icon(down, 'Move down', 'M12 5v14M5 12l7 7 7-7');
+          icon(del, 'Delete', 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7');
+          tools.append(up, down, del);
+          if (record(item) && item.type !== 'zoom') {
+            const target = layer === 'scene' ? 'background' : 'scene';
+            const transfer = button(`Move to ${target}`, () => {
+              const node = document.getIn([layer, index], true);
+              const destination = document.get(target, true);
+              const destinationIndex = isSeq(destination) ? destination.items.length : 0;
+              const openItems = [...expanded].filter((key) => key.startsWith(`${layer}.`));
+              openItems.forEach((key) => expanded.delete(key));
+              openItems.forEach((key) => {
+                const oldIndex = Number(key.slice(layer.length + 1));
+                if (oldIndex !== index) expanded.add(`${layer}.${oldIndex > index ? oldIndex - 1 : oldIndex}`);
+              });
+              expanded.add(target);
+              expanded.add(`${target}.${destinationIndex}`);
+              change([layer], () => {
+                if (destination === undefined) setNode([target], []);
+                document.setIn([target, destinationIndex], node);
+                document.deleteIn([layer, index]);
+              }, true);
+            }, 'definition-item-action');
+            transfer.title = `Move to ${target}`;
+            transfer.setAttribute('aria-label', `Move to ${target}: ${label}`);
+            icon(transfer, `Move to ${target}`, layer === 'scene'
+              ? 'M12 3l9 5-9 5-9-5 9-5M3 12l9 5 9-5M3 16l9 5 9-5M12 10v8'
+              : 'M12 3l9 5-9 5-9-5 9-5M3 12l9 5 9-5M3 16l9 5 9-5M12 14V6');
+            // Density counts and background colours are different settings.
+            transfer.disabled = density;
+            if (density) transfer.title = 'Move items between layers in YAML when using density shading';
+            tools.prepend(transfer);
+          }
+          const settings = make('div', 'definition-section-body');
+          settings.append(fieldEditor(shape?.field ?? inferred(item), item, [layer, index], label));
+          card.append(settings);
+          content.append(card);
+        });
+        if (!items.length) {
+          const hint = make('p', 'definition-hint');
+          hint.textContent = layer === 'scene' ? 'Add a shape or zoom to start your picture. Later items draw on top.'
+            : 'Background shapes draw once, behind the scene. Zooms do not copy them.';
+          content.append(hint);
+        }
+      } else if (items !== undefined) {
+        setError(`${title(layer)} must be a list. Open YAML to repair it.`);
+      }
+      content.append(insertionLine);
+      scene.append(content);
+      return scene;
+    };
+    const scene = renderItems('scene');
+    scene.querySelector('.definition-section-body')!.prepend(renderItems('background'));
     body.append(scene);
     const group = (label: string, key: string, fields: string[]) => {
       const section = disclosure(label, key);

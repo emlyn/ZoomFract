@@ -101,6 +101,11 @@ const GEOMETRY: Record<string, Shape> = {
 const ALIGN_ITEM: Shape = { keys: { from: POINT, to: POINT, ...leaves('x', 'y') } };
 const ALIGN: Shape = { keys: { from: POINT, to: POINT }, items: ALIGN_ITEM };
 const SHAPE_COLOUR: Shape = { keys: { ...leaves('gradient', 'colours', 'angle', 'radius'), from: POINT, to: POINT, centre: POINT } };
+const SHAPE_ITEMS: Record<string, Shape> = {
+  rect: { keys: { ...GEOMETRY, ...leaves('weight', 'scale', 'align'), colour: SHAPE_COLOUR } },
+  circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST } },
+  polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, vertex: POINT } },
+};
 
 const DEFINITION: Shape = {
   keys: {
@@ -126,13 +131,12 @@ const DEFINITION: Shape = {
     shading: { keys: { ...leaves('mode', 'scale', 'detail'), colours: LEAF } },
     seed: { keys: leaves('colour', 'opacity', 'transparency') },
     colourSpace: LEAF,
+    background: { items: { byType: SHAPE_ITEMS } },
     scene: {
       items: {
         byType: {
           // Scale and align are listed so rectangles get a specific error.
-          rect: { keys: { ...GEOMETRY, ...leaves('weight', 'scale', 'align'), colour: SHAPE_COLOUR } },
-          circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST } },
-          polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, vertex: POINT } },
+          ...SHAPE_ITEMS,
           zoom: { keys: { ...GEOMETRY, ...leaves('scale', 'blend'), align: ALIGN } },
         },
       },
@@ -422,6 +426,7 @@ export type SceneDefinition = {
     declared: ViewRanges;
   };
   elements: DrawableElement[];
+  background: ShapeElement[];
 };
 
 export type ResolvedSceneDefinition = SceneDefinition & {
@@ -872,7 +877,18 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
 // The declared view scaled about the content until it just holds it: evenly,
 // or with `matchContent` each axis separately so it takes the content's shape.
 function fittedView(scene: SceneDefinition, matchContent: boolean): ViewRanges {
-  const bounds = contentBounds(scene.elements, viewFrame(scene.view.coordinates));
+  const view = viewFrame(scene.view.coordinates);
+  const hasSceneContent = scene.elements.some((element) => element.opacity > 0 || element.glow);
+  const bounds = scene.background.length && !hasSceneContent
+    ? contentBounds(scene.background, view)
+    : contentBounds(scene.elements, view);
+  if (scene.background.some((element) => element.opacity > 0 || element.glow)) {
+    const background = contentBounds(scene.background, view);
+    bounds.min.x = Math.min(bounds.min.x, background.min.x);
+    bounds.min.y = Math.min(bounds.min.y, background.min.y);
+    bounds.max.x = Math.max(bounds.max.x, background.max.x);
+    bounds.max.y = Math.max(bounds.max.y, background.max.y);
+  }
   const declared = viewFrame(scene.view.declared);
   const scaleX = (bounds.max.x - bounds.min.x) / Math.abs(declared.width);
   const scaleY = (bounds.max.y - bounds.min.y) / Math.abs(declared.height);
@@ -1774,13 +1790,14 @@ type SceneItem = {
   type: string;
   name?: string;
   label: string;
+  path: ScenePath;
+  background: boolean;
 };
 
-function parseSceneItems(values: unknown[]): SceneItem[] {
-  const names = new Set<string>();
-  return values.map((value, index) => atPath(['scene', index], () => {
+function parseSceneItems(values: unknown[], layer: 'scene' | 'background', names: Set<string>): SceneItem[] {
+  return values.map((value, index) => atPath([layer, index], () => {
     const itemNumber = index + 1;
-    const at = <T>(key: string, compute: () => T) => atPath(['scene', index, key], compute);
+    const at = <T>(key: string, compute: () => T) => atPath([layer, index, key], compute);
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       throw new Error(`Scene item ${itemNumber} must be an object`);
     }
@@ -1790,7 +1807,10 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
       throw new Error(`Scene item ${itemNumber} must have a type`);
     }
     if (!['rect', 'circle', 'polygon', 'zoom'].includes(record.type)) {
-      throw new PathError(`Scene item ${itemNumber} has unknown type: ${record.type}`, ['scene', index, 'type']);
+      throw new PathError(`Scene item ${itemNumber} has unknown type: ${record.type}`, [layer, index, 'type']);
+    }
+    if (layer === 'background' && record.type === 'zoom') {
+      throw new PathError('Background items must be shapes, not zooms', [layer, index, 'type']);
     }
 
     const name = record.name === undefined ? undefined : at('name', () => {
@@ -1823,6 +1843,8 @@ function parseSceneItems(values: unknown[]): SceneItem[] {
       type: record.type,
       name,
       label: name ? `${kind} "${name}"` : `${kind} ${itemNumber}`,
+      path: [layer, index],
+      background: layer === 'background',
     };
   }));
 }
@@ -1923,16 +1945,17 @@ function resolveSceneElements(
 
     resolving.add(index);
     const resolvePoint = pointResolverFor(index);
-    const path = ['scene', index];
+    const path = item.path;
+    const itemDensity = density && !item.background;
     const element = atPath(path, () => {
       if (item.type === 'rect') {
-        return parseRectElement(item.record, item.name, item.label, resolvePoint, variables, density, path);
+        return parseRectElement(item.record, item.name, item.label, resolvePoint, variables, itemDensity, path);
       }
       if (item.type === 'circle') {
-        return parseCircleElement(item.record, item.name, item.label, resolvePoint, variables, density, path);
+        return parseCircleElement(item.record, item.name, item.label, resolvePoint, variables, itemDensity, path);
       }
       if (item.type === 'polygon') {
-        return parsePolygonElement(item.record, item.name, item.label, resolvePoint, variables, density, path);
+        return parsePolygonElement(item.record, item.name, item.label, resolvePoint, variables, itemDensity, path);
       }
       return parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density, path);
     });
@@ -2294,6 +2317,7 @@ const fallback = {
       },
     },
     elements: [] as DrawableElement[],
+    background: [] as ShapeElement[],
 };
 
 type YamlNode = YAML.Node | YAML.Pair | null | undefined | unknown;
@@ -2498,6 +2522,9 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
     if (!Array.isArray(sceneRoot.scene)) {
       throw new PathError('scene must be a list of typed items', ['scene']);
     }
+    if (sceneRoot.background !== undefined && !Array.isArray(sceneRoot.background)) {
+      throw new PathError('background must be a list of shapes', ['background']);
+    }
     if (
       sceneRoot.seed !== undefined
       && typeof sceneRoot.seed !== 'string'
@@ -2508,13 +2535,17 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
     const seedNode = sceneRoot.seed && typeof sceneRoot.seed === 'object' && !Array.isArray(sceneRoot.seed)
       ? (sceneRoot.seed as Record<string, unknown>)
       : {};
-    const elements = resolveSceneElements(
-      parseSceneItems(sceneRoot.scene),
+    const names = new Set<string>();
+    const sceneItems = parseSceneItems(sceneRoot.scene, 'scene', names);
+    const backgroundItems = parseSceneItems(sceneRoot.background ?? [], 'background', names);
+    const resolved = resolveSceneElements(
+      [...sceneItems, ...backgroundItems],
       resolvedAspect(),
       viewFrame(coordinates),
       variables,
       density,
-    ).map((element) => element.kind === 'zoom'
+    );
+    const elements = resolved.slice(0, sceneItems.length).map((element) => element.kind === 'zoom'
       ? reframeZoom(element, viewFrame(coordinates), viewFrame(shown()))
       : element);
 
@@ -2535,5 +2566,6 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
         declared: declared(),
       },
       elements,
+      background: resolved.slice(sceneItems.length).filter((element): element is ShapeElement => element.kind !== 'zoom'),
     };
 }

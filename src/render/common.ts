@@ -63,7 +63,7 @@ export type StepChange = { fraction: number; levels: number };
 export type RenderMessage =
   | { type: 'start'; settings: RenderSettings }
   | { type: 'progress'; progress: number }
-  | { type: 'frame'; bitmap: ImageBitmap; final: boolean }
+  | { type: 'frame'; bitmap: ImageBitmap; final: boolean; foreground?: ImageBitmap; background?: ImageBitmap }
   | {
     type: 'done';
     levels: number;
@@ -77,7 +77,7 @@ export type RenderMessage =
 
 export type FrameCallbacks = {
   // Earlier frames are rougher previews of the final one.
-  frame: (canvas: OffscreenCanvas, final: boolean) => void;
+  frame: (canvas: OffscreenCanvas, final: boolean, layers?: { foreground: OffscreenCanvas; background: OffscreenCanvas }) => void;
   progress: (progress: number) => void;
 };
 
