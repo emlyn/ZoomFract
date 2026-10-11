@@ -1,5 +1,6 @@
 import { powerPointFile, powerPointGradientPictures, powerPointLimits } from './pptx';
 import type { SceneDefinition } from './scene';
+import type { DecodedImages } from './image-assets';
 
 type QrCodeFactory = typeof import('qrcode-generator');
 
@@ -11,6 +12,7 @@ export type LinkOptions = { inputs: boolean; settings: boolean };
 type ShareDialogOptions = {
   canvas: HTMLCanvasElement;
   powerPointLayers: () => { foreground: CanvasImageSource; background?: CanvasImageSource };
+  powerPointImages: () => DecodedImages;
   scene: () => SceneDefinition;
   fileName: () => string;
   hasInputs: () => boolean;
@@ -512,6 +514,9 @@ export function createShareDialog(options: ShareDialogOptions) {
     showQrCode();
   });
 
+  const largeLinkWarning = (length: number) =>
+    length > 8_000 ? '; large links may not work in some messaging apps or QR readers' : '';
+
   // Makes the link, then shows it in whichever of the Link and QR code tabs is open.
   async function refreshLink() {
     const revision = ++linkRevision;
@@ -529,7 +534,7 @@ export function createShareDialog(options: ShareDialogOptions) {
       if (panel === linkPanel) {
         linkText.value = url;
         copyLink.disabled = false;
-        showStatus(`${url.length} characters${unapplied}`);
+        showStatus(`${url.length} characters${largeLinkWarning(url.length)}${unapplied}`);
         return;
       }
       if (qrPicture.input.checked && !imageReady) {
@@ -545,7 +550,7 @@ export function createShareDialog(options: ShareDialogOptions) {
       showQrCode();
       copyQr.disabled = false;
       downloadQr.disabled = false;
-      showStatus(`${count} \u00d7 ${count} squares${unapplied}`);
+      showStatus(`${count} \u00d7 ${count} squares${largeLinkWarning(url.length)}${unapplied}`);
     } catch (error) {
       if (revision === linkRevision) {
         clearQrPreview();
@@ -689,12 +694,28 @@ export function createShareDialog(options: ShareDialogOptions) {
     const backgroundCanvas = layers.background
       ? drawImage(document.createElement('canvas'), width, height, true, layers.background)
       : undefined;
-    const [picture, background] = await Promise.all([
+    const imageBlobs = new Map<string, Promise<Blob>>();
+    const assets = options.powerPointImages();
+    for (const element of scene.elements) {
+      if (element.kind !== 'image' || imageBlobs.has(element.source)) continue;
+      const image = assets.get(element.source);
+      if (!image) throw new Error(`PowerPoint export needs image "${element.source}"`);
+      const imageCanvas = new OffscreenCanvas(image.width, image.height);
+      const imageContext = imageCanvas.getContext('2d');
+      if (!imageContext) throw new Error(`Could not prepare image "${element.source}" for PowerPoint`);
+      imageContext.drawImage(image.bitmap, 0, 0);
+      imageBlobs.set(element.source, imageCanvas.convertToBlob({ type: 'image/png' }));
+    }
+    const preparedImages = Promise.all([...imageBlobs].map(async ([source, blob]) =>
+      [source, new Uint8Array(await (await blob).arrayBuffer())] as const));
+    const [picture, background, imageEntries] = await Promise.all([
       pngBlob(pictureCanvas), backgroundCanvas ? pngBlob(backgroundCanvas) : undefined,
+      preparedImages,
     ]);
     const gradientPictures = await powerPointGradientPictures(scene, { width, height });
+    const imagePictures = new Map(imageEntries);
     return powerPointFile(scene, new Uint8Array(await picture.arrayBuffer()),
-      background ? new Uint8Array(await background.arrayBuffer()) : undefined, gradientPictures);
+      background ? new Uint8Array(await background.arrayBuffer()) : undefined, gradientPictures, imagePictures);
   }
 
   downloadPowerPoint.addEventListener('click', () => void (async () => {

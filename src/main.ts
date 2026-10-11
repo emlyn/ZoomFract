@@ -3,6 +3,7 @@ import { createSceneEditor } from './editor';
 import { createDefinitionForm } from './definition-form';
 import { createShareDialog, type LinkOptions } from './share-dialog';
 import { fractalDimension, type FractalDimension } from './dimension';
+import { absoluteImageSources, imageSources, loadImages, type DecodedImages } from './image-assets';
 import GUIDE_HTML from './guide.html?raw';
 import {
   DEFAULT_EXAMPLE,
@@ -906,9 +907,11 @@ guideBody.addEventListener('click', (event) => {
   }
 });
 
+let loadedImageMetadata = new Map<string, { width: number; height: number }>();
 const sceneEditor = createSceneEditor(DEFAULT_SCENE_TEXT, () => {
   exampleSelect.value = '';
-});
+  definitionLoadRevision += 1;
+}, () => loadedImageMetadata);
 let definitionEditTimer: number | undefined;
 let editedItems: number[] = [];
 const labelRow = document.createElement('label');
@@ -933,7 +936,7 @@ const definitionForm = createDefinitionForm(DEFAULT_SCENE_TEXT, (text) => {
 }, (indices) => {
   editedItems = indices;
   drawEditOverlay();
-}, labelRow);
+}, labelRow, () => loadedImageMetadata);
 const definitionModes = document.createElement('div');
 definitionModes.className = 'definition-modes';
 definitionModes.setAttribute('role', 'tablist');
@@ -1041,8 +1044,11 @@ panelHeader.append(shareButton);
 async function shareLink({ inputs, settings }: LinkOptions): Promise<string> {
   const { encodeSharedDefinition } = await import('./share');
   const url = new URL(window.location.pathname, window.location.origin);
+  const text = state.imageAssetsBase
+    ? absoluteImageSources(state.definitionText, state.imageAssetsBase)
+    : state.definitionText;
   url.hash = encodeSharedDefinition({
-    text: state.definitionText,
+    text,
     inputs: inputs ? state.inputValues : new Map(),
     settings: settings ? { quality: state.quality, custom: state.custom, label: labelToggle.checked } : null,
   });
@@ -1059,12 +1065,13 @@ function loadDefinitionFile(text: string): boolean {
 const shareDialog = createShareDialog({
   canvas,
   powerPointLayers: () => ({ foreground: displayedFrame?.foreground ?? canvas, background: displayedFrame?.background }),
+  powerPointImages: () => state.imageAssets,
   scene: () => resolvedScene(),
   fileName: () => state.definitionLocation.kind === 'example' ? state.definitionLocation.id : 'custom',
   hasInputs: () => state.scene.inputs.length > 0,
   hasUnappliedEdits: () => sceneEditor.text().trim() !== state.definitionText.trim(),
   link: shareLink,
-  definition: () => state.definitionText,
+  definition: () => state.imageAssetsBase ? absoluteImageSources(state.definitionText, state.imageAssetsBase) : state.definitionText,
   loadDefinition: loadDefinitionFile,
 });
 shareButton.addEventListener('click', () => shareDialog.open());
@@ -1212,6 +1219,10 @@ const state = {
   inputValues: new Map<string, InputValue>() as ReadonlyMap<string, InputValue>,
   rendered: null as { levels: number } | null,
   definitionLocation: { kind: 'example', id: DEFAULT_EXAMPLE.id } as DefinitionLocation,
+  imageAssets: new Map() as DecodedImages,
+  imageAssetsBase: undefined as string | undefined,
+  imageAssetsRevision: 0,
+  sceneImageAssetsRevision: 0,
 };
 let definitionLoadRevision = 0;
 syncQualityControls();
@@ -1240,9 +1251,72 @@ function applyDefinition(
   keepPicture = false,
 ): boolean {
   window.clearTimeout(definitionEditTimer);
+  let sources: { source: string; path: string }[];
+  try {
+    sources = imageSources(text);
+  } catch {
+    sources = [];
+  }
+  const baseUrl = location.kind === 'source' ? location.url : keepPicture ? state.imageAssetsBase : undefined;
+  const baseChanged = state.imageAssetsBase !== baseUrl;
+  const missingImages = sources.filter(({ source }) => baseChanged || !state.imageAssets.has(source));
+  if (missingImages.length) {
+    const revision = definitionLoadRevision;
+    showSceneStatus('Loading image assets...');
+    void loadImages(missingImages.map(({ source }) => source), baseUrl).then((loaded) => {
+      if (revision !== definitionLoadRevision) {
+        loaded.forEach(({ bitmap }) => bitmap.close());
+        return;
+      }
+      const candidates = new Map([...(baseChanged ? [] : state.imageAssets), ...loaded]
+        .filter(([source]) => sources.some((item) => item.source === source)));
+      const metadata = new Map([...candidates].map(([source, image]) => [source, { width: image.width, height: image.height }] as const));
+      try {
+        parseScene(text, inputValues, metadata);
+        if ([...candidates.values()].reduce((total, image) => total + image.width * image.height, 0) > 32_000_000) {
+          throw new Error('Images exceed the 32-million-pixel total limit');
+        }
+      } catch (error) {
+        loaded.forEach(({ bitmap }) => bitmap.close());
+        if (keepInvalidText) {
+          pendingEditorInputValues = inputValues;
+          sceneEditor.setText(text.trim());
+          sceneEditor.refreshDiagnostics();
+          definitionForm.setText(text.trim());
+          exampleSelect.value = '';
+        }
+        throw error;
+      }
+      if (baseChanged) {
+        state.imageAssets.forEach(({ bitmap }) => bitmap.close());
+        state.imageAssets = new Map();
+      }
+      state.imageAssetsBase = baseUrl;
+      state.imageAssets = new Map([...state.imageAssets, ...loaded]);
+      loadedImageMetadata = metadata;
+      state.imageAssetsRevision += 1;
+      applyDefinition(text, location, updateUrl, inputValues, keepInvalidText, keepPicture);
+    }).catch((error: unknown) => {
+      if (revision === definitionLoadRevision) {
+        if (keepInvalidText) {
+          pendingEditorInputValues = inputValues;
+          sceneEditor.setText(text.trim());
+          definitionForm.setText(text.trim());
+          exampleSelect.value = '';
+          if (updateUrl) updateDefinitionUrl(location);
+        }
+        const message = error instanceof Error ? error.message : 'Could not load image assets';
+        const failed = missingImages.find(({ source }) => message.includes(`"${source}"`));
+        const paths = failed ? failed.path : missingImages.map(({ path }) => path).join(', ');
+        showSceneStatus(`${paths}: ${message}`, true);
+      }
+    });
+    return false;
+  }
   try {
     if (keepPicture && pendingEditorInputValues === null && inputValues.size) {
-      const defaults = parseScene(text);
+      const metadata = new Map([...state.imageAssets].map(([source, image]) => [source, { width: image.width, height: image.height }] as const));
+      const defaults = parseScene(text, new Map(), metadata);
       inputValues = new Map(defaults.inputs.flatMap((input): [string, InputValue][] => {
         const previous = state.scene.inputs.find((candidate) => candidate.name === input.name);
         const value = inputValues.get(input.name);
@@ -1257,13 +1331,24 @@ function applyDefinition(
         return [[input.name, value]];
       }));
     }
-    const nextScene = parseScene(text, inputValues);
+    const metadata = new Map([...state.imageAssets].map(([source, image]) => [source, { width: image.width, height: image.height }] as const));
+    const nextScene = parseScene(text, inputValues, metadata);
+    const usedImageSources = new Set([...nextScene.elements, ...nextScene.background]
+      .flatMap((element) => element.kind === 'image' ? [element.source] : []));
+    for (const [source, image] of state.imageAssets) {
+      if (!usedImageSources.has(source)) image.bitmap.close();
+    }
+    state.imageAssets = new Map([...state.imageAssets].filter(([source]) => usedImageSources.has(source)));
+    loadedImageMetadata = new Map([...state.imageAssets].map(([source, image]) => [source, { width: image.width, height: image.height }] as const));
+    state.imageAssetsBase = baseUrl;
     // Info only changes the label, so the current picture can stay.
-    const pictureChanged = JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
+    const pictureChanged = state.imageAssetsRevision !== state.sceneImageAssetsRevision
+      || JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
     if (pictureChanged && (!keepPicture || outputAspect(nextScene) !== outputAspect(state.scene))) {
       clearDisplay();
     }
     state.scene = nextScene;
+    state.sceneImageAssetsRevision = state.imageAssetsRevision;
     state.definitionText = text;
     state.inputValues = new Map(nextScene.inputs.flatMap((input) => {
       const value = inputValues.get(input.name);
@@ -1387,6 +1472,7 @@ function describeMedium(scene: SceneDefinition, rendered: typeof state.rendered,
     ...(count('rect') > 0 ? [plural(count('rect'), 'rectangle')] : []),
     ...(count('circle') > 0 ? [plural(count('circle'), 'circle')] : []),
     ...(count('polygon') > 0 ? [plural(count('polygon'), 'polygon')] : []),
+    ...(count('image') > 0 ? [plural(count('image'), 'image')] : []),
     ...(count('zoom') > 0 ? [plural(count('zoom'), 'zoom')] : []),
     ...(allElements.some((element) => element.glow) ? ['glow'] : []),
     ...(scene.background.length ? ['background shapes'] : []),
@@ -1564,9 +1650,11 @@ function refreshInputPanel() {
 
 // Keeps the last good picture when a value makes the definition invalid.
 function updateInputs(inputValues: ReadonlyMap<string, InputValue>, settle: boolean) {
+  definitionLoadRevision += 1;
   state.inputValues = inputValues;
   try {
-    state.scene = parseScene(state.definitionText, inputValues);
+    const metadata = new Map([...state.imageAssets].map(([source, image]) => [source, { width: image.width, height: image.height }] as const));
+    state.scene = parseScene(state.definitionText, inputValues, metadata);
     inputError.hidden = true;
   } catch (error) {
     inputError.textContent = error instanceof Error ? error.message : 'Invalid input value';
@@ -2246,7 +2334,32 @@ function startRender(request: RenderRequest) {
     setQualityDetails([`Render failed: ${event.message}`], null);
     finish(true);
   };
-  worker.postMessage(request);
+  const sources = [...new Set([...request.scene.elements, ...request.scene.background]
+    .flatMap((element) => element.kind === 'image' ? [element.source] : []))];
+  const images = sources.flatMap((source) => {
+    const image = state.imageAssets.get(source);
+    return image ? [{ source, bitmap: image.bitmap }] : [];
+  });
+  void Promise.allSettled(images.map(async ({ source, bitmap }) => ({ source, bitmap: await createImageBitmap(bitmap, { premultiplyAlpha: 'premultiply' }) })))
+    .then((results) => {
+      const imageAssets = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+      const failure = results.find((result) => result.status === 'rejected');
+      if (failure?.status === 'rejected') {
+        imageAssets.forEach(({ bitmap }) => bitmap.close());
+        throw failure.reason;
+      }
+      if (activeRequest !== request || renderWorker !== worker) {
+        imageAssets.forEach(({ bitmap }) => bitmap.close());
+        return;
+      }
+      const transfer = imageAssets.map(({ bitmap }) => bitmap);
+      worker.postMessage({ ...request, imageAssets }, transfer);
+    })
+    .catch((error: unknown) => {
+      if (activeRequest !== request) return;
+      setQualityDetails([`Render failed: ${error instanceof Error ? error.message : String(error)}`], null);
+      finish(true);
+    });
 }
 
 window.addEventListener('resize', () => {

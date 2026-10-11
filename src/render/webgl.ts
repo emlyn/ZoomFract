@@ -49,6 +49,8 @@ const MODE_FLAT = 0;
 const MODE_SOURCE = 1;
 const MODE_RECT_GLOW = 2;
 const MODE_ZOOM_GLOW = 3;
+const MODE_IMAGE = 5;
+const MODE_IMAGE_NEAREST = 6;
 // Zoom glows sample precomputed glow fields; each distinct glow shape needs
 // its own field and texture unit.
 const MAXIMUM_ZOOM_GLOW_FIELDS = 8;
@@ -175,6 +177,7 @@ const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, in
 const BACKDROP_UNIT = MAXIMUM_ZOOM_GLOW_FIELDS + 1;
 const COMPARE_UNIT = BACKDROP_UNIT + 1;
 const FILL_UNIT = COMPARE_UNIT + 1;
+const IMAGE_UNIT = FILL_UNIT + 1;
 const PIGMENT_SAMPLES = 257;
 const FILL_METADATA_WIDTH = 1 + MAXIMUM_DENSITY_COLORS * 2;
 
@@ -233,6 +236,7 @@ vec4 gradient(float t, int stopCount, vec4 stops[${MAXIMUM_DENSITY_COLORS}], flo
 const SCENE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
+uniform sampler2D imageTexture;
 // Glow masks keep coverage in the red channel alone.
 uniform bool singleChannel;
 uniform sampler2D backdrop;
@@ -268,6 +272,12 @@ float rectGlow(vec2 local, vec2 halfSize, float size, float softness) {
 float zoomGlow(int field, vec2 coords) {
   return ${glowFieldIndexes.map((index) => `field == ${index} ? textureLod(glow${index}, coords, 0.0).r : `).join('')}0.0;
 }
+vec4 imageSample(vec2 coords) {
+  if (any(lessThan(coords, shapeData.xy)) || any(greaterThan(coords, shapeData.zw))) return vec4(0.0);
+  return drawMode > 5.5
+    ? texelFetch(imageTexture, clamp(ivec2(coords * vec2(textureSize(imageTexture, 0))), ivec2(0), textureSize(imageTexture, 0) - 1), 0)
+    : texture(imageTexture, coords);
+}
 // Blend modes on premultiplied colours, in the order of BLEND_MODES, drawn
 // over a copy of what is below. Normal draws use fixed-function blending.
 vec4 blendOver(vec4 s, vec4 d) {
@@ -283,7 +293,11 @@ vec4 blendOver(vec4 s, vec4 d) {
 }
 void main() {
   vec4 sampled = singleChannel ? vec4(texture(source, uv).r) : texture(source, uv);
-  vec4 color = drawMode < 1.5
+  vec4 image = drawMode > 4.5 ? imageSample(uv) : vec4(1.0);
+  if (drawMode > 4.5 && singleChannel) image = vec4(image.a);
+  vec4 color = drawMode > 4.5
+    ? tint * image
+    : drawMode < 1.5
     ? tint * mix(vec4(1.0), sampled, drawMode)
     : drawMode < 2.5
       ? tint * rectGlow(uv, shapeData.xy, shapeData.z, shapeData.w)
@@ -676,6 +690,7 @@ export function renderWebgl(
   scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   callbacks: FrameCallbacks,
+  imageAssets: readonly { source: string; bitmap: ImageBitmap }[] = [],
 ): RenderResult {
   if (scene.background.length) {
     const { width, height } = scene.view.resolution;
@@ -690,7 +705,7 @@ export function renderWebgl(
     }, { ...settings, recursionDepth: 0, levels: 1, autoLevels: false }, {
       frame: (canvas, final) => { if (final) backgroundContext.drawImage(canvas, 0, 0); },
       progress: () => {},
-    });
+    }, imageAssets);
     painted.dispose();
     const compositeCallbacks = (target: FrameCallbacks): FrameCallbacks => ({
       progress: target.progress,
@@ -701,13 +716,15 @@ export function renderWebgl(
         target.frame(composite, final, final ? { foreground, background } : undefined);
       },
     });
-    const result = renderWebgl({ ...scene, background: [] }, settings, compositeCallbacks(callbacks));
+    const result = renderWebgl({ ...scene, background: [] }, settings, compositeCallbacks(callbacks), imageAssets);
     return {
       ...result,
       continueTo: (next, target) => result.continueTo(next, compositeCallbacks(target)),
     };
   }
   const { width, height } = scene.view.resolution;
+  const imageSources = new Set(scene.elements.flatMap((element) => element.kind === 'image' ? [element.source] : []));
+  const sceneImages = imageAssets.filter(({ source }) => imageSources.has(source));
   const current = gpu && !gpu.gl.isContextLost() ? gpu : createGpu(width, height);
   gpu = current;
   if (current.output.width !== width || current.output.height !== height) {
@@ -717,7 +734,7 @@ export function renderWebgl(
   // Chrome keeps only a few contexts per page and drops the oldest, so a
   // failed render releases its context straight away.
   try {
-    return drawWebgl(current, scene, settings, callbacks);
+    return drawWebgl(current, scene, settings, callbacks, sceneImages);
   } catch (error) {
     current.gl.getExtension('WEBGL_lose_context')?.loseContext();
     gpu = null;
@@ -730,6 +747,7 @@ function drawWebgl(
   scene: ResolvedSceneDefinition,
   settings: RenderSettings,
   callbacks: FrameCallbacks,
+  imageAssets: readonly { source: string; bitmap: ImageBitmap }[],
 ): RenderResult {
   const { gl, output } = gpu;
   const outputWidth = output.width;
@@ -741,7 +759,7 @@ function drawWebgl(
   // and drawn to.
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.disable(gl.BLEND);
-  for (let unit = 0; unit <= FILL_UNIT; unit += 1) {
+  for (let unit = 0; unit <= IMAGE_UNIT; unit += 1) {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
@@ -753,6 +771,10 @@ function drawWebgl(
   freeSpares(gpu.renderbuffers, sized);
   // What this render takes is given back to the pools when it is disposed.
   const owned: (() => void)[] = [];
+  const maximumSize = Math.min(
+    gl.getParameter(gl.MAX_TEXTURE_SIZE),
+    gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),
+  );
   const take = <T>(pool: Pool<T>, key: string, create: () => T): T => {
     const item = pool.spare.get(key)?.pop() ?? create();
     owned.push(() => pool.spare.set(key, [...(pool.spare.get(key) ?? []), item]));
@@ -767,6 +789,31 @@ function drawWebgl(
     gpu.programs.set(name, compiled);
     return compiled;
   };
+  const imageTextures = new Map<string, WebGLTexture>();
+  const totalImagePixels = imageAssets.reduce((total, { bitmap }) => total + bitmap.width * bitmap.height, 0);
+  if (totalImagePixels > 32_000_000) {
+    throw new Error('Decoded images exceed the 32-million-pixel GPU texture budget');
+  }
+  for (const { source, bitmap } of imageAssets) {
+    if (bitmap.width > maximumSize || bitmap.height > maximumSize) {
+      throw new Error(`Image "${source}" exceeds this device's ${maximumSize}px texture limit`);
+    }
+    const texture = gl.createTexture();
+    if (!texture) throw new Error(`Could not allocate texture for image "${source}"`);
+    imageTextures.set(source, texture);
+    gl.activeTexture(gl.TEXTURE0 + IMAGE_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    owned.push(() => gl.deleteTexture(texture));
+  }
+  gl.activeTexture(gl.TEXTURE0);
   const newFramebuffer = () => take(gpu.framebuffers, 'framebuffer', () => gl.createFramebuffer()!);
   // A lost context turns later calls into no-ops, so it is checked each time
   // the queue drains.
@@ -777,10 +824,6 @@ function drawWebgl(
     }
   };
 
-  const maximumSize = Math.min(
-    gl.getParameter(gl.MAX_TEXTURE_SIZE),
-    gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),
-  );
   if (width > maximumSize || height > maximumSize) {
     throw new Error(`WebGL2 is limited to ${maximumSize}px textures; this render needs ${Math.max(width, height)}px`);
   }
@@ -812,6 +855,7 @@ function drawWebgl(
   gl.uniform1i(gl.getUniformLocation(differenceProgram, 'after'), COMPARE_UNIT);
   gl.useProgram(sceneProgram);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'source'), 0);
+  gl.uniform1i(gl.getUniformLocation(sceneProgram, 'imageTexture'), IMAGE_UNIT);
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'fills'), FILL_UNIT);
@@ -1155,28 +1199,43 @@ function drawWebgl(
   // Mask vertices draw the coverage of shapes and copies, leaving out glows.
   const maskVertices = (items: UnrolledItem[], sampleSource: boolean) => {
     const vertices: number[] = [];
+    const runs: { blend: number; first: number; count: number; imageSource?: string }[] = [];
     const seedAlpha = seedColor[3] * scene.seed.opacity;
     for (const item of items) {
+      const first = vertices.length / FLOATS_PER_VERTEX;
+      let imageSource: string | undefined;
       if (item.kind === 'outline') {
         const coverage = outlineColors[item.elementIndex]![3] * item.alpha;
         pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
       } else if (item.kind === 'shape') {
         const element = scene.elements[item.elementIndex];
-        if (element.kind !== 'zoom' && element.fill) {
+        if (element.kind === 'image') {
+          if (!item.texCoords) throw new Error(`Image geometry "${element.source}" is missing texture coordinates`);
+          pushPolygon(vertices, item.polygon, item.texCoords, [item.alpha, item.alpha, item.alpha, item.alpha],
+            item.smooth === false ? MODE_IMAGE_NEAREST : MODE_IMAGE,
+            [element.crop.left, element.crop.top, 1 - element.crop.right, 1 - element.crop.bottom]);
+          imageSource = element.source;
+        } else if (element.kind !== 'zoom' && element.fill) {
           pushPolygon(vertices, item.polygon, item.texCoords ?? null, [0, 0, 0, item.alpha], 4,
             [fillIndexes.get(item.elementIndex)!, element.fill.kind === 'radial' ? 1 : 0, 0, 0]);
-          continue;
+        } else {
+          const coverage = shapeColors[item.elementIndex]![3] * item.alpha;
+          pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
         }
-        const coverage = shapeColors[item.elementIndex]![3] * item.alpha;
-        pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
       } else if (item.kind === 'leaf' && sampleSource) {
         pushPolygon(vertices, item.polygon, item.texCoords, [item.alpha, item.alpha, item.alpha, item.alpha]);
       } else if (item.kind === 'leaf' && item.seed.length > 0) {
         const coverage = seedAlpha * item.alpha;
         pushPolygon(vertices, item.seed, null, [coverage, coverage, coverage, coverage]);
       }
+      const count = vertices.length / FLOATS_PER_VERTEX - first;
+      if (count) {
+        const last = runs.at(-1);
+        if (last && last.imageSource === imageSource) last.count += count;
+        else runs.push({ blend: 0, first, count, ...(imageSource ? { imageSource } : {}) });
+      }
     }
-    return new Float32Array(vertices);
+    return withBatches(new Float32Array(vertices), runs);
   };
 
   // Vertices in runs of one blend mode, the index into BLEND_MODES. Normal
@@ -1186,17 +1245,18 @@ function drawWebgl(
       return normalRun(densityVertices(items, sampleSource));
     }
     const vertices: number[] = [];
-    const runs: { blend: number; first: number; count: number }[] = [];
+    const runs: { blend: number; first: number; count: number; imageSource?: string }[] = [];
     for (const item of items) {
       const first = vertices.length / FLOATS_PER_VERTEX;
       pushItem(vertices, item, sampleSource);
       const count = vertices.length / FLOATS_PER_VERTEX - first;
       const blend = item.kind === 'leaf' ? BLEND_MODES.indexOf(item.blend) : 0;
+      const imageSource = item.kind === 'shape' && item.image ? item.source : undefined;
       const last = runs.at(-1);
-      if (last && blend === 0 && last.blend === 0) {
+      if (last && blend === 0 && last.blend === 0 && last.imageSource === imageSource) {
         last.count += count;
       } else {
-        runs.push({ blend, first, count });
+        runs.push({ blend, first, count, ...(imageSource ? { imageSource } : {}) });
       }
     }
     return withBatches(new Float32Array(vertices), runs);
@@ -1207,13 +1267,18 @@ function drawWebgl(
       pushPolygon(vertices, item.polygon, null, premultiplied(outlineColors[item.elementIndex]!, item.alpha));
     } else if (item.kind === 'shape') {
       const element = scene.elements[item.elementIndex];
-      if (element.kind !== 'zoom' && element.fill) {
+      if (element.kind === 'image') {
+        if (!item.texCoords) throw new Error(`Image geometry "${element.source}" is missing texture coordinates`);
+        pushPolygon(vertices, item.polygon, item.texCoords, premultiplied([1, 1, 1, 1], item.alpha),
+          item.smooth === false ? MODE_IMAGE_NEAREST : MODE_IMAGE,
+          [element.crop.left, element.crop.top, 1 - element.crop.right, 1 - element.crop.bottom]);
+      } else if (element.kind !== 'zoom' && element.fill) {
         pushPolygon(vertices, item.polygon, item.texCoords ?? null, [0, 0, 0, item.alpha], 4,
           [fillIndexes.get(item.elementIndex)!, element.fill.kind === 'radial' ? 1 : 0, 0, 0]);
       } else pushPolygon(vertices, item.polygon, null, premultiplied(shapeColors[item.elementIndex]!, item.alpha));
     } else if (item.kind === 'rectGlow') {
       const element = scene.elements[item.elementIndex];
-      if (element.kind !== 'rect') {
+      if (element.kind !== 'rect' && element.kind !== 'image') {
         throw new Error('A rectangle glow has no rectangle element');
       }
       const color = glowColors[item.elementIndex]!.map((channel) => channel * item.alpha) as Rgba;
@@ -1238,12 +1303,13 @@ function drawWebgl(
     }
   };
 
-  const withBatches = (vertices: Float32Array, runs: { blend: number; first: number; count: number }[]) => {
+  const withBatches = (vertices: Float32Array, runs: { blend: number; first: number; count: number; imageSource?: string }[]) => {
     const bounds = triangleBounds(vertices);
     return {
       vertices,
-      runs: runs.map(({ blend, first, count }) => ({
+      runs: runs.map(({ blend, first, count, imageSource }) => ({
         blend,
+        ...(imageSource ? { imageSource } : {}),
         // Vertex positions run downwards, while tiles are placed upwards.
         tileBatches: tiles.map((tile) => fillBatches(
           bounds,
@@ -1269,7 +1335,7 @@ function drawWebgl(
     vertexCache.set(items, byMode);
     const key = `${sampleSource} ${mask}`;
     const vertices = byMode.get(key) ?? (mask
-      ? normalRun(maskVertices(items, sampleSource))
+      ? maskVertices(items, sampleSource)
       : sceneVertices(items, sampleSource));
     byMode.set(key, vertices);
     return vertices;
@@ -1364,11 +1430,16 @@ function drawWebgl(
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform2i(tileOriginLocation, x, y);
       gl.enable(gl.BLEND);
-      for (const { blend, tileBatches } of runs) {
+      for (const { blend, imageSource, tileBatches } of runs) {
         const batches = tileBatches[index];
         if (batches.length === 0) {
           continue;
         }
+        const texture = imageSource ? imageTextures.get(imageSource) : undefined;
+        if (imageSource && !texture) throw new Error(`Image asset "${imageSource}" is missing`);
+        gl.activeTexture(gl.TEXTURE0 + IMAGE_UNIT);
+        gl.bindTexture(gl.TEXTURE_2D, texture ?? null);
+        gl.activeTexture(gl.TEXTURE0);
         if (blend > 0) {
           copyBackdrop(framebuffer, x, y, tile);
           gl.disable(gl.BLEND);

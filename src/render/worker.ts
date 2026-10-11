@@ -42,6 +42,7 @@ type Session = {
 
 // The latest completed render, kept so fixed levels can be extended.
 let session: Session | null = null;
+const closeImages = (request: RenderRequest) => request.imageAssets?.forEach(({ bitmap }) => bitmap.close());
 
 function continueSession(current: Session, request: RenderRequest): boolean {
   if (current.key !== continuationKey(request)
@@ -86,11 +87,13 @@ function render(request: RenderRequest) {
   if (session) {
     try {
       if (continueSession(session, request)) {
+        closeImages(request);
         return;
       }
     } catch (error) {
       session.result.dispose();
       session = null;
+      closeImages(request);
       post({ type: 'error', message: errorMessage(error) });
       return;
     }
@@ -99,6 +102,7 @@ function render(request: RenderRequest) {
   }
 
   if (request.webglDisabled) {
+    closeImages(request);
     post({ type: 'error', message: request.webglDisabled });
     return;
   }
@@ -106,7 +110,8 @@ function render(request: RenderRequest) {
   try {
     const settings = resolveRenderSettings(request.scene, request.options, request.additionalLevels);
     post({ type: 'start', settings });
-    const result = renderWebgl(request.scene, settings, frameCallbacks);
+    const result = renderWebgl(request.scene, settings, frameCallbacks, request.imageAssets ?? []);
+    closeImages(request);
     const { outcome } = result;
     const milliseconds = performance.now() - startedAt;
     session = {
@@ -124,6 +129,7 @@ function render(request: RenderRequest) {
       details: outcome.details,
     });
   } catch (error) {
+    closeImages(request);
     post({ type: 'error', message: errorMessage(error) });
   }
 }

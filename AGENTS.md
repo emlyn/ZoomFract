@@ -142,8 +142,8 @@ files unless extracting a module clearly reduces complexity.
   bitmaps; PowerPoint uses the foreground cache for zooms and rasterises the
   background over frame.background as a slide-background image.
 - `scene` is an ordered list of typed items. Every item has a `type`, currently
-  `rect`, `circle`, `polygon` or `zoom`, and later items draw on top of earlier items. Planned
-  syntax (more shapes, images, groups, gradients, zoom colour changes,
+  `rect`, `circle`, `polygon`, `image` or `zoom`, and later items draw on top of earlier items. Planned
+  syntax (more shapes, groups, gradients, zoom colour changes,
   repeats) is described in the guide's "Coming soon" section and baked into
   the v1 share dictionary; implement it with those exact names.
 - Anywhere a point is accepted, it may be `[x, y]`, `{ x, y }`, or a
@@ -288,6 +288,21 @@ files unless extracting a module clearly reduces complexity.
   clamped to 0..1.
 - Geometry may be determined from a sufficient combination of `centre`,
   width, height, named corners, and rotation.
+- `image` uses `source` (a URL or data URL), the rectangle constraint model,
+  and optional `crop` source-pixel or percentage coordinates from the top-left, `fit` (`contain`,
+  default; `cover` or `fill`) and `smooth` (default true). If one dimension is
+  missing, infer it from natural pixel aspect and physical view units; two
+  missing dimensions are underdetermined. Scene images are errors in density
+  mode; background images remain paint. Opacity multiplies source alpha.
+  Image loading is asynchronous before parsing/application, uses anonymous CORS
+  fetches, and stale loads must not replace newer edits. Decoded assets are
+  deduplicated. Per image and aggregate limits are 32 million pixels;
+  visual file embedding is limited to 16 MiB. Use `image-assets.ts` for loading.
+  Recursive renders sample image textures with premultiplied-alpha mipmaps,
+  nearest sampling for `smooth: false`, and source alpha in glow coverage.
+  PowerPoint embeds scene images as native pictures; background images are
+  included in the existing background raster and excluded from recursive zoom
+  content. Frozen share dictionaries remain unchanged.
 - Numeric rotations are degrees, and positive rotations are clockwise.
   Rotation expressions are degrees unless suffixed with `deg` or `rad`, and
   unit-object forms are supported. Internal
@@ -632,6 +647,8 @@ files unless extracting a module clearly reduces complexity.
   into image fills clipped by vector shapes,
   with a visible export warning. Background gradients remain slide images.
   Glows go in the zoom's `p166:spPr` effect list and on the fallback picture;
+  Scene images are embedded as native pictures with source crop, fit,
+  rotation and opacity; background images stay in the background raster.
   PowerPoint draws them around the shapes the zoom shows. The seed needs no
   export because the zooms bottom out in the cached picture.
   `powerPointLimits` lists what cannot be carried over (density shading, zoom

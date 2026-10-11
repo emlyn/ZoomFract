@@ -295,7 +295,7 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     them once, behind the recursive scene. Transparent parts of the scene reveal
     these shapes, but zooms never copy them. Items in each list draw in order,
     with later items on top. Background accepts rectangles, circles and polygons,
-    including gradients, opacity and rectangle glows, but not zooms.</p>
+    including gradients, images, opacity and rectangle glows, but not zooms.</p>
   <pre><code>background:
   - type: rect
     centre: view.centre
@@ -315,6 +315,34 @@ scene:
     the presentation colour behind the canvas. PowerPoint renders background
     shapes over that colour into a slide-background image; Slide Zooms and their
     cached pictures exclude it.</p>
+  <h4>Images</h4>
+  <pre><code>- type: image
+  source: https://example.com/leaf.png
+  centre: [0, 0]
+  width: 2                 # height follows the natural image shape
+  fit: contain             # contain by default; also cover or fill
+  crop: { left: 10%, right: 90%, top: 0%, bottom: 100% }  # coordinates in percentages or source pixels
+  smooth: false            # nearest-neighbour sampling for pixel art
+  opacity: 0.8</code></pre>
+  <p>
+    Images accept the same centre, corner, rotation, name and reference geometry as rectangles.
+    If only one dimension is given, the other preserves the natural image aspect,
+    accounting for the view's physical x/y scale. With both dimensions, the
+    default <code>contain</code> leaves transparent space as needed;
+    <code>cover</code> crops the source, and <code>fill</code> stretches it.
+    Optional source-pixel or percentage crop coordinates are measured from the
+    source's top-left corner and applied before sizing and fitting.
+    Opacity multiplies the image's own alpha. Images can have rectangle outlines and glows.
+    Use an image URL (relative to a remote YAML file's URL) or an embedded data URL.
+    Cross-origin servers must permit anonymous access. PNG and JPEG are supported;
+    other formats work when the browser can decode them. Images are limited to
+    one static frame, even for animated formats. Auto-fit uses the image's
+    placement rectangle, not a trim of its transparent pixels. Scene images
+    cannot use density shading; background images still paint normally.
+    Files are limited to 16 MiB and decoded images to
+    32 million pixels per image and 32 million pixels total per definition. In the Visual
+    editor, choose an image file to embed it in the definition (up to 16 MiB).
+  </p>
   <pre><code>- type: rect
   name: block
   centre: [0, 0]
@@ -959,7 +987,7 @@ scene:
   <h3>Coming soon</h3>
   <p>
     These parts of the language are planned but not available yet. Using them now gives
-    an error. They are described here so you can see where ZoomFract is going.
+    an error. Images are supported; other examples here show future plans.
   </p>
 
   <h4>More shapes</h4>
@@ -990,19 +1018,6 @@ scene:
     </li>
     <li><code>path</code> uses SVG path commands, in view coordinates.</li>
   </ul>
-
-  <h4>Images</h4>
-  <pre><code>- type: image
-  source: https://example.com/leaf.png
-  centre: [0, 0]
-  width: 2                 # the height follows the image's shape
-  crop: { left: 10%, right: 90%, top: 0, bottom: 400 }   # pixels or percentages
-  fit: cover               # fill, contain or cover, when both sizes are given
-  smooth: false            # keep pixel art sharp</code></pre>
-  <p>
-    Images are placed like rectangles. The site must allow other pages to use its
-    images; if it does not, an error says so.
-  </p>
 
   <h4>Groups and combining</h4>
   <pre><code>- type: group

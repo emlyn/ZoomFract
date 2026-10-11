@@ -1,7 +1,7 @@
 import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from '@codemirror/commands';
 import { yaml } from '@codemirror/lang-yaml';
 import { bracketMatching, codeFolding, foldGutter, foldKeymap, HighlightStyle, indentOnInput, indentUnit, syntaxHighlighting } from '@codemirror/language';
-import { lintGutter, linter, type Diagnostic } from '@codemirror/lint';
+import { forceLinting, lintGutter, linter, type Diagnostic } from '@codemirror/lint';
 import { Compartment, EditorSelection, EditorState, RangeSetBuilder } from '@codemirror/state';
 import {
   Decoration,
@@ -21,7 +21,7 @@ import {
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import { indentationMarkers } from '@replit/codemirror-indentation-markers';
-import { parseSceneWithDiagnostics, SceneError, type SceneDiagnostic } from './scene';
+import { parseSceneWithDiagnostics, SceneError, type ImageMetadataMap, type SceneDiagnostic } from './scene';
 
 const INDENT = '  ';
 // Marks text replaced by the app, as opposed to edits made by the user.
@@ -147,11 +147,11 @@ const toLintDiagnostic = (text: string) => (diagnostic: SceneDiagnostic): Diagno
 };
 
 // Checks the definition as it is edited and marks mistakes where they occur.
-const sceneLinter = linter((view) => {
+const sceneLinter = (imageMetadata: () => ImageMetadataMap) => linter((view) => {
   const text = view.state.doc.toString();
   const toLint = toLintDiagnostic(text);
   try {
-    return parseSceneWithDiagnostics(text).warnings.map(toLint);
+    return parseSceneWithDiagnostics(text, new Map(), imageMetadata()).warnings.map(toLint);
   } catch (error) {
     if (error instanceof SceneError) {
       return error.diagnostics.map(toLint);
@@ -165,9 +165,10 @@ export type SceneEditor = {
   text: () => string;
   setText: (text: string) => void;
   setWrap: (wrap: boolean) => void;
+  refreshDiagnostics: () => void;
 };
 
-export function createSceneEditor(text: string, onEdit: () => void): SceneEditor {
+export function createSceneEditor(text: string, onEdit: () => void, imageMetadata: () => ImageMetadataMap = () => new Map()): SceneEditor {
   const wrapCompartment = new Compartment();
   const view = new EditorView({
     state: EditorState.create({
@@ -199,7 +200,7 @@ export function createSceneEditor(text: string, onEdit: () => void): SceneEditor
           markerType: 'codeOnly',
           colors: { light: '#3f3f46', dark: '#3f3f46', activeLight: '#71717a', activeDark: '#71717a' },
         }),
-        sceneLinter,
+        sceneLinter(imageMetadata),
         lintGutter(),
         // In the body, tooltips are not clipped by the editor's scroll area.
         tooltips({ parent: document.body }),
@@ -217,6 +218,7 @@ export function createSceneEditor(text: string, onEdit: () => void): SceneEditor
   return {
     element: view.dom,
     text: () => view.state.doc.toString(),
+    refreshDiagnostics: () => forceLinting(view),
     setText: (next) => {
       if (next !== view.state.doc.toString()) {
         view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next }, userEvent: LOAD_EVENT });

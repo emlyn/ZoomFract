@@ -2,6 +2,7 @@ import type {
   CircleElement,
   DrawableElement,
   Glow,
+  ImageElement,
   PolygonElement,
   RectElement,
   SceneDefinition,
@@ -169,7 +170,7 @@ function slideMapping(scene: SceneDefinition, width: number, height: number) {
 }
 
 function fillFrame(element: ShapeElement, mapping: ReturnType<typeof slideMapping>) {
-  if (element.kind === 'rect') {
+  if (element.kind === 'rect' || element.kind === 'image') {
     const c = Math.cos(element.rotation), s = Math.sin(element.rotation);
     const across = { x: c * element.width, y: s * element.width };
     const down = { x: s * element.height, y: -c * element.height };
@@ -309,7 +310,7 @@ function shapeFillXml(element: ShapeElement, mapping: ReturnType<typeof slideMap
 
 // An element's box on the slide. Its edges are the images of the scene's
 // right and downward directions, which must stay square to each other.
-function placement(element: RectElement | ZoomElement, mapping: ReturnType<typeof slideMapping>): Placement {
+function placement(element: RectElement | ImageElement | ZoomElement, mapping: ReturnType<typeof slideMapping>): Placement {
   const turn = (v: Vec2): Vec2 => ({
     x: v.x * Math.cos(element.rotation) - v.y * Math.sin(element.rotation),
     y: v.x * Math.sin(element.rotation) + v.y * Math.cos(element.rotation),
@@ -335,6 +336,41 @@ function placement(element: RectElement | ZoomElement, mapping: ReturnType<typeo
   };
 }
 
+function imagePlacement(element: ImageElement, mapping: ReturnType<typeof slideMapping>): Placement {
+  const result = placement(element, mapping);
+  if (element.fit !== 'contain') return result;
+  const sourceAspect = element.pixelWidth * (1 - element.crop.left - element.crop.right)
+    / (element.pixelHeight * (1 - element.crop.top - element.crop.bottom));
+  const frameAspect = result.cx / result.cy;
+  if (frameAspect > sourceAspect) {
+    const cx = Math.round(result.cy * sourceAspect);
+    return { ...result, x: result.x + Math.round((result.cx - cx) / 2), cx };
+  }
+  const cy = Math.round(result.cx / sourceAspect);
+  return { ...result, y: result.y + Math.round((result.cy - cy) / 2), cy };
+}
+
+function imageCrop(element: ImageElement, placement: Placement) {
+  const crop = { ...element.crop };
+  if (element.fit === 'cover') {
+    const sourceAspect = element.pixelWidth * (1 - crop.left - crop.right)
+      / (element.pixelHeight * (1 - crop.top - crop.bottom));
+    const frameAspect = placement.cx / placement.cy;
+    if (frameAspect > sourceAspect) {
+      const visible = sourceAspect / frameAspect;
+      const removed = (1 - visible) * (1 - crop.top - crop.bottom);
+      crop.top += removed / 2;
+      crop.bottom += removed / 2;
+    } else {
+      const visible = frameAspect / sourceAspect;
+      const removed = (1 - visible) * (1 - crop.left - crop.right);
+      crop.left += removed / 2;
+      crop.right += removed / 2;
+    }
+  }
+  return Object.fromEntries(Object.entries(crop).map(([key, value]) => [key, Math.round(value * 100000)]));
+}
+
 function transformXml(tag: string, { x, y, cx, cy, rot, flipV }: Placement, atOrigin = false) {
   const attributes = `${rot === 0 ? '' : ` rot="${rot}"`}${flipV ? ' flipV="1"' : ''}`;
   const offset = atOrigin ? '<a:off x="0" y="0"/>' : `<a:off x="${x}" y="${y}"/>`;
@@ -356,7 +392,8 @@ export type PowerPointLimit = { text: string; color?: string };
 function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
   const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
   const drawsItself = scene.elements.some((element) =>
-    (element.kind !== 'zoom' && (element.fill
+    (element.kind === 'image' && element.opacity > 0)
+    || (element.kind !== 'zoom' && (element.fill
       ? element.opacity > 0 && element.fill.ramp.stops.some((stop) => stop.colour.a > 0)
       : visible(element.color, element.opacity)))
     || (element.kind !== 'zoom' && element.outline !== undefined
@@ -407,11 +444,24 @@ const EMPTY_TREE = '<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpP
 
 const guid = (id: number) => `{6184D655-31FA-EE49-9346-${id.toString(16).toUpperCase().padStart(12, '0')}}`;
 
-function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<typeof slideMapping>, pictureId?: number) {
+function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<typeof slideMapping>, pictureId?: number, imagePictureId?: number, imageFrameId?: number): string {
   if (element.kind === 'circle' || element.kind === 'polygon') {
     return polygonShapeXml(element, id, mapping, pictureId);
   }
-  const place = placement(element, mapping);
+  const place = element.kind === 'image' ? imagePlacement(element, mapping) : placement(element, mapping);
+  if (element.kind === 'image') {
+    if (imagePictureId === undefined) throw new Error(`PowerPoint export needs image "${element.source}"`);
+    const name = escapeXml(element.name ?? `Image ${id}`);
+    const crop = imageCrop(element, place);
+    const frame: RectElement = { ...element, kind: 'rect', name: `${element.name ?? 'Image'} frame`, color: 'transparent', fill: undefined };
+    const under = element.glow ? shapeXml({ ...frame, outline: undefined }, imageFrameId ?? id + 1, mapping) : '';
+    const over = element.outline ? shapeXml({ ...frame, glow: undefined }, (imageFrameId ?? id + 1) + 1, mapping) : '';
+    return under + `<p:pic><p:nvPicPr><p:cNvPr id="${id}" name="${name}"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>`
+      + `<p:blipFill><a:blip r:embed="rId${imagePictureId}"><a:alphaModFix amt="${Math.round(element.opacity * 100000)}"/></a:blip>`
+      + `<a:srcRect l="${crop.left}" r="${crop.right}" t="${crop.top}" b="${crop.bottom}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>`
+      + `<p:spPr>${transformXml('a:xfrm', place)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>`
+      + '<a:ln><a:noFill/></a:ln></p:spPr></p:pic>' + over;
+  }
   if (element.kind === 'rect') {
     const name = escapeXml(element.name ?? `Rectangle ${id}`);
     const fill = shapeFillXml(element, mapping, pictureId);
@@ -481,16 +531,26 @@ function polygonShapeXml(
 }
 
 // `picture` is a PNG of the rendered scene, with transparent background.
-export function powerPointFile(scene: SceneDefinition, picture: Uint8Array, background?: Uint8Array, gradientPictures: ReadonlyMap<number, Uint8Array> = new Map()): Blob {
+export function powerPointFile(
+  scene: SceneDefinition,
+  picture: Uint8Array,
+  background?: Uint8Array,
+  gradientPictures: ReadonlyMap<number, Uint8Array> = new Map(),
+  imagePictures: ReadonlyMap<string, Uint8Array> = new Map(),
+): Blob {
   if (scene.background.length && !background) throw new Error('PowerPoint export needs the rendered background image');
   const { width, height } = slideSize(scene.view.aspect);
   const mapping = slideMapping(scene, width, height);
+  const imageIds = new Map([...imagePictures.keys()].map((source, index) => [source, scene.elements.length + 6 + index] as const));
   const shapes = scene.elements
     .map((element, index) => ({ element, index }))
     .filter(({ element }) => element.kind === 'zoom'
       ? element.opacity > 0
       : element.opacity > 0 || (element.glow !== undefined && visible(element.glow.color, element.glow.opacity)))
-    .map(({ element, index }) => shapeXml(element, index + 2, mapping, gradientPictures.has(index) ? index + 6 : undefined))
+    .map(({ element, index }) => shapeXml(element, index + 2, mapping,
+      gradientPictures.has(index) ? index + 6 : undefined,
+      element.kind === 'image' ? imageIds.get(element.source) : undefined,
+      scene.elements.length + 2 * index + 2))
     .join('');
   const roots = `xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"`;
   const rels = (body: string) => xml(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`);
@@ -592,12 +652,17 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array, back
         + relation(3, 'slide', 'slide1.xml')
         + (background ? relation(5, 'image', '../media/background.png') : '')
         + [...gradientPictures.keys()].map((index) => relation(index + 6, 'image', `../media/gradient${index}.png`)).join('')
+        + [...imageIds].map(([source, id]) => relation(id, 'image', `../media/image-${[...imageIds.keys()].indexOf(source) + 1}.png`)).join('')
         + (fadeWarning ? relation(4, 'notesSlide', '../notesSlides/notesSlide1.xml') : '')),
     },
     { name: 'ppt/media/image1.png', data: picture },
   ];
   if (background) entries.push({ name: 'ppt/media/background.png', data: background });
   for (const [index, data] of gradientPictures) entries.push({ name: `ppt/media/gradient${index}.png`, data });
+  for (const [source, data] of imagePictures) {
+    const index = [...imagePictures.keys()].indexOf(source) + 1;
+    entries.push({ name: `ppt/media/image-${index}.png`, data });
+  }
   if (fadeWarning && notesMaster && notesSlide) {
     entries.push(
       { name: 'ppt/notesMasters/notesMaster1.xml', data: notesMaster },

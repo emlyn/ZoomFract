@@ -41,6 +41,7 @@ export type RenderSettings = {
 export type RenderRequest = {
   scene: ResolvedSceneDefinition;
   options: RenderOptions;
+  imageAssets?: { source: string; bitmap: ImageBitmap }[];
   // Extra generations requested after automatic levels hit their limit.
   additionalLevels?: number;
   // Why WebGL2 must not be used, once the GPU has stopped responding.
@@ -169,7 +170,7 @@ export function elementCorners(element: RectGeometry, scene: ResolvedSceneDefini
 }
 
 export function elementPoints(element: DrawableElement, scene: ResolvedSceneDefinition, factor = 1): Vec2[] {
-  if (element.kind === 'rect' || element.kind === 'zoom') {
+  if (element.kind === 'rect' || element.kind === 'image' || element.kind === 'zoom') {
     return elementCorners(element, scene).map((point) => scaleVector(point, factor));
   }
   if (element.kind === 'polygon') {

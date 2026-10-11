@@ -1,5 +1,5 @@
 import { isMap, isScalar, isSeq, parseDocument, YAMLMap, YAMLSeq } from 'yaml';
-import { parseScene } from './scene';
+import { parseScene, type ImageMetadataMap } from './scene';
 
 type Path = (string | number)[];
 type Fields = Record<string, Field>;
@@ -12,6 +12,7 @@ type Field = {
   multiline?: boolean;
   colour?: boolean;
   suggestions?: string[];
+  imageFile?: boolean;
   variants?: Record<string, Field>;
   labels?: string[];
   accept?: (value: unknown) => boolean;
@@ -89,6 +90,16 @@ const SHAPES: Record<string, { label: string; field: Field; initial: unknown }> 
     label: 'Polygon',
     field: object({ name: text(), points: list(point), sides: number(3), centre: point, vertex: point, ...paint }),
     initial: { type: 'polygon', sides: 3, centre: 'view.centre', vertex: 'view.top' },
+  },
+  image: {
+    label: 'Image',
+    field: object({
+      ...geometry, source: { initial: '', label: 'Source URL or data URL', imageFile: true },
+      fit: choice('contain', ['contain', 'cover', 'fill']), smooth: { initial: true },
+      crop: object({ left: number(0), right: text('100%'), top: number(0), bottom: text('100%') }),
+      outline: paint.outline, glow: object(glowFields, glowStart),
+    }),
+    initial: { type: 'image', source: '', centre: 'view.centre', width: 'view.width / 3' },
   },
   zoom: {
     label: 'Zoom',
@@ -277,6 +288,7 @@ export function createDefinitionForm(
   onEdit: (text: string) => void,
   onSelection: (indices: number[]) => void,
   frameControl: HTMLElement,
+  imageMetadata: () => ImageMetadataMap = () => new Map(),
 ): DefinitionForm {
   const root = window.document.createElement('div');
   root.className = 'definition-form';
@@ -417,7 +429,7 @@ export function createDefinitionForm(
       } else if (type === 'slider') {
         const probe = document.clone();
         probe.setIn(['variables', index, 'input'], probe.createNode({ type, min: -Number.MAX_VALUE / 2, max: Number.MAX_VALUE / 2 }));
-        const resolved = parseScene(probe.toString()).inputs.find((input) => input.name === variable.name);
+        const resolved = parseScene(probe.toString(), new Map(), imageMetadata()).inputs.find((input) => input.name === variable.name);
         if (resolved?.type !== 'slider') throw new Error('Could not resolve the slider default');
         const start = resolved.value;
         setNode(['variables', index, 'input'], { type, min: Math.min(0, start), max: Math.max(1, start), ...(label ? { label } : {}) });
@@ -854,6 +866,36 @@ export function createDefinitionForm(
     const input = field.multiline ? make('textarea') : make('input');
     input.setAttribute('aria-label', label);
     input.dataset.path = JSON.stringify(path);
+    if (field.imageFile && input instanceof HTMLInputElement) {
+      const choose = make('button', 'definition-image-choose');
+      choose.type = 'button';
+      choose.textContent = 'Choose image file';
+      const file = make('input');
+      file.type = 'file';
+      file.accept = 'image/png,image/jpeg,image/webp,image/avif,image/*';
+      file.hidden = true;
+      file.addEventListener('change', () => {
+        const selected = file.files?.[0];
+        if (!selected) return;
+        if (selected.size > 16 * 1024 * 1024) {
+          setError('Image files embedded in definitions are limited to 16 MiB.');
+          file.value = '';
+          return;
+        }
+        const reader = new FileReader();
+        reader.addEventListener('load', () => {
+          if (!body.contains(input)) return;
+          if (typeof reader.result !== 'string') return;
+          input.value = reader.result;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          setError('');
+        });
+        reader.addEventListener('error', () => setError('The selected image could not be read.'));
+        reader.readAsDataURL(selected);
+      });
+      choose.addEventListener('click', () => file.click());
+      container.append(choose, file);
+    }
     if (input instanceof HTMLInputElement && typeof value === 'boolean' && !field.suggestions) {
       input.type = 'checkbox';
       input.checked = value;
@@ -972,7 +1014,7 @@ export function createDefinitionForm(
           swatchSource = source;
           swatchError = '';
           try {
-            swatchScene = parseScene(source);
+            swatchScene = parseScene(source, new Map(), imageMetadata());
           } catch (cause) {
             swatchScene = undefined;
             swatchError = cause instanceof Error ? cause.message : String(cause);
@@ -1171,7 +1213,7 @@ export function createDefinitionForm(
     if (record(value.shading) && typeof value.shading.mode === 'string'
       && !['paint', 'density'].includes(value.shading.mode)) {
       try {
-        density = parseScene(source).shading.mode === 'density';
+        density = parseScene(source, new Map(), imageMetadata()).shading.mode === 'density';
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       }

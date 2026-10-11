@@ -107,6 +107,7 @@ const SHAPE_ITEMS: Record<string, Shape> = {
   rect: { keys: { ...GEOMETRY, ...leaves('weight', 'scale', 'align'), colour: SHAPE_COLOUR, outline: OUTLINE } },
   circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, outline: OUTLINE } },
   polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, vertex: POINT, outline: OUTLINE } },
+  image: { keys: { ...GEOMETRY, ...leaves('source', 'fit', 'smooth'), crop: { keys: leaves('left', 'right', 'top', 'bottom') }, outline: OUTLINE } },
 };
 
 const DEFINITION: Shape = {
@@ -268,6 +269,28 @@ export type PolygonElement = SceneElement & {
   weight: number;
 };
 
+export type ImageElement = SceneElement & {
+  kind: 'image';
+  outline?: Outline;
+  source: string;
+  center: Vec2;
+  width: number;
+  height: number;
+  rotation: number;
+  opacity: number;
+  fit: 'contain' | 'cover' | 'fill';
+  smooth: boolean;
+  crop: { left: number; right: number; top: number; bottom: number };
+  pixelWidth: number;
+  pixelHeight: number;
+  color: string;
+  weight: number;
+  fill?: ShapeFill;
+};
+
+export type ImageMetadata = { width: number; height: number };
+export type ImageMetadataMap = ReadonlyMap<string, ImageMetadata>;
+
 export type ZoomElement = SceneElement & {
   kind: 'zoom';
   center: Vec2;
@@ -279,7 +302,7 @@ export type ZoomElement = SceneElement & {
   alignTargets: Vec2[];
 };
 
-export type ShapeElement = RectElement | CircleElement | PolygonElement;
+export type ShapeElement = RectElement | CircleElement | PolygonElement | ImageElement;
 export type DrawableElement = ShapeElement | ZoomElement;
 
 export type ViewRanges = {
@@ -853,7 +876,8 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
   };
   const base = elements
     .filter((element): element is ShapeElement =>
-      element.kind !== 'zoom' && (element.opacity > 0 || (element.kind === 'rect' && element.glow !== undefined)))
+      element.kind !== 'zoom' && (element.opacity > 0
+        || ((element.kind === 'rect' || element.kind === 'image') && element.glow !== undefined)))
     .flatMap((shape) => {
       const stroke = outlineTriangles(shape).flat();
       if (shape.kind === 'circle') {
@@ -1291,6 +1315,7 @@ function resolveRectGeometry(
   variables: Variables,
   path: ScenePath,
   zoom?: ZoomConstraints,
+  aspectOverride?: number,
 ): RectGeometry {
   const at = <T>(key: string, compute: () => T) => atPath([...path, key], compute);
   let center = at('centre', () => resolvePoint(rect.centre, `${elementName} centre`));
@@ -1301,6 +1326,8 @@ function resolveRectGeometry(
   ) as Partial<Record<CornerName, Vec2>>;
   let width = at('width', () => asPositiveNumber(rect.width, variables));
   let height = at('height', () => asPositiveNumber(rect.height, variables));
+  if (aspectOverride && width && !height) height = width / aspectOverride;
+  else if (aspectOverride && height && !width) width = height * aspectOverride;
   if (zoom && rect.scale !== undefined) {
     const scale = at('scale', () => asPositiveNumber(rect.scale, variables));
     if (!scale) {
@@ -1631,6 +1658,86 @@ function parseRectElement(
   };
 }
 
+function parseImageElement(
+  record: Record<string, unknown>,
+  name: string | undefined,
+  elementName: string,
+  resolvePoint: PointResolver,
+  variables: Variables,
+  density: boolean,
+  path: ScenePath,
+  aspect: number,
+  view: ViewFrame,
+  imageMetadata: ImageMetadataMap,
+): ImageElement {
+  if (density) throw new PathError(`${elementName}: images are not used with density shading`, path);
+  const writtenSource = record.source;
+  if (typeof writtenSource !== 'string' || !writtenSource.trim()) {
+    throw new PathError(`${elementName} needs a non-empty source URL or data URL`, [...path, 'source']);
+  }
+  const source = writtenSource.trim();
+  const metadata = imageMetadata.get(source);
+  if (!metadata || !(metadata.width > 0 && metadata.height > 0)) {
+    throw new PathError(`${elementName} image has not been loaded or decoded`, [...path, 'source']);
+  }
+  if (record.colour !== undefined || record.weight !== undefined) {
+    throw new PathError('Images use source pixels, not colour or weight', [...path, record.colour !== undefined ? 'colour' : 'weight']);
+  }
+  const fit = enumValue(record.fit, ['contain', 'cover', 'fill'] as const, 'contain', variables);
+  if (record.smooth !== undefined && typeof record.smooth !== 'boolean') {
+    throw new PathError(`${elementName} smooth must be true or false`, [...path, 'smooth']);
+  }
+  const smooth = record.smooth !== false;
+  const cropRecord = isRecord(record.crop) ? record.crop : {};
+  if (record.crop !== undefined && !isRecord(record.crop)) {
+    throw new PathError(`${elementName} crop must be an object`, [...path, 'crop']);
+  }
+  const crop = { left: 0, right: 0, top: 0, bottom: 0 };
+  for (const edge of Object.keys(crop) as (keyof typeof crop)[]) {
+    const written = cropRecord[edge];
+    if (written === undefined) continue;
+    const fraction = atPath([...path, 'crop', edge], () => typeof written === 'string' && written.trim().endsWith('%')
+      ? asNumber(written.trim().slice(0, -1), Number.NaN, variables) / 100
+      : asNumber(written, Number.NaN, variables) / (edge === 'left' || edge === 'right' ? metadata.width : metadata.height));
+    if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
+      throw new PathError(`Crop ${edge} must lie within the source image, in pixels or percentages`, [...path, 'crop', edge]);
+    }
+    crop[edge] = edge === 'right' || edge === 'bottom' ? 1 - fraction : fraction;
+  }
+  if (crop.left + crop.right >= 1 || crop.top + crop.bottom >= 1) {
+    throw new PathError('Image crop must leave a non-empty source area', [...path, 'crop']);
+  }
+  const naturalAspect = metadata.width * (1 - crop.left - crop.right)
+    / (metadata.height * (1 - crop.top - crop.bottom));
+  const corners = Object.fromEntries(CORNER_NAMES.map((key) =>
+    [key, atPath([...path, key], () => resolvePoint(record[key], `${elementName} ${key}`))]));
+  const horizontal = corners.topLeft && corners.topRight ? subtract(corners.topRight, corners.topLeft)
+    : corners.bottomLeft && corners.bottomRight ? subtract(corners.bottomRight, corners.bottomLeft) : undefined;
+  const vertical = corners.bottomLeft && corners.topLeft ? subtract(corners.topLeft, corners.bottomLeft)
+    : corners.bottomRight && corners.topRight ? subtract(corners.topRight, corners.bottomRight) : undefined;
+  const rotation = atPath([...path, 'rotation'], () => parseRotation(record.rotation, variables))
+    ?? (horizontal ? Math.atan2(horizontal.y, horizontal.x) : vertical ? Math.atan2(vertical.y, vertical.x) - Math.PI / 2 : 0);
+  const xScale = aspect / Math.abs(view.width), yScale = 1 / Math.abs(view.height);
+  const across = Math.hypot(Math.cos(rotation) * xScale, Math.sin(rotation) * yScale);
+  const down = Math.hypot(Math.sin(rotation) * xScale, Math.cos(rotation) * yScale);
+  const determinesBoth = (corners.topLeft && corners.bottomRight) || (corners.bottomLeft && corners.topRight)
+    || (record.centre !== undefined && record.rotation !== undefined && Object.values(corners).some(Boolean));
+  const constraints = { ...record,
+    ...(record.width === undefined && horizontal ? { width: vectorLength(horizontal) } : {}),
+    ...(record.height === undefined && vertical ? { height: vectorLength(vertical) } : {}),
+  };
+  const geometry = resolveRectGeometry(constraints, resolvePoint, elementName, variables, path, undefined,
+    determinesBoth ? undefined : naturalAspect * down / across);
+  const outline = parseOutline(record.outline, variables, false, [...path, 'outline']);
+  const glow = atPath([...path, 'glow'], () => parseGlow(record.glow, elementName, variables, false, [...path, 'glow'], false));
+  return {
+    kind: 'image', name, source, ...geometry, opacity: parseOpacity(record, 1, variables, path),
+    fit, smooth, crop, pixelWidth: metadata.width, pixelHeight: metadata.height,
+    color: 'transparent', weight: 1,
+    ...(outline ? { outline } : {}), ...(glow ? { glow } : {}),
+  };
+}
+
 function parseShapeStyle<K extends 'circle' | 'polygon'>(
   record: Record<string, unknown>,
   name: string | undefined,
@@ -1851,7 +1958,7 @@ function parseSceneItems(values: unknown[], layer: 'scene' | 'background', names
     if (typeof record.type !== 'string' || !record.type.trim()) {
       throw new Error(`Scene item ${itemNumber} must have a type`);
     }
-    if (!['rect', 'circle', 'polygon', 'zoom'].includes(record.type)) {
+    if (!['rect', 'circle', 'polygon', 'image', 'zoom'].includes(record.type)) {
       throw new PathError(`Scene item ${itemNumber} has unknown type: ${record.type}`, [layer, index, 'type']);
     }
     if (layer === 'background' && record.type === 'zoom') {
@@ -1882,7 +1989,9 @@ function parseSceneItems(values: unknown[], layer: 'scene' | 'background', names
         ? 'Circle'
         : record.type === 'polygon'
           ? 'Polygon'
-          : 'Rectangle';
+          : record.type === 'image'
+            ? 'Image'
+            : 'Rectangle';
     return {
       record,
       type: record.type,
@@ -1900,6 +2009,7 @@ function resolveSceneElements(
   view: ViewFrame,
   variables: Variables,
   density: boolean,
+  imageMetadata: ImageMetadataMap,
 ): DrawableElement[] {
   const indexByName = new Map(items.flatMap((item, index) => item.name ? [[item.name, index] as const] : []));
   const resolved: (DrawableElement | undefined)[] = [];
@@ -1960,7 +2070,7 @@ function resolveSceneElements(
       throw new Error(`${label} cannot refer to its own element`);
     }
     const element = resolveElement(target);
-    if (element.kind === 'rect' || element.kind === 'zoom') {
+    if (element.kind === 'rect' || element.kind === 'image' || element.kind === 'zoom') {
       return rectPoint(element, part);
     }
     const box = element.kind === 'circle'
@@ -2001,6 +2111,9 @@ function resolveSceneElements(
       }
       if (item.type === 'polygon') {
         return parsePolygonElement(item.record, item.name, item.label, resolvePoint, variables, itemDensity, path);
+      }
+      if (item.type === 'image') {
+        return parseImageElement(item.record, item.name, item.label, resolvePoint, variables, itemDensity, path, aspect, view, imageMetadata);
       }
       return parseZoomElement(item.record, item.name, item.label, resolvePoint, aspect, view, variables, density, path);
     });
@@ -2427,7 +2540,7 @@ export type ParsedScene = {
 
 // Parses a definition, reporting mistakes with their positions in the text.
 // Input values replace the values of variables set while viewing.
-export function parseSceneWithDiagnostics(text: string, inputValues: InputValues = new Map()): ParsedScene {
+export function parseSceneWithDiagnostics(text: string, inputValues: InputValues = new Map(), imageMetadata: ImageMetadataMap = new Map()): ParsedScene {
   if (!text.trim()) {
     return { scene: { ...fallback, inputs: [], shading: { mode: 'paint', detail: 0 } }, warnings: [] };
   }
@@ -2442,7 +2555,7 @@ export function parseSceneWithDiagnostics(text: string, inputValues: InputValues
     ]);
   }
   try {
-    return { scene: sceneFromValue(document.toJS(), inputValues), warnings };
+    return { scene: sceneFromValue(document.toJS(), inputValues, imageMetadata), warnings };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const [from, to] = error instanceof PathError ? rangeForPath(document, error.path) : headRange(document.contents) ?? [0, 0];
@@ -2450,14 +2563,14 @@ export function parseSceneWithDiagnostics(text: string, inputValues: InputValues
   }
 }
 
-export function parseScene(text: string, inputValues: InputValues = new Map()): SceneDefinition {
-  return parseSceneWithDiagnostics(text, inputValues).scene;
+export function parseScene(text: string, inputValues: InputValues = new Map(), imageMetadata: ImageMetadataMap = new Map()): SceneDefinition {
+  return parseSceneWithDiagnostics(text, inputValues, imageMetadata).scene;
 }
 
 // With `overflow: auto` the picture is fitted to the content, which may
 // depend on pixel sizes, so the scene is rebuilt until the fit settles.
-function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefinition {
-  let scene = buildScene(value, inputValues, undefined);
+function sceneFromValue(value: unknown, inputValues: InputValues, imageMetadata: ImageMetadataMap): SceneDefinition {
+  let scene = buildScene(value, inputValues, undefined, imageMetadata);
   const parsed = normaliseSpellings(value);
   if (!isRecord(parsed) || !isRecord(parsed.view) || parsed.view.overflow !== 'auto') {
     return scene;
@@ -2468,12 +2581,12 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
     if (attempt > 0 && rangesMatch(fitted, scene.view.coordinates)) {
       return { ...scene, view: { ...scene.view, autoFit: true } };
     }
-    scene = buildScene(value, inputValues, fitted);
+    scene = buildScene(value, inputValues, fitted, imageMetadata);
   }
   throw new PathError('overflow: auto could not settle on a size', ['view', 'overflow']);
 }
 
-function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges | undefined): SceneDefinition {
+function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges | undefined, imageMetadata: ImageMetadataMap): SceneDefinition {
   const parsed = normaliseSpellings(value);
   if (!isRecord(parsed)) {
     throw new Error('Scene definition must be a YAML object');
@@ -2589,6 +2702,7 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
       viewFrame(coordinates),
       variables,
       density,
+      imageMetadata,
     );
     const elements = resolved.slice(0, sceneItems.length).map((element) => element.kind === 'zoom'
       ? reframeZoom(element, viewFrame(coordinates), viewFrame(shown()))

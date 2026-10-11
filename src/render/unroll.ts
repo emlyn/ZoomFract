@@ -20,7 +20,7 @@ type ZoomNode = {
 // A leaf's seed covers only the declared view in its copy, not the overflow.
 export type UnrolledItem =
   | { kind: 'outline'; polygon: Vec2[]; elementIndex: number; alpha: number }
-  | { kind: 'shape'; polygon: Vec2[]; texCoords?: Vec2[]; elementIndex: number; alpha: number }
+  | { kind: 'shape'; polygon: Vec2[]; texCoords?: Vec2[]; image?: boolean; smooth?: boolean; source?: string; elementIndex: number; alpha: number }
   | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; seed: Vec2[]; alpha: number; blend: BlendMode }
   | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'zoomGlow'; polygon: Vec2[]; texCoords: Vec2[]; elementIndex: number; alpha: number };
@@ -191,7 +191,7 @@ export function unrollScene(
     })));
   // Maps unit square coordinates onto an element, from its top-left corner.
   const elementFrames = elementPolygons.map(([topLeft, topRight, , bottomLeft], index): Affine => {
-    if (scene.elements[index].kind !== 'rect' && scene.elements[index].kind !== 'zoom') return IDENTITY;
+    if (scene.elements[index].kind !== 'rect' && scene.elements[index].kind !== 'image' && scene.elements[index].kind !== 'zoom') return IDENTITY;
     return [
       topRight.x - topLeft.x,
       topRight.y - topLeft.y,
@@ -203,7 +203,7 @@ export function unrollScene(
   });
   // The element's outline grown outwards by its glow size.
   const glowQuads = scene.elements.map((element, index) => {
-    if (!element.glow || (element.kind !== 'rect' && element.kind !== 'zoom')) {
+    if (!element.glow || (element.kind !== 'rect' && element.kind !== 'image' && element.kind !== 'zoom')) {
       return null;
     }
     const grow = { x: element.glow.size / element.width, y: element.glow.size / element.height };
@@ -318,7 +318,7 @@ export function unrollScene(
       return;
     }
     const element = scene.elements[index];
-    if (element.kind !== 'rect' && element.kind !== 'zoom') {
+    if (element.kind !== 'rect' && element.kind !== 'image' && element.kind !== 'zoom') {
       return;
     }
     const toUnit = invertAffine(composeAffine(node.transform, elementFrames[index]));
@@ -342,15 +342,48 @@ export function unrollScene(
           node.clip,
         );
         if (polygon.length > 0) {
-          const inverse = element.fill ? invertAffine(node.transform) : undefined;
-          const texCoords = element.fill && inverse ? polygon.map((point) => {
-            const pixel = applyAffine(inverse, point);
-            const x = scene.view.coordinates.x.from + pixel.x / width * (scene.view.coordinates.x.to - scene.view.coordinates.x.from);
-            const y = scene.view.coordinates.y.to - pixel.y / height * (scene.view.coordinates.y.to - scene.view.coordinates.y.from);
-            const [a, b, c, d, e, f] = element.fill!.mapping;
-            return { x: a * x + c * y + e, y: b * x + d * y + f };
-          }) : undefined;
-          items.push({ kind: 'shape', polygon, texCoords, elementIndex: index, alpha: node.alpha * element.opacity });
+          const inverse = element.kind === 'image'
+            ? invertAffine(composeAffine(node.transform, elementFrames[index]))
+            : element.fill ? invertAffine(node.transform) : undefined;
+          const texCoords = element.kind === 'image' && inverse
+            ? polygon.map((point) => {
+              const pixel = applyAffine(inverse, point);
+              let u = pixel.x, v = pixel.y;
+              const frame = elementFrames[index];
+              const targetAspect = Math.hypot(frame[0], frame[1]) / Math.hypot(frame[2], frame[3]);
+              const sourceAspect = element.pixelWidth * (1 - element.crop.left - element.crop.right)
+                / (element.pixelHeight * (1 - element.crop.top - element.crop.bottom));
+              if (element.fit === 'contain') {
+                const extent = targetAspect >= sourceAspect ? sourceAspect / targetAspect : targetAspect / sourceAspect;
+                if (targetAspect >= sourceAspect) u = (u - (1 - extent) / 2) / extent;
+                else v = (v - (1 - extent) / 2) / extent;
+              } else if (element.fit === 'cover') {
+                if (targetAspect >= sourceAspect) {
+                  const extent = sourceAspect / targetAspect;
+                  v = (v - 0.5) * extent + 0.5;
+                } else {
+                  const extent = targetAspect / sourceAspect;
+                  u = (u - 0.5) * extent + 0.5;
+                }
+              }
+              return {
+                x: element.crop.left + u * (1 - element.crop.left - element.crop.right),
+                y: element.crop.top + v * (1 - element.crop.top - element.crop.bottom),
+              };
+            })
+            : element.fill && inverse ? polygon.map((point) => {
+              const pixel = applyAffine(inverse, point);
+              const x = scene.view.coordinates.x.from + pixel.x / width * (scene.view.coordinates.x.to - scene.view.coordinates.x.from);
+              const y = scene.view.coordinates.y.to - pixel.y / height * (scene.view.coordinates.y.to - scene.view.coordinates.y.from);
+              const [a, b, c, d, e, f] = element.fill!.mapping;
+              return { x: a * x + c * y + e, y: b * x + d * y + f };
+            }) : undefined;
+          items.push({
+            kind: 'shape', polygon, texCoords, image: element.kind === 'image',
+            smooth: element.kind === 'image' ? element.smooth : undefined,
+            source: element.kind === 'image' ? element.source : undefined,
+            elementIndex: index, alpha: node.alpha * element.opacity,
+          });
         }
         for (const triangle of outlines[index]) {
           const polygon = clipPolygon(triangle.map((point) => applyAffine(node.transform, point)), node.clip);
