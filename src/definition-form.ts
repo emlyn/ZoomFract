@@ -179,6 +179,7 @@ export type DefinitionForm = {
   setText: (text: string) => void;
   setError: (message: string) => void;
   setActive: (active: boolean) => void;
+  setInputControls: (controls: ReadonlyMap<string, HTMLElement>) => void;
 };
 
 export function createDefinitionForm(
@@ -202,6 +203,8 @@ export function createDefinitionForm(
   let cancelTouchDrag: (() => void) | undefined;
   let density = false;
   let active = true;
+  let inputControls: ReadonlyMap<string, HTMLElement> = new Map();
+  const inputSlots = new Map<string, HTMLElement>();
   let selected = '[]';
   const notifySelection = () => {
     const scene = body.querySelector<HTMLDetailsElement>('.definition-scene-section');
@@ -385,6 +388,15 @@ export function createDefinitionForm(
         header.append(name);
         if (key in value) header.append(deleteButton);
         row.append(header, fieldEditor(spec, child, [...path, key], name.textContent, record(defaults) ? defaults[key] : undefined));
+        if (path[0] === 'variables' && path.length === 2 && key === 'value' && typeof value.name === 'string' && value.input !== undefined) {
+          const slot = make('div', 'definition-live-input');
+          slot.setAttribute('role', 'group');
+          slot.setAttribute('aria-label', `Live input: ${value.name}`);
+          inputSlots.set(value.name, slot);
+          const control = inputControls.get(value.name);
+          if (control) slot.append(control);
+          row.append(slot);
+        }
         container.append(row);
       });
       const missing = Object.entries(fields).filter(([key]) => {
@@ -533,6 +545,7 @@ export function createDefinitionForm(
 
   function render() {
     cancelTouchDrag?.();
+    inputSlots.clear();
     body.replaceChildren();
     undo.disabled = undoStack.length === 0;
     redo.disabled = redoStack.length === 0;
@@ -854,6 +867,13 @@ export function createDefinitionForm(
       render();
     },
     setError,
+    setInputControls: (controls) => {
+      inputControls = controls;
+      inputSlots.forEach((slot, name) => {
+        const control = controls.get(name);
+        slot.replaceChildren(...(control ? [control] : []));
+      });
+    },
     setActive: (next) => {
       if (!next) cancelTouchDrag?.();
       active = next;

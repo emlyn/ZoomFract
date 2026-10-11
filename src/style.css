@@ -1192,6 +1192,17 @@ canvas {
   color: #b8b8c0;
 }
 
+.definition-live-input {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid #52525b;
+  border-radius: 4px;
+}
+
+.definition-live-input:empty {
+  display: none;
+}
+
 .definition-scene-section > summary > span {
   flex: 1;
 }

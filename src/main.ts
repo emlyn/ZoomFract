@@ -1447,9 +1447,9 @@ const describeInputValue = (input: SceneInput) => input.type === 'slider'
 type PointInput = Extract<SceneInput, { type: 'click' | 'drag' }>;
 const isPointInput = (input: SceneInput): input is PointInput => input.type === 'click' || input.type === 'drag';
 
-const inputReadouts = new Map<string, HTMLOutputElement>();
-const inputSliders = new Map<string, HTMLInputElement>();
-const inputCheckboxes = new Map<string, HTMLInputElement>();
+const inputReadouts = new Map<string, HTMLOutputElement[]>();
+const inputSliders = new Map<string, HTMLInputElement[]>();
+const inputCheckboxes = new Map<string, HTMLInputElement[]>();
 const inputError = labelElement('p', 'input-error', '');
 const inputReset = document.createElement('button');
 inputReset.type = 'button';
@@ -1464,37 +1464,45 @@ function buildInputPanel() {
   inputReadouts.clear();
   inputSliders.clear();
   inputCheckboxes.clear();
+  const panelControls = new Map<string, HTMLElement>();
+  const remember = <T extends HTMLElement>(map: Map<string, T[]>, name: string, element: T) =>
+    map.set(name, [...(map.get(name) ?? []), element]);
   const rows = inputs.map((input) => {
-    const row = document.createElement('label');
-    row.className = 'input-control';
-    if (input.type === 'checkbox') {
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.name = input.name;
-      checkbox.addEventListener('change', () => setInputValue(input.name, checkbox.checked, true));
-      inputCheckboxes.set(input.name, checkbox);
-      row.classList.add('input-checkbox');
-      row.append(checkbox, labelElement('span', 'input-name', input.label));
+    const createControl = () => {
+      const row = document.createElement('label');
+      row.className = 'input-control';
+      if (input.type === 'checkbox') {
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.name = input.name;
+        checkbox.addEventListener('change', () => setInputValue(input.name, checkbox.checked, true));
+        remember(inputCheckboxes, input.name, checkbox);
+        row.classList.add('input-checkbox');
+        row.append(checkbox, labelElement('span', 'input-name', input.label));
+        return row;
+      }
+      const readout = document.createElement('output');
+      remember(inputReadouts, input.name, readout);
+      row.append(labelElement('span', 'input-name', input.label), readout);
+      if (input.type === 'slider') {
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.name = input.name;
+        slider.min = String(input.min);
+        slider.max = String(input.max);
+        slider.step = input.step === undefined ? 'any' : String(input.step);
+        slider.addEventListener('input', () => setInputValue(input.name, Number(slider.value), true));
+        remember(inputSliders, input.name, slider);
+        row.append(slider);
+      } else {
+        row.append(labelElement('span', 'input-hint', input.type === 'drag' ? 'Drag on the picture' : 'Click the picture'));
+      }
       return row;
-    }
-    const readout = document.createElement('output');
-    inputReadouts.set(input.name, readout);
-    row.append(labelElement('span', 'input-name', input.label), readout);
-    if (input.type === 'slider') {
-      const slider = document.createElement('input');
-      slider.type = 'range';
-      slider.name = input.name;
-      slider.min = String(input.min);
-      slider.max = String(input.max);
-      slider.step = input.step === undefined ? 'any' : String(input.step);
-      slider.addEventListener('input', () => setInputValue(input.name, Number(slider.value), true));
-      inputSliders.set(input.name, slider);
-      row.append(slider);
-    } else {
-      row.append(labelElement('span', 'input-hint', input.type === 'drag' ? 'Drag on the picture' : 'Click the picture'));
-    }
-    return row;
+    };
+    panelControls.set(input.name, createControl());
+    return createControl();
   });
+  definitionForm.setInputControls(panelControls);
   inputPanel.replaceChildren(...rows, inputError, inputReset);
   inputPanel.hidden = inputs.length === 0;
   canvas.classList.toggle('point-input', inputs.some(isPointInput));
@@ -1505,13 +1513,14 @@ function buildInputPanel() {
 function refreshInputPanel() {
   state.scene.inputs.forEach((input) => {
     if (input.type === 'checkbox') {
-      inputCheckboxes.get(input.name)!.checked = input.value;
+      inputCheckboxes.get(input.name)!.forEach((checkbox) => { checkbox.checked = input.value; });
       return;
     }
-    inputReadouts.get(input.name)!.textContent = describeInputValue(input);
-    const slider = inputSliders.get(input.name);
-    if (slider && input.type === 'slider' && Number(slider.value) !== input.value) {
-      slider.value = String(input.value);
+    inputReadouts.get(input.name)!.forEach((readout) => { readout.textContent = describeInputValue(input); });
+    if (input.type === 'slider') {
+      inputSliders.get(input.name)?.forEach((slider) => {
+        if (Number(slider.value) !== input.value) slider.value = String(input.value);
+      });
     }
   });
   inputReset.disabled = state.inputValues.size === 0;
