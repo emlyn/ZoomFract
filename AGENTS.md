@@ -119,7 +119,10 @@ files unless extracting a module clearly reduces complexity.
   depend on the fit, `sceneFromValue` rebuilds until it settles. Zooms that
   do not shrink are an error. The source content hull is clipped to the shown
   view before each zoom copy contributes to the fit. `view.overflow` is not a
-  variable in auto mode.
+  variable in auto mode. Parsed auto fits mark `view.autoFit`; `withResolution`
+  adds a pixel-scale filtering margin and reframes zooms without changing their
+  transforms. Already resolved scenes keep their coordinates when resized.
+  Pointer mapping and exports use the same resolved view as the rendered image.
 - `view.coordinates.x` runs left to right.
 - `view.coordinates.y` runs bottom to top, following mathematical convention.
 - Axis ranges accept `[from, to]` and object forms such as

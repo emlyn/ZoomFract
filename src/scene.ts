@@ -430,6 +430,7 @@ export type SceneDefinition = {
     coordinates: ViewRanges;
     // The coordinates as written, which set the zoom transforms.
     declared: ViewRanges;
+    autoFit?: boolean;
   };
   elements: DrawableElement[];
   background: ShapeElement[];
@@ -448,6 +449,27 @@ export function withResolution(
   scene: SceneDefinition,
   resolution: ResolvedSceneDefinition['view']['resolution'],
 ): ResolvedSceneDefinition {
+  if (scene.view.autoFit && !('resolution' in scene.view)) {
+    const view = viewFrame(scene.view.coordinates);
+    const shrink = scene.elements.reduce((largest, element) => element.kind === 'zoom' && element.opacity > 0
+      ? Math.max(largest, Math.abs(element.width / view.width), Math.abs(element.height / view.height)) : largest, 0);
+    // Each feedback resampling spreads coverage by up to one pixel. Its
+    // transformed copies accumulate a geometric series beyond the exact hull.
+    const margin = 1 / (1 - shrink);
+    const scale = 1 + 2 * margin / Math.min(resolution.width, resolution.height);
+    const shown = { ...view, width: view.width * scale, height: view.height * scale };
+    return {
+      ...scene,
+      elements: scene.elements.map((element) => element.kind === 'zoom' ? reframeZoom(element, view, shown) : element),
+      view: {
+        ...scene.view, resolution,
+        coordinates: {
+          x: { from: shown.centre.x - shown.width / 2, to: shown.centre.x + shown.width / 2 },
+          y: { from: shown.centre.y - shown.height / 2, to: shown.centre.y + shown.height / 2 },
+        },
+      },
+    };
+  }
   return { ...scene, view: { ...scene.view, resolution } };
 }
 
@@ -2444,7 +2466,7 @@ function sceneFromValue(value: unknown, inputValues: InputValues): SceneDefiniti
   for (let attempt = 0; attempt < 64; attempt += 1) {
     const fitted = atPath(['view', 'overflow'], () => fittedView(scene, matchContent));
     if (attempt > 0 && rangesMatch(fitted, scene.view.coordinates)) {
-      return scene;
+      return { ...scene, view: { ...scene.view, autoFit: true } };
     }
     scene = buildScene(value, inputValues, fitted);
   }

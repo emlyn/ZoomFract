@@ -1059,7 +1059,7 @@ function loadDefinitionFile(text: string): boolean {
 const shareDialog = createShareDialog({
   canvas,
   powerPointLayers: () => ({ foreground: displayedFrame?.foreground ?? canvas, background: displayedFrame?.background }),
-  scene: () => state.scene,
+  scene: () => resolvedScene(),
   fileName: () => state.definitionLocation.kind === 'example' ? state.definitionLocation.id : 'custom',
   hasInputs: () => state.scene.inputs.length > 0,
   hasUnappliedEdits: () => sceneEditor.text().trim() !== state.definitionText.trim(),
@@ -1587,7 +1587,7 @@ function pointerPosition(event: PointerEvent): { pixel: Vec2; scene: Vec2 } {
   const rect = canvas.getBoundingClientRect();
   const fx = (event.clientX - rect.left) / rect.width;
   const fy = (event.clientY - rect.top) / rect.height;
-  const { x, y } = state.scene.view.coordinates;
+  const { x, y } = resolvedScene().view.coordinates;
   return {
     pixel: { x: fx * canvas.width, y: fy * canvas.height },
     scene: { x: x.from + fx * (x.to - x.from), y: y.from + (1 - fy) * (y.to - y.from) },
@@ -1622,7 +1622,7 @@ canvas.addEventListener('keydown', (event) => {
   event.preventDefault();
   const input = pointInputs[index];
   keyboardInput = input.name;
-  const { x, y } = state.scene.view.coordinates;
+  const { x, y } = resolvedScene().view.coordinates;
   const step = event.shiftKey ? KEY_STEP_SHIFT_FRACTION : KEY_STEP_FRACTION;
   const move = (value: number, range: typeof x, sign: number) =>
     clamp(value + sign * step * (range.to - range.from), Math.min(range.from, range.to), Math.max(range.from, range.to));

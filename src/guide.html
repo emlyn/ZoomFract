@@ -242,10 +242,13 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     </li>
     <li>
       <code>overflow: auto</code> fits the picture to everything the scene draws, however
-      far the zooms spread it, so nothing is cut off and nothing is wasted. The view is
+      far the zooms spread it. The view is
       grown or shrunk evenly about the content, keeping its aspect, and the short side is
       padded equally on both sides. With <code>aspect: auto</code> as well, each side is
-      fitted separately, so the picture takes the shape of the content with no padding.
+      fitted separately, so the picture takes the shape of the content.
+      A resolution-dependent safety margin also leaves room for antialiased edges
+      and recursive texture filtering. Slowly shrinking copies need more room;
+      increasing the resolution reduces this margin in scene units.
       Shapes are clipped to the view before they are copied,
       so parts outside it do not add empty space to the fit. The coordinates still set what
       each zoom copies, so the shape is the same as without it. Every zoom must be smaller
