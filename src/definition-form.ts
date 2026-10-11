@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
+import { isMap, isScalar, isSeq, parseDocument, YAMLMap, YAMLSeq } from 'yaml';
 import { parseScene } from './scene';
 
 type Path = (string | number)[];
@@ -500,6 +500,39 @@ export function createDefinitionForm(
     const container = make('div', 'definition-value');
     container.setAttribute('role', 'group');
     container.setAttribute('aria-label', label);
+    const shapeStops = ['scene', 'background'].includes(String(path[0]))
+      && ['colour', 'color'].includes(String(path[2]))
+      && ['colours', 'colors'].includes(String(path[3])) && path.length === 4;
+    const positionedStops = (index?: number, percent?: number) => {
+      const node = document.getIn(documentPath(path), true);
+      if (!isSeq(node)) throw new Error('Gradient colours must be a list');
+      const stops = new YAMLMap(document.schema);
+      stops.commentBefore = node.commentBefore;
+      stops.comment = node.comment;
+      node.items.forEach((child, i) => {
+        const key = `${i === index ? percent : i * 100 / Math.max(1, node.items.length - 1)}%`;
+        if (stops.has(key)) throw new Error('Gradient stop positions must be distinct');
+        stops.set(document.createNode(key), child);
+      });
+      document.setIn(documentPath(path), stops);
+    };
+    const stopPosition = (percent: number, update: (percent: number) => void, name: string) => {
+      const row = make('label', 'definition-stop-opacity');
+      const caption = make('span');
+      caption.textContent = 'Position (%)';
+      const input = make('input');
+      input.type = 'number';
+      input.min = '0';
+      input.max = '100';
+      input.step = 'any';
+      input.value = String(percent);
+      input.setAttribute('aria-label', `${name} position (%)`);
+      input.addEventListener('change', () => {
+        if (input.value !== '' && input.checkValidity()) update(input.valueAsNumber);
+      });
+      row.append(caption, input);
+      return row;
+    };
     if (path[0] === 'variables' && path.length === 2 && record(value)) return variableEditor(value, Number(path[1]));
     if (field.variants) {
       const options = Object.entries(field.variants);
@@ -507,6 +540,23 @@ export function createDefinitionForm(
       const selector = select(options.map(([key]) => [key, key]), active?.[0] ?? '', `${label} format`);
       selector.addEventListener('change', () => {
         if (selector.value === active?.[0]) return;
+        if (shapeStops && selector.value === 'Positioned stops' && Array.isArray(value)) {
+          change(path, () => positionedStops(), true);
+          return;
+        }
+        if (shapeStops && selector.value === 'Inline stops' && record(value)) {
+          change(path, () => {
+            const node = document.getIn(documentPath(path), true);
+            if (!isMap(node)) throw new Error('Gradient colours must be positioned stops');
+            const stops = new YAMLSeq(document.schema);
+            const position = (key: unknown) => Number(String(isScalar(key) ? key.value : key).replace(/%$/, ''));
+            stops.items = [...node.items].sort((a, b) => position(a.key) - position(b.key)).map((pair) => pair.value);
+            stops.commentBefore = node.commentBefore;
+            stops.comment = node.comment;
+            document.setIn(documentPath(path), stops);
+          }, true);
+          return;
+        }
         const next = field.variants![selector.value];
         // Changing from colour shorthand to seed settings keeps the colour.
         let replacement = next.initial;
@@ -552,7 +602,8 @@ export function createDefinitionForm(
       Object.entries(shown).forEach(([key, child]) => {
         if (key === 'type' && ['scene', 'background'].includes(String(path[0]))) return;
         if (!(key in value) && Object.keys(value).some((written) => SPELLINGS[written] === key)) return;
-        let spec = fields[SPELLINGS[key] ?? key] ?? (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
+        let spec = fields[SPELLINGS[key] ?? key] ?? (shapeStops
+          || path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
         if (fillFields && (SPELLINGS[key] ?? key) === 'colours' && typeof child === 'string') {
           const root: unknown = document.toJS();
           const names = record(root) && Array.isArray(root.variables)
@@ -575,6 +626,22 @@ export function createDefinitionForm(
         const deleteButton = button('Remove', () => remove([...path, key]), 'definition-remove');
         deleteButton.setAttribute('aria-label', `Remove ${label}: ${name.textContent}`);
         header.append(name);
+        if (shapeStops && key.endsWith('%') && Number.isFinite(Number(key.slice(0, -1)))) {
+          header.append(stopPosition(Number(key.slice(0, -1)), (percent) => {
+            change(path, () => {
+              const node = document.getIn(documentPath(path), true);
+              if (!isMap(node)) throw new Error('Gradient colours must be positioned stops');
+              const next = `${percent}%`;
+              const pair = node.items.find(({ key: entry }) => isScalar(entry) && String(entry.value) === key);
+              if (!pair || !isScalar(pair.key)) throw new Error('Could not find gradient stop');
+              if (node.items.some((entry) => entry !== pair && isScalar(entry.key)
+                && Number(String(entry.key.value).replace(/%$/, '')) === percent)) {
+                throw new Error('Gradient stop positions must be distinct');
+              }
+              pair.key.value = next;
+            }, true);
+          }, `${label} ${key}`));
+        }
         if (key in value && !variableFields) header.append(deleteButton);
         row.append(header, fieldEditor(spec, child, [...path, key], name.textContent, record(defaults) ? defaults[key] : undefined));
         container.append(row);
@@ -659,6 +726,10 @@ export function createDefinitionForm(
           return;
         }
         row.append(heading, fieldEditor(spec, child, [...path, index], childLabel));
+        if (shapeStops) {
+          row.append(stopPosition(index * 100 / Math.max(1, value.length - 1),
+            (percent) => change(path, () => positionedStops(index, percent), true), childLabel));
+        }
         if (!field.labels || value.length !== field.labels.length) {
           const del = path[0] === 'variables'
             ? bin(`Delete ${childLabel}`, () => remove([...path, index]))

@@ -692,7 +692,10 @@ colour:
   <p>The Visual editor's Colour format selects Solid or Gradient, then the
     gradient kind and either a gradient variable or inline stops. Fill ramps
     support two to eight stops, including percentage-positioned stops such as
-    <code>{0%: red, 60%: yellow, 100%: blue}</code>. They use the ramp's mixing
+    <code>{0%: red, 60%: yellow, 100%: blue}</code>. Each inline stop has a
+    <strong>Position (%)</strong> control. Editing it changes the evenly spaced
+    list to positioned stops, keeping the colours and opacity; positions remain
+    editable there and must be distinct. They use the ramp's mixing
     space, or the definition's <code>colourSpace</code> for inline stops.
     Each stop can include alpha, for example <code>rgba(255, 0, 0, 0.5)</code>
     or <code>#ff000080</code>. The Visual editor shows an editable
