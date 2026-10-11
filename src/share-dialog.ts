@@ -1,4 +1,4 @@
-import { powerPointFile, powerPointLimits } from './pptx';
+import { powerPointFile, powerPointGradientPictures, powerPointLimits } from './pptx';
 import type { SceneDefinition } from './scene';
 
 type QrCodeFactory = typeof import('qrcode-generator');
@@ -681,15 +681,20 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   // The zooms show this picture until PowerPoint redraws them.
   async function powerPointBlob() {
+    const scene = options.scene();
     const fit = Math.min(1, POWERPOINT_PICTURE_MAX_SIDE / Math.max(canvas.width, canvas.height));
     const { width, height } = imageSize(fit);
     const layers = options.powerPointLayers();
-    const picture = await pngBlob(drawImage(document.createElement('canvas'), width, height, false, layers.foreground));
-    const background = layers.background
-      ? await pngBlob(drawImage(document.createElement('canvas'), width, height, true, layers.background))
+    const pictureCanvas = drawImage(document.createElement('canvas'), width, height, false, layers.foreground);
+    const backgroundCanvas = layers.background
+      ? drawImage(document.createElement('canvas'), width, height, true, layers.background)
       : undefined;
-    return powerPointFile(options.scene(), new Uint8Array(await picture.arrayBuffer()),
-      background ? new Uint8Array(await background.arrayBuffer()) : undefined);
+    const [picture, background] = await Promise.all([
+      pngBlob(pictureCanvas), backgroundCanvas ? pngBlob(backgroundCanvas) : undefined,
+    ]);
+    const gradientPictures = await powerPointGradientPictures(scene, { width, height });
+    return powerPointFile(scene, new Uint8Array(await picture.arrayBuffer()),
+      background ? new Uint8Array(await background.arrayBuffer()) : undefined, gradientPictures);
   }
 
   downloadPowerPoint.addEventListener('click', () => void (async () => {

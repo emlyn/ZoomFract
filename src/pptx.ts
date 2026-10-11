@@ -5,9 +5,12 @@ import type {
   PolygonElement,
   RectElement,
   SceneDefinition,
+  ShapeElement,
+  ShapeFill,
   Vec2,
   ZoomElement,
 } from './scene';
+import { sample, toRgb, type ColourValue } from './values';
 
 // A PowerPoint file with one slide holding the scene's top level: shapes
 // become vector shapes, and zooms become Slide Zooms of the slide itself, so
@@ -130,6 +133,13 @@ function colorXml(color: string, opacity: number) {
   return `<a:srgbClr val="${hex}">${alphaXml}</a:srgbClr>`;
 }
 
+function stopColorXml(color: ColourValue, opacity: number) {
+  const hex = toRgb(color).map((channel) => Math.round(Math.max(0, Math.min(1, channel)) * 255)
+    .toString(16).padStart(2, '0')).join('').toUpperCase();
+  const alpha = Math.round(Math.max(0, Math.min(1, color.a)) * opacity * 100000);
+  return `<a:srgbClr val="${hex}">${alpha === 100000 ? '' : `<a:alpha val="${alpha}"/>`}</a:srgbClr>`;
+}
+
 const visible = (color: string, opacity: number) => opacity > 0 && rgba(color).alpha > 0;
 
 function slideSize(aspect: number) {
@@ -152,8 +162,135 @@ function slideMapping(scene: SceneDefinition, width: number, height: number) {
   const scaleY = -height / (y.to - y.from);
   const vector = (v: Vec2): Vec2 => ({ x: v.x * scaleX, y: v.y * scaleY });
   const point = (p: Vec2): Vec2 => ({ x: (p.x - x.from) * scaleX, y: (p.y - y.to) * scaleY });
+  const unpoint = (p: Vec2): Vec2 => ({ x: p.x / scaleX + x.from, y: p.y / scaleY + y.to });
   const length = (size: number) => size * Math.sqrt(Math.abs(scaleX * scaleY));
-  return { vector, point, length };
+  return { vector, point, unpoint, length };
+}
+
+function fillFrame(element: ShapeElement, mapping: ReturnType<typeof slideMapping>) {
+  if (element.kind === 'rect') {
+    const c = Math.cos(element.rotation), s = Math.sin(element.rotation);
+    const across = { x: c * element.width, y: s * element.width };
+    const down = { x: s * element.height, y: -c * element.height };
+    const mappedAcross = mapping.vector(across), mappedDown = mapping.vector(down);
+    return {
+      origin: { x: element.center.x - (across.x + down.x) / 2, y: element.center.y - (across.y + down.y) / 2 },
+      across, down,
+      width: Math.hypot(mappedAcross.x, mappedAcross.y),
+      height: Math.hypot(mappedDown.x, mappedDown.y),
+    };
+  }
+  const points = element.kind === 'polygon' ? element.points : [
+    { x: element.center.x - element.radius, y: element.center.y - element.radius },
+    { x: element.center.x + element.radius, y: element.center.y + element.radius },
+  ];
+  const mapped = points.map(mapping.point);
+  const left = Math.min(...mapped.map((p) => p.x)), top = Math.min(...mapped.map((p) => p.y));
+  const width = Math.max(...mapped.map((p) => p.x)) - left, height = Math.max(...mapped.map((p) => p.y)) - top;
+  const origin = mapping.unpoint({ x: left, y: top });
+  const right = mapping.unpoint({ x: left + width, y: top }), bottom = mapping.unpoint({ x: left, y: top + height });
+  return { origin, width, height, across: { x: right.x - origin.x, y: right.y - origin.y },
+    down: { x: bottom.x - origin.x, y: bottom.y - origin.y } };
+}
+
+function fillCoordinates(fill: ShapeFill, frame: ReturnType<typeof fillFrame>) {
+  const [a, b, c, d, e, f] = fill.mapping;
+  return {
+    u: a * frame.origin.x + c * frame.origin.y + e,
+    v: b * frame.origin.x + d * frame.origin.y + f,
+    ux: a * frame.across.x + c * frame.across.y, vx: b * frame.across.x + d * frame.across.y,
+    uy: a * frame.down.x + c * frame.down.y, vy: b * frame.down.x + d * frame.down.y,
+  };
+}
+
+function radialGeometry(fill: ShapeFill, frame: ReturnType<typeof fillFrame>) {
+  const { u, v, ux, uy, vx, vy } = fillCoordinates(fill, frame);
+  const xScale = Math.hypot(ux, vx) / frame.width, yScale = Math.hypot(uy, vy) / frame.height;
+  if (Math.abs(xScale - yScale) > SQUARE_TOLERANCE * Math.max(xScale, yScale)
+    || Math.abs(ux * uy + vx * vy) > SQUARE_TOLERANCE * Math.hypot(ux, vx) * Math.hypot(uy, vy)) return undefined;
+  const determinant = ux * vy - uy * vx;
+  const x = (uy * v - vy * u) / determinant, y = (vx * u - ux * v) / determinant;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return undefined;
+  return { x, y, radius: 1 / xScale };
+}
+
+function gradientXml(element: ShapeElement, mapping: ReturnType<typeof slideMapping>) {
+  const fill = element.fill!;
+  const frame = fillFrame(element, mapping);
+  let start = 0, span = 1, geometry: string;
+  if (fill.kind === 'linear') {
+    const { u, ux, uy } = fillCoordinates(fill, frame);
+    start = u + Math.min(0, ux) + Math.min(0, uy);
+    span = Math.abs(ux) + Math.abs(uy);
+    const angle = Math.atan2(uy / frame.height, ux / frame.width) * 180 / Math.PI;
+    geometry = `<a:lin ang="${Math.round((angle + 360) % 360 * ANGLE_UNITS)}" scaled="0"/><a:tileRect/>`;
+  } else {
+    const radial = radialGeometry(fill, frame);
+    if (!radial) throw new Error('This radial gradient needs an image fill');
+    const half = Math.max(Math.abs(radial.x * frame.width), Math.abs((1 - radial.x) * frame.width),
+      Math.abs(radial.y * frame.height), Math.abs((1 - radial.y) * frame.height));
+    span = half * Math.sqrt(2) / radial.radius;
+    const percent = (value: number) => Math.round(value * 100000);
+    geometry = `<a:path path="circle"><a:fillToRect l="${percent(radial.x)}" t="${percent(radial.y)}"`
+      + ` r="${percent(1 - radial.x)}" b="${percent(1 - radial.y)}"/></a:path>`
+      + `<a:tileRect l="${percent(radial.x - half / frame.width)}" t="${percent(radial.y - half / frame.height)}"`
+      + ` r="${percent(1 - radial.x - half / frame.width)}" b="${percent(1 - radial.y - half / frame.height)}"/>`;
+  }
+  // PowerPoint eases between stops. Closely spaced samples preserve the ramp's
+  // interpolation space without leaving it to PowerPoint's own interpolation.
+  const positions = new Set(Array.from({ length: 257 }, (_, i) => Math.round(i / 256 * 100000)));
+  for (let i = 0; i <= 256; i++) {
+    const position = (i / 256 - start) / span;
+    if (position > 0 && position < 1) positions.add(Math.round(position * 100000));
+  }
+  fill.ramp.stops.forEach((stop) => {
+    const position = (stop.position - start) / span;
+    if (position > 0 && position < 1) positions.add(Math.round(position * 100000));
+  });
+  const stops = [...positions].sort((a, b) => a - b).map((position) =>
+    `<a:gs pos="${position}">${stopColorXml(sample(fill.ramp, start + span * position / 100000), element.opacity)}</a:gs>`).join('');
+  return `<a:gradFill flip="none" rotWithShape="1"><a:gsLst>${stops}</a:gsLst>${geometry}</a:gradFill>`;
+}
+
+export async function powerPointGradientPictures(scene: SceneDefinition, resolution: { width: number; height: number }): Promise<Map<number, Uint8Array>> {
+  const size = slideSize(scene.view.aspect);
+  const mapping = slideMapping(scene, size.width, size.height);
+  const pictures = new Map<number, Uint8Array>();
+  for (const [index, element] of scene.elements.entries()) {
+    if (element.kind === 'zoom' || element.opacity <= 0 || !element.fill || element.fill.kind !== 'radial') continue;
+    const frame = fillFrame(element, mapping);
+    if (radialGeometry(element.fill, frame)) continue;
+    const requestedWidth = frame.width / size.width * resolution.width;
+    const requestedHeight = frame.height / size.height * resolution.height;
+    const fit = Math.min(1, 1920 / Math.max(requestedWidth, requestedHeight));
+    const width = Math.max(1, Math.ceil(requestedWidth * fit));
+    const height = Math.max(1, Math.ceil(requestedHeight * fit));
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Gradient export needs a 2D canvas');
+    const image = context.createImageData(width, height);
+    const coordinates = fillCoordinates(element.fill, frame);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const tx = (x + 0.5) / width, ty = (y + 0.5) / height;
+        const t = Math.hypot(coordinates.u + coordinates.ux * tx + coordinates.uy * ty,
+          coordinates.v + coordinates.vx * tx + coordinates.vy * ty);
+        const colour = sample(element.fill.ramp, t);
+        const offset = (y * width + x) * 4;
+        toRgb(colour).forEach((channel, i) => { image.data[offset + i] = Math.round(Math.max(0, Math.min(1, channel)) * 255); });
+        image.data[offset + 3] = Math.round(Math.max(0, Math.min(1, colour.a)) * element.opacity * 255);
+      }
+    }
+    context.putImageData(image, 0, 0);
+    pictures.set(index, new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()));
+  }
+  return pictures;
+}
+
+function shapeFillXml(element: ShapeElement, mapping: ReturnType<typeof slideMapping>, pictureId?: number) {
+  if (element.opacity <= 0) return '<a:noFill/>';
+  if (pictureId !== undefined) return `<a:blipFill rotWithShape="1"><a:blip r:embed="rId${pictureId}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>`;
+  return element.fill ? gradientXml(element, mapping) : `<a:solidFill>${colorXml(element.color, element.opacity)}</a:solidFill>`;
 }
 
 // An element's box on the slide. Its edges are the images of the scene's
@@ -222,9 +359,11 @@ function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
 
 export function powerPointLimits(scene: SceneDefinition): PowerPointLimit[] {
   const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
+  const mapping = slideMapping(scene, scene.view.aspect, 1);
   return [
-    scene.elements.some((element) => element.kind !== 'zoom' && element.fill)
-      ? { text: 'Gradient shape fills use their first stop colour in PowerPoint; cached zoom pictures retain the gradient' }
+    scene.elements.some((element) => element.kind !== 'zoom' && element.fill?.kind === 'radial'
+      && !radialGeometry(element.fill, fillFrame(element, mapping)))
+      ? { text: 'Radial gradients with elliptical geometry or an external centre use image fills to preserve their appearance; their stops are not editable in PowerPoint' }
       : null,
     scene.shading.mode === 'density' ? { text: 'Density shading is not available, so shapes are drawn in black' } : null,
     zooms.some((zoom) => zoom.opacity < 1) ? { text: 'Zoom opacity is ignored' } : null,
@@ -252,14 +391,14 @@ const EMPTY_TREE = '<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpP
 
 const guid = (id: number) => `{6184D655-31FA-EE49-9346-${id.toString(16).toUpperCase().padStart(12, '0')}}`;
 
-function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<typeof slideMapping>) {
+function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<typeof slideMapping>, pictureId?: number) {
   if (element.kind === 'circle' || element.kind === 'polygon') {
-    return polygonShapeXml(element, id, mapping);
+    return polygonShapeXml(element, id, mapping, pictureId);
   }
   const place = placement(element, mapping);
   if (element.kind === 'rect') {
     const name = escapeXml(element.name ?? `Rectangle ${id}`);
-    const fill = element.opacity > 0 ? `<a:solidFill>${colorXml(element.color, element.opacity)}</a:solidFill>` : '<a:noFill/>';
+    const fill = shapeFillXml(element, mapping, pictureId);
     return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
       + `<p:spPr>${transformXml('a:xfrm', place)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}`
       + `<a:ln><a:noFill/></a:ln>${glowXml(element.glow, mapping)}</p:spPr>`
@@ -292,6 +431,7 @@ function polygonShapeXml(
   element: CircleElement | PolygonElement,
   id: number,
   mapping: ReturnType<typeof slideMapping>,
+  pictureId?: number,
 ) {
   const points = element.kind === 'polygon'
     ? element.points
@@ -313,9 +453,7 @@ function polygonShapeXml(
     + rest.map((point) => `<a:lnTo><a:pt x="${point.x}" y="${point.y}"/></a:lnTo>`).join('')
     + '<a:close/>';
   const name = escapeXml(element.name ?? `${element.kind === 'circle' ? 'Circle' : 'Polygon'} ${id}`);
-  const fill = element.opacity > 0
-    ? `<a:solidFill>${colorXml(element.color, element.opacity)}</a:solidFill>`
-    : '<a:noFill/>';
+  const fill = shapeFillXml(element, mapping, pictureId);
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
     + `<p:spPr><a:xfrm><a:off x="${Math.round(left)}" y="${Math.round(top)}"/>`
     + `<a:ext cx="${Math.max(1, Math.round(width))}" cy="${Math.max(1, Math.round(height))}"/></a:xfrm>`
@@ -326,15 +464,16 @@ function polygonShapeXml(
 }
 
 // `picture` is a PNG of the rendered scene, with transparent background.
-export function powerPointFile(scene: SceneDefinition, picture: Uint8Array, background?: Uint8Array): Blob {
+export function powerPointFile(scene: SceneDefinition, picture: Uint8Array, background?: Uint8Array, gradientPictures: ReadonlyMap<number, Uint8Array> = new Map()): Blob {
   if (scene.background.length && !background) throw new Error('PowerPoint export needs the rendered background image');
   const { width, height } = slideSize(scene.view.aspect);
   const mapping = slideMapping(scene, width, height);
   const shapes = scene.elements
-    .filter((element) => element.kind === 'zoom'
+    .map((element, index) => ({ element, index }))
+    .filter(({ element }) => element.kind === 'zoom'
       ? element.opacity > 0
       : element.opacity > 0 || (element.glow !== undefined && visible(element.glow.color, element.glow.opacity)))
-    .map((element, index) => shapeXml(element, index + 2, mapping))
+    .map(({ element, index }) => shapeXml(element, index + 2, mapping, gradientPictures.has(index) ? index + 6 : undefined))
     .join('');
   const roots = `xmlns:a="${NS_A}" xmlns:r="${NS_R}" xmlns:p="${NS_P}"`;
   const rels = (body: string) => xml(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`);
@@ -435,11 +574,13 @@ export function powerPointFile(scene: SceneDefinition, picture: Uint8Array, back
         + relation(2, 'image', '../media/image1.png')
         + relation(3, 'slide', 'slide1.xml')
         + (background ? relation(5, 'image', '../media/background.png') : '')
+        + [...gradientPictures.keys()].map((index) => relation(index + 6, 'image', `../media/gradient${index}.png`)).join('')
         + (fadeWarning ? relation(4, 'notesSlide', '../notesSlides/notesSlide1.xml') : '')),
     },
     { name: 'ppt/media/image1.png', data: picture },
   ];
   if (background) entries.push({ name: 'ppt/media/background.png', data: background });
+  for (const [index, data] of gradientPictures) entries.push({ name: `ppt/media/gradient${index}.png`, data });
   if (fadeWarning && notesMaster && notesSlide) {
     entries.push(
       { name: 'ppt/notesMasters/notesMaster1.xml', data: notesMaster },

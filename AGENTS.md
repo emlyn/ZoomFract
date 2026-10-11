@@ -605,6 +605,13 @@ files unless extracting a module clearly reduces complexity.
   onto the slide and decomposing into `rot` (60000ths of a degree, clockwise)
   plus `flipV`, which PowerPoint applies before rotating. Scene units that are
   not square on the slide would slant rotated frames, so that is an error.
+  Shape gradients export as native DrawingML gradient fills for linear and
+  circular radial geometry, with sampled stops to approximate the ramp's
+  interpolation space and preserve alpha. Radial tiles cover the full shape
+  to prevent PowerPoint repeating the fill; stop positions set the radius.
+  Elliptical radial fills and those centred outside the shape box rasterise
+  into image fills clipped by vector shapes,
+  with a visible export warning. Background gradients remain slide images.
   Glows go in the zoom's `p166:spPr` effect list and on the fallback picture;
   PowerPoint draws them around the shapes the zoom shows. The seed needs no
   export because the zooms bottom out in the cached picture.

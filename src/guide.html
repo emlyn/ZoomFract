@@ -709,8 +709,13 @@ colour:
     <code>radius</code> makes it circular. Rectangles use their rotated box,
     circles their diameter, and polygons their bounding box. The fill rotates
     and scales with recursive copies. Conic and repeating fills are not yet
-    supported. PowerPoint currently exports a gradient shape using its first
-    stop colour and warns about this; cached zoom pictures retain the fill.</p>
+    supported. PowerPoint exports linear and circular radial fills as native
+    editable gradients, including stop opacity. Extra stops approximate the
+    ramp's mixing space because PowerPoint interpolates differently.
+    Elliptical radial fills, or those centred outside the shape's box, use
+    image fills inside vector shapes to preserve
+    their appearance, with a warning that their stops are not editable.
+    Cached zoom pictures retain the full fill.</p>
   <p>
     Stops have distinct positions from 0 to 1 and colours may be expressions.
     <code>sample(ramp, t)</code> returns a colour, clamping beyond the end stops.
