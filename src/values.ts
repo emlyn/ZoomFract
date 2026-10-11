@@ -1,7 +1,9 @@
+import { Color as SpectralColour, mix as spectralMix } from 'spectral.js';
+
 export type PointValue = { kind?: 'point'; x: number; y: number };
 // Extended, linear XYZ (D65). Neither gamut nor alpha is clipped here.
 export type ColourValue = { kind: 'colour'; x: number; y: number; z: number; a: number };
-export const MIXING_SPACES = ['linear-srgb', 'oklab', 'oklch'] as const;
+export const MIXING_SPACES = ['linear-srgb', 'oklab', 'oklch', 'spectral'] as const;
 export type MixingSpace = typeof MIXING_SPACES[number];
 export const HUE_PATHS = ['shorter', 'longer', 'increasing', 'decreasing'] as const;
 export type HuePath = typeof HUE_PATHS[number];
@@ -37,7 +39,7 @@ export const colourValue = (value: Value): ColourValue => {
   return value;
 };
 export const mixingSpace = (value: unknown): MixingSpace => {
-  if (!MIXING_SPACES.some((space) => space === value)) throw new Error('Mixing space must be linear-srgb, oklab or oklch');
+  if (!MIXING_SPACES.some((space) => space === value)) throw new Error('Mixing space must be linear-srgb, oklab, oklch or spectral');
   return value as MixingSpace;
 };
 export const huePath = (value: unknown): HuePath => {
@@ -118,9 +120,25 @@ export function scale(value: Value, factor: number): Value {
   if (isColourValue(value)) return { kind: 'colour', x: value.x * factor, y: value.y * factor, z: value.z * factor, a: value.a * factor };
   throw new Error('Only numbers, points and colours can be scaled');
 }
+const pigments = new WeakMap<ColourValue, SpectralColour>();
+function pigment(colour: ColourValue): SpectralColour {
+  const cached = pigments.get(colour);
+  if (cached) return cached;
+  const result = new SpectralColour(toRgb(colour).map((channel) => Math.max(0, Math.min(1, channel)) * 255));
+  pigments.set(colour, result);
+  return result;
+}
+
 export function interpolate(a: Value, b: Value, t: number, space: MixingSpace, hue: HuePath = 'shorter'): Value {
   if (!isColourValue(a) || !isColourValue(b) || space === 'linear-srgb') {
     return combine(a, scale(combine(b, a, '-'), t), '+');
+  }
+  if (space === 'spectral') {
+    if (t < 0 || t > 1) throw new Error('Spectral mixing fraction must be from 0 to 1');
+    if (t === 0) return a;
+    if (t === 1) return b;
+    const [x, y, z] = spectralMix([pigment(a), 1 - t], [pigment(b), t]).XYZ;
+    return { kind: 'colour', x, y, z, a: a.a + (b.a - a.a) * t };
   }
   const aa = toOklab(a), bb = toOklab(b);
   const alpha = a.a + (b.a - a.a) * t;

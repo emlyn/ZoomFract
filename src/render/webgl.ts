@@ -175,9 +175,11 @@ const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, in
 const BACKDROP_UNIT = MAXIMUM_ZOOM_GLOW_FIELDS + 1;
 const COMPARE_UNIT = BACKDROP_UNIT + 1;
 const FILL_UNIT = COMPARE_UNIT + 1;
+const PIGMENT_SAMPLES = 257;
+const FILL_METADATA_WIDTH = 1 + MAXIMUM_DENSITY_COLORS * 2;
 
 const RAMP_SHADER = `
-vec4 gradient(float t, int stopCount, vec4 stops[${MAXIMUM_DENSITY_COLORS}], float positions[${MAXIMUM_DENSITY_COLORS}], int rampSpace, int rampHue) {
+vec4 gradient(float t, int stopCount, vec4 stops[${MAXIMUM_DENSITY_COLORS}], float positions[${MAXIMUM_DENSITY_COLORS}], int rampSpace, int rampHue, int row) {
   vec4 color = stops[0];
   for (int i = 1; i < stopCount; i++) {
     float start = positions[i - 1];
@@ -193,11 +195,19 @@ vec4 gradient(float t, int stopCount, vec4 stops[${MAXIMUM_DENSITY_COLORS}], flo
         : rampHue == 1 ? (shorter >= 0.0 ? shorter - 360.0 : shorter + 360.0) : shorter;
       next.z = previous.z + difference;
     }
-    color = t <= start ? color : span <= 0.0 ? next : mix(previous, next, min((t - start) / span, 1.0));
+    float fraction = span <= 0.0 ? 1.0 : clamp((t - start) / span, 0.0, 1.0);
+    vec4 mixed = mix(previous, next, fraction);
+    if (rampSpace == 3 && fraction > 0.0 && fraction < 1.0) {
+      float samplePosition = fraction * ${PIGMENT_SAMPLES - 1}.0;
+      int sampleIndex = min(int(samplePosition), ${PIGMENT_SAMPLES - 2});
+      int offset = ${FILL_METADATA_WIDTH} + (i - 1) * ${PIGMENT_SAMPLES} + sampleIndex;
+      mixed = mix(texelFetch(fills, ivec2(offset, row), 0), texelFetch(fills, ivec2(offset + 1, row), 0), samplePosition - float(sampleIndex));
+    }
+    color = t <= start ? color : mixed;
   }
   if (rampSpace >= 0) {
     vec3 linear = color.rgb;
-    if (rampSpace > 0) {
+    if (rampSpace == 1 || rampSpace == 2) {
       if (rampSpace == 2) linear = vec3(linear.x, linear.y * cos(radians(linear.z)), linear.y * sin(radians(linear.z)));
       vec3 lms = vec3(linear.x + 0.3963377774 * linear.y + 0.2158037573 * linear.z,
         linear.x - 0.1055613458 * linear.y - 0.0638541728 * linear.z,
@@ -246,7 +256,7 @@ vec4 fillColor() {
     stops[i] = texelFetch(fills, ivec2(1 + i * 2, row), 0);
     positions[i] = texelFetch(fills, ivec2(2 + i * 2, row), 0).r;
   }
-  vec4 color = gradient(shapeData.y > 0.5 ? length(uv) : uv.x, int(metadata.x), stops, positions, int(metadata.y), int(metadata.z)) * tint.a;
+  vec4 color = gradient(shapeData.y > 0.5 ? length(uv) : uv.x, int(metadata.x), stops, positions, int(metadata.y), int(metadata.z), row) * tint.a;
   return singleChannel ? vec4(color.a) : color;
 }
 float rectGlow(vec2 local, vec2 halfSize, float size, float softness) {
@@ -480,6 +490,8 @@ const shapeCount = (scale: keyof typeof DENSITY_SCALES, count: number) =>
 const DENSITY_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform sampler2D source;
+uniform sampler2D fills;
+uniform int rampRow;
 uniform int factor;
 uniform int scale;
 uniform float normaliser;
@@ -500,7 +512,7 @@ void main() {
     for (int x = 0; x < factor; x++) {
       float count = texelFetch(source, origin + ivec2(x, y), 0).r;
       if (count > 0.0) {
-        total += gradient(shape(count) / shape(normaliser), stopCount, stops, positions, rampSpace, rampHue) * min(count, 1.0);
+        total += gradient(shape(count) / shape(normaliser), stopCount, stops, positions, rampSpace, rampHue, rampRow) * min(count, 1.0);
       }
     }
   }
@@ -803,6 +815,11 @@ function drawWebgl(
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'fills'), FILL_UNIT);
+  if (density) {
+    gl.useProgram(resolveProgram);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'fills'), FILL_UNIT);
+    gl.useProgram(sceneProgram);
+  }
   const blendModeLocation = gl.getUniformLocation(sceneProgram, 'blendMode');
   const tileOriginLocation = gl.getUniformLocation(sceneProgram, 'tileOrigin');
   const levelFramebuffer = newFramebuffer();
@@ -1036,26 +1053,33 @@ function drawWebgl(
   scene.elements.forEach((element, index) => {
     if (element.kind !== 'zoom' && element.fill) fillIndexes.set(index, fillIndexes.size);
   });
-  const fillData = new Float32Array(Math.max(1, fillIndexes.size) * 17 * 4);
+  const ramps: GradientValue[] = [];
   scene.elements.forEach((element, index) => {
     if (element.kind === 'zoom' || !element.fill) return;
-    const row = fillIndexes.get(index)!;
-    const { ramp } = element.fill;
-    fillData.set([ramp.stops.length, ['linear-srgb', 'oklab', 'oklch'].indexOf(ramp.space),
-      ['shorter', 'longer', 'increasing', 'decreasing'].indexOf(ramp.hue), 0], row * 17 * 4);
-    ramp.stops.forEach((stop, i) => {
-      fillData.set(rampColor(ramp, stop.colour), (row * 17 + 1 + i * 2) * 4);
-      fillData[(row * 17 + 2 + i * 2) * 4] = stop.position;
-    });
+    ramps[fillIndexes.get(index)!] = element.fill.ramp;
   });
-  if (fillIndexes.size > maximumSize) throw new Error('Too many gradient fills for the device texture limit');
+  const densityRampRow = ramps.length;
+  if (shading.mode === 'density' && shading.ramp?.space === 'spectral') ramps.push(shading.ramp);
+  const fillWidth = FILL_METADATA_WIDTH
+    + (ramps.some((ramp) => ramp.space === 'spectral') ? (MAXIMUM_DENSITY_COLORS - 1) * PIGMENT_SAMPLES : 0);
+  if (ramps.length > maximumSize || fillWidth > maximumSize) throw new Error('Too many gradient fills for the device texture limit');
+  const fillData = new Float32Array(Math.max(1, ramps.length) * fillWidth * 4);
+  ramps.forEach((ramp, row) => {
+    fillData.set([ramp.stops.length, MIXING_SPACES.indexOf(ramp.space),
+      ['shorter', 'longer', 'increasing', 'decreasing'].indexOf(ramp.hue), 0], row * fillWidth * 4);
+    ramp.stops.forEach((stop, i) => {
+      fillData.set(rampColor(ramp, stop.colour), (row * fillWidth + 1 + i * 2) * 4);
+      fillData[(row * fillWidth + 2 + i * 2) * 4] = stop.position;
+    });
+    if (ramp.space === 'spectral') fillData.set(pigmentSamples(ramp), (row * fillWidth + FILL_METADATA_WIDTH) * 4);
+  });
   const fills = gl.createTexture()!;
   owned.push(() => gl.deleteTexture(fills));
   gl.activeTexture(gl.TEXTURE0 + FILL_UNIT);
   gl.bindTexture(gl.TEXTURE_2D, fills);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 17, Math.max(1, fillIndexes.size), 0, gl.RGBA, gl.FLOAT, fillData);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, fillWidth, Math.max(1, ramps.length), 0, gl.RGBA, gl.FLOAT, fillData);
   gl.activeTexture(gl.TEXTURE0);
   const shapeColors = scene.elements.map((element) => element.kind !== 'zoom' ? parseColor(element.color) : null);
   const glowColors = scene.elements.map((element) => element.glow
@@ -1477,7 +1501,8 @@ function drawWebgl(
     gl.uniform4fv(gl.getUniformLocation(resolveProgram, 'stops'), stops.flatMap(({ index }) => densityColors[index]));
     gl.uniform1fv(gl.getUniformLocation(resolveProgram, 'positions'), stops.map(({ position }) => position));
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'stopCount'), shading.colors.length);
-    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampSpace'), shading.ramp ? ['linear-srgb', 'oklab', 'oklch'].indexOf(shading.ramp.space) : -1);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampSpace'), shading.ramp ? MIXING_SPACES.indexOf(shading.ramp.space) : -1);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampRow'), densityRampRow);
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampHue'), shading.ramp ? ['shorter', 'longer', 'increasing', 'decreasing'].indexOf(shading.ramp.hue) : 0);
   };
 
@@ -1677,11 +1702,27 @@ function drawWebgl(
     },
   };
 }
-import { toLinearRgb, toOklab } from '../values';
+import { colourValue, interpolate, MIXING_SPACES, toLinearRgb, toOklab } from '../values';
 import type { ColourValue, GradientValue } from '../values';
 
+const pigmentTables = new WeakMap<GradientValue, Float32Array>();
+function pigmentSamples(ramp: GradientValue): Float32Array {
+  const cached = pigmentTables.get(ramp);
+  if (cached) return cached;
+  const samples = new Float32Array((ramp.stops.length - 1) * PIGMENT_SAMPLES * 4);
+  for (let segment = 0; segment < ramp.stops.length - 1; segment++) {
+    for (let i = 0; i < PIGMENT_SAMPLES; i++) {
+      const colour = colourValue(interpolate(ramp.stops[segment].colour, ramp.stops[segment + 1].colour,
+        i / (PIGMENT_SAMPLES - 1), 'spectral'));
+      samples.set([...toLinearRgb(colour), colour.a], (segment * PIGMENT_SAMPLES + i) * 4);
+    }
+  }
+  pigmentTables.set(ramp, samples);
+  return samples;
+}
+
 function rampColor(ramp: GradientValue, colour: ColourValue): Rgba {
-  if (ramp.space === 'linear-srgb') return [...toLinearRgb(colour), colour.a];
+  if (ramp.space === 'linear-srgb' || ramp.space === 'spectral') return [...toLinearRgb(colour), colour.a];
   const [l, a, b] = toOklab(colour);
   return ramp.space === 'oklab' ? [l, a, b, colour.a]
     : [l, Math.hypot(a, b), Math.atan2(b, a) * 180 / Math.PI, colour.a];

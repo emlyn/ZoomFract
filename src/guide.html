@@ -654,12 +654,25 @@ scene:
     CSS literal forms also include HWB, Lab, LCH and Display P3.</p>
   <p>Colours retain unclamped floating-point XYZ values during calculations.
     Basic arithmetic is linear. <code>colourSpace</code> chooses the default
-    mixing space: <code>linear-srgb</code> (default), <code>oklab</code> or
-    <code>oklch</code>. A call can override it:
+    mixing space: <code>linear-srgb</code> (default), <code>oklab</code>,
+    <code>oklch</code> or <code>spectral</code>. A call can override it:
     <code>mix(a, b, t, "oklch", "shorter")</code>. Hue paths are
     <code>shorter</code> (default), <code>longer</code>, <code>increasing</code>
     or <code>decreasing</code>. Rendering and exports currently convert to
     sRGB and clip at the output; wide-gamut and HDR output are not yet implemented.</p>
+  <p><code>spectral</code> mixes like pigments rather than light, so blue and
+    yellow can make green. It uses
+    <a href="https://github.com/rvanwijnen/spectral.js" target="_blank" rel="noopener">Spectral.js</a>
+    (<a href="./spectral-license.txt" target="_blank" rel="noopener">MIT licence</a>).
+    Choose it as the default <code>colourSpace</code>, in a gradient's
+    <code>space</code>, or in <code>mix(a, b, t, "spectral")</code>.
+    Shape fills, reusable density ramps and PowerPoint fills use the same model;
+    the renderer uses cached samples to keep gradients fast.
+    Opacity interpolates separately and hue paths do not affect pigment mixing.
+    Spectral mixing fractions must be from 0 to 1.
+    Pigment reconstruction clips input colours to sRGB without rounding to
+    8-bit channels; exact endpoints retain the original colours.
+    Tinting strength controls are not yet available.</p>
   <pre><code>colourSpace: oklab
 variables:
   - name: palette

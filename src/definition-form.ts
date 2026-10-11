@@ -133,7 +133,7 @@ const gradientSpec = variants('palette', {
   Expression: text('palette'),
   Stops: object({
     stops: list(object({ position: number(0), colour: colour('#000000') }, { position: 0, colour: '#000000' })),
-    space: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch']),
+    space: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch', 'spectral']),
     hue: choice('shorter', ['shorter', 'longer', 'increasing', 'decreasing']),
   }, { stops: [{ position: 0, colour: '#000000' }, { position: 1, colour: '#ffffff' }] }),
 });
@@ -183,7 +183,7 @@ const TOP: Fields = {
   variables: list(object({
     name: text('variable'), type: variableTypeField, value: numericValue,
   }, { name: 'variable', value: 0 })),
-  colourSpace: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch']),
+  colourSpace: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch', 'spectral']),
 };
 const TITLES: Record<string, string> = {
   info: 'Picture information', frame: 'Frame and wall', view: 'View',

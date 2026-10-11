@@ -221,7 +221,14 @@ files unless extracting a module clearly reduces complexity.
   Named CSS colours alone use a canvas lookup. `srgb` has 0..1 components;
   existing CSS rgb expressions retain 0..255 components. Constructors include
   `colour`, `hsl`, `oklab`, `oklch`; `toRgb`, `toHsl`, `toOklch` expose components.
-  `colourSpace` sets default interpolation (linear-srgb, oklab, oklch).
+  `colourSpace` sets default interpolation (linear-srgb, oklab, oklch, spectral).
+  Spectral.js pigment mixing keeps floating-point XYZ output and interpolates
+  alpha separately. Pigment inputs are clipped to sRGB, without 8-bit rounding;
+  exact endpoints retain their original values. Fractions must be 0..1.
+  Spectral shape and reusable density ramps use cached 257-sample tables per
+  stop interval in the fill texture, shared with the existing GPU ramp path.
+  PowerPoint samples the same CPU interpolation. Preserve the distributed MIT
+  notice in `public/spectral-license.txt`.
   Gradients contain stops (position 0..1, colour), optional space and hue
   (shorter/longer/increasing/decreasing), clamp at ends and support `sample`.
   Density accepts reusable ramps (max 8 stops), interpolated in the shader.
