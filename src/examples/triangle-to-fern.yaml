@@ -2,7 +2,7 @@ info:
   title: Triangle to Fern
   author: Emlyn Corrin
   date: 2026
-  description: Move the slider from the Sierpinski triangle to the fern. The three copies change size, position and rotation while the stem grows and fades in.
+  description: Move the slider from the Sierpinski triangle to the fern. The three copies change size, position and rotation while the stem widens and fades in, staying connected to the top copy.
 
 frame:
   width: 12
@@ -24,6 +24,14 @@ variables:
     value: 0.005215
   - name: fernOffsetY
     value: 0.07821
+  - name: topPosition
+    value:
+      - transition * (-0.11 + fernOffsetX + 0.86 * ((0.11 - fernOffsetX) * cos(4*pi/180) + (1 - fernOffsetY) * sin(4*pi/180)))
+      - (1 - transition) * 0.5 + transition * (-0.7 + fernOffsetY + 0.86 * ((1 - fernOffsetY) * cos(4*pi/180) - (0.11 - fernOffsetX) * sin(4*pi/180)))
+  - name: stemBase
+    value: [(-0.1 + fernOffsetX) * transition, -1 + fernOffsetY * transition]
+  - name: stemTip
+    value: topPosition + (0.5 + 0.36 * transition) * rotate(stemBase, 4 * transition)
 
 view:
   aspect: auto
@@ -41,8 +49,10 @@ shading:
 scene:
   - type: rect
     name: stem
-    bottomLeft: [-0.01 + (-0.1 + fernOffsetX) * transition, -1 + fernOffsetY * transition]
-    topRight: [0.01 + (-0.1 + fernOffsetX) * transition, -1 + (0.3 + fernOffsetY) * transition]
+    centre: (stemBase + stemTip) / 2
+    width: max(0.00001, 0.02 * transition)
+    height: distance(stemBase, stemTip)
+    rotation: atan2((stemTip - stemBase).x, (stemTip - stemBase).y) * 180 / pi
     colour: "rgb(68 * transition, 204 * transition, 68 * transition)"
     opacity: transition * number(showStem)
   - type: zoom
@@ -52,9 +62,7 @@ scene:
     rotation: 4 * transition
     align:
       from: [0, 0]
-      to:
-        - transition * (-0.11 + fernOffsetX + 0.86 * ((0.11 - fernOffsetX) * cos(4*pi/180) + (1 - fernOffsetY) * sin(4*pi/180)))
-        - (1 - transition) * 0.5 + transition * (-0.7 + fernOffsetY + 0.86 * ((1 - fernOffsetY) * cos(4*pi/180) - (0.11 - fernOffsetX) * sin(4*pi/180)))
+      to: topPosition
   - type: zoom
     name: left
     glow: { colour: "rgb(68 * transition, 204 * transition, 68 * transition)", size: 0, opacity: 0.2 }
