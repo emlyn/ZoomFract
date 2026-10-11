@@ -14,7 +14,7 @@ frame:
   margin: 24
 
 variables:
-  - name: mix
+  - name: transition
     value: 0
     input: { type: slider, min: 0, max: 1, step: 0.01, label: Triangle to fern }
   - name: showStem
@@ -32,7 +32,7 @@ view:
     y: [-1.2, 1.2]
 
 seed:
-  colour: "rgb(68 * mix, 204 * mix, 68 * mix)"
+  colour: "rgb(68 * transition, 204 * transition, 68 * transition)"
   opacity: 0.01
 
 shading:
@@ -41,37 +41,37 @@ shading:
 scene:
   - type: rect
     name: stem
-    bottomLeft: [-0.01 + (-0.1 + fernOffsetX) * mix, -1 + fernOffsetY * mix]
-    topRight: [0.01 + (-0.1 + fernOffsetX) * mix, -1 + (0.3 + fernOffsetY) * mix]
-    colour: "rgb(68 * mix, 204 * mix, 68 * mix)"
-    opacity: mix * showStem
+    bottomLeft: [-0.01 + (-0.1 + fernOffsetX) * transition, -1 + fernOffsetY * transition]
+    topRight: [0.01 + (-0.1 + fernOffsetX) * transition, -1 + (0.3 + fernOffsetY) * transition]
+    colour: "rgb(68 * transition, 204 * transition, 68 * transition)"
+    opacity: transition * number(showStem)
   - type: zoom
     name: top
-    glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }
-    scale: 0.5 + 0.36 * mix
-    rotation: 4 * mix
+    glow: { colour: "rgb(68 * transition, 204 * transition, 68 * transition)", size: 0, opacity: 0.2 }
+    scale: 0.5 + 0.36 * transition
+    rotation: 4 * transition
     align:
       from: [0, 0]
       to:
-        - mix * (-0.11 + fernOffsetX + 0.86 * ((0.11 - fernOffsetX) * cos(4*pi/180) + (1 - fernOffsetY) * sin(4*pi/180)))
-        - (1 - mix) * 0.5 + mix * (-0.7 + fernOffsetY + 0.86 * ((1 - fernOffsetY) * cos(4*pi/180) - (0.11 - fernOffsetX) * sin(4*pi/180)))
+        - transition * (-0.11 + fernOffsetX + 0.86 * ((0.11 - fernOffsetX) * cos(4*pi/180) + (1 - fernOffsetY) * sin(4*pi/180)))
+        - (1 - transition) * 0.5 + transition * (-0.7 + fernOffsetY + 0.86 * ((1 - fernOffsetY) * cos(4*pi/180) - (0.11 - fernOffsetX) * sin(4*pi/180)))
   - type: zoom
     name: left
-    glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }
-    scale: 0.5 - 0.18 * mix
-    rotation: -80 * mix
+    glow: { colour: "rgb(68 * transition, 204 * transition, 68 * transition)", size: 0, opacity: 0.2 }
+    scale: 0.5 - 0.18 * transition
+    rotation: -80 * transition
     align:
       from: [0, 0]
       to:
-        - -(1 - mix)/sqrt(3) + mix * (-0.11 + fernOffsetX + 0.32 * ((0.1 - fernOffsetX) * cos(80*pi/180) - (1 - fernOffsetY) * sin(80*pi/180)))
-        - -(1 - mix) * 0.5 + mix * (-0.85 + fernOffsetY + 0.32 * ((0.1 - fernOffsetX) * sin(80*pi/180) + (1 - fernOffsetY) * cos(80*pi/180)))
+        - -(1 - transition)/sqrt(3) + transition * (-0.11 + fernOffsetX + 0.32 * ((0.1 - fernOffsetX) * cos(80*pi/180) - (1 - fernOffsetY) * sin(80*pi/180)))
+        - -(1 - transition) * 0.5 + transition * (-0.85 + fernOffsetY + 0.32 * ((0.1 - fernOffsetX) * sin(80*pi/180) + (1 - fernOffsetY) * cos(80*pi/180)))
   - type: zoom
     name: right
-    glow: { colour: "rgb(68 * mix, 204 * mix, 68 * mix)", size: 0, opacity: 0.2 }
-    scale: 0.5 - 0.18 * mix
-    rotation: 80 * mix
+    glow: { colour: "rgb(68 * transition, 204 * transition, 68 * transition)", size: 0, opacity: 0.2 }
+    scale: 0.5 - 0.18 * transition
+    rotation: 80 * transition
     align:
       from: [0, 0]
       to:
-        - (1 - mix)/sqrt(3) + mix * (-0.1 + fernOffsetX + 0.32 * ((0.1 - fernOffsetX) * cos(80*pi/180) + (1 - fernOffsetY) * sin(80*pi/180)))
-        - -(1 - mix) * 0.5 + mix * (-0.7 + fernOffsetY + 0.32 * (-(0.1 - fernOffsetX) * sin(80*pi/180) + (1 - fernOffsetY) * cos(80*pi/180)))
+        - (1 - transition)/sqrt(3) + transition * (-0.1 + fernOffsetX + 0.32 * ((0.1 - fernOffsetX) * cos(80*pi/180) + (1 - fernOffsetY) * sin(80*pi/180)))
+        - -(1 - transition) * 0.5 + transition * (-0.7 + fernOffsetY + 0.32 * (-(0.1 - fernOffsetX) * sin(80*pi/180) + (1 - fernOffsetY) * cos(80*pi/180)))

@@ -20,6 +20,8 @@ import type { InputValue, InputValues } from './scene';
 // settings as [renderer, supersampling, recursionDepth, levels, width, height], and `l`
 // whether the label is shown. The renderer is always "webgl" now; "canvas2d"
 // from older links is still read, and ignored.
+// Choice inputs use their option index, so colours and ramps need no lossy
+// serialisation: their values are evaluated from the shared definition.
 const DICTIONARIES: Record<string, string> = { 1: dictionary1 };
 const CURRENT_VERSION = '1';
 const EXTRAS_SEPARATOR = '\0';

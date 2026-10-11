@@ -78,7 +78,7 @@ files unless extracting a module clearly reduces complexity.
 ## Scene language invariants
 
 - The top-level model contains `info`, `variables`, `frame`, `view`, `seed`,
-  `shading`, and `scene`.
+  `shading`, `colourSpace`, and `scene`.
 - Optional `info` holds text-only `title`, `author`, `date`, `description`,
   and `links` (http(s) URL strings or `{ title, url }`). It never affects
   rendering. It is shown on a gallery-style wall label beside the frame,
@@ -184,7 +184,7 @@ files unless extracting a module clearly reduces complexity.
   syntax tree (`src/expression.ts`) so they can later be displayed as maths
   from the same tree; invalid or non-finite expressions are errors.
   Expressions containing commas need quotes inside YAML flow lists.
-- Optional top-level `variables` is a list of `{ name, value }` items. Names
+- Optional top-level `variables` is a list of `{ name, value, type?, input? }` items. Names
   are unique identifiers that must not shadow built-in constants or
   functions; values are numbers or expressions and may reference other
   variables in any order. Expressions anywhere in the scene may use them.
@@ -195,10 +195,32 @@ files unless extracting a module clearly reduces complexity.
   viewing are clamped), and `click` or `drag` (string shorthand allowed) set a
   point whose `value` is `[x, y]` and which expressions use as `name.x` and
   `name.y`. `checkbox` toggles a variable whose `value` is `true` or `false`;
-  any variable may be boolean, counting as 1 or 0 in expressions.
+  any variable may be boolean; arithmetic requires explicit `number(flag)`.
   `parseScene(text, inputValues)` replaces input values and returns
   them in `scene.inputs`. Values are kept when the edited definition is
   applied and reset when another definition loads.
+- Expressions use typed values (`src/values.ts`): finite numbers, booleans,
+  points, colours, text and gradients. Integers are a numeric constraint.
+  Variables infer values or specify `type: number|integer|boolean|point|colour|text|gradient`.
+  Points work without inputs. Same-type point/colour + and -, scalar * and /,
+  components on variables/results, comparisons, lazy &&/|| and ?: are supported.
+  `point`, `length`, `distance`, `dot`, clockwise-degree `rotate`, `clamp`,
+  `floor`, `ceil`, `round`, `lerp`, `mix` and `sample` are built-ins.
+  `mix` is now reserved; the Triangle to Fern variable is `transition`.
+- Colours retain extended linear XYZ D65 and alpha until the sRGB output
+  boundary; never normalise typed colours through an 8-bit canvas.
+  Named CSS colours alone use a canvas lookup. `srgb` has 0..1 components;
+  existing CSS rgb expressions retain 0..255 components. Constructors include
+  `colour`, `hsl`, `oklab`, `oklch`; `toRgb`, `toHsl`, `toOklch` expose components.
+  `colourSpace` sets default interpolation (linear-srgb, oklab, oklch).
+  Gradients contain stops (position 0..1, colour), optional space and hue
+  (shorter/longer/increasing/decreasing), clamp at ends and support `sample`.
+  Density accepts reusable ramps (max 8 stops), interpolated in the shader.
+  Spatial gradient fills, wide-gamut output and HDR output remain deferred.
+- Choice inputs use `options: [{ name, value }]`, same-type values with unique
+  labels and a matching default. Runtime/share values store the option index,
+  while expression lookup returns the selected typed value. Both live input
+  cards and panel copies use the shared control construction and stay synced.
 - Expressions may also use dotted view values: `view.left`, `view.right`
   (x), `view.bottom`, `view.top` (y), `view.width`, `view.height`,
   `view.centre.x`, `view.centre.y` (coordinate units), `view.aspect`,

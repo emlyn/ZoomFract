@@ -432,6 +432,8 @@ uniform float normaliser;
 uniform vec4 stops[${MAXIMUM_DENSITY_COLORS}];
 uniform float positions[${MAXIMUM_DENSITY_COLORS}];
 uniform int stopCount;
+uniform int rampSpace;
+uniform int rampHue;
 out vec4 outColor;
 float shape(float count) {
   return scale == 0 ? log(1.0 + count) : scale == 1 ? sqrt(count) : count;
@@ -441,7 +443,35 @@ vec4 gradient(float t) {
   for (int i = 1; i < stopCount; i++) {
     float start = positions[i - 1];
     float span = positions[i] - start;
-    color = t <= start ? color : span <= 0.0 ? stops[i] : mix(stops[i - 1], stops[i], min((t - start) / span, 1.0));
+    vec4 previous = stops[i - 1];
+    vec4 next = stops[i];
+    if (rampSpace == 2) {
+      if (previous.y < 1e-7) previous.z = next.z;
+      if (next.y < 1e-7) next.z = previous.z;
+      float increasing = mod(next.z - previous.z + 720.0, 360.0);
+      float shorter = increasing > 180.0 ? increasing - 360.0 : increasing;
+      float difference = rampHue == 2 ? increasing : rampHue == 3 ? (increasing == 0.0 ? 0.0 : increasing - 360.0)
+        : rampHue == 1 ? (shorter >= 0.0 ? shorter - 360.0 : shorter + 360.0) : shorter;
+      next.z = previous.z + difference;
+    }
+    color = t <= start ? color : span <= 0.0 ? next : mix(previous, next, min((t - start) / span, 1.0));
+  }
+  if (rampSpace >= 0) {
+    vec3 linear = color.rgb;
+    if (rampSpace > 0) {
+      if (rampSpace == 2) linear = vec3(linear.x, linear.y * cos(radians(linear.z)), linear.y * sin(radians(linear.z)));
+      vec3 lms = vec3(linear.x + 0.3963377774 * linear.y + 0.2158037573 * linear.z,
+        linear.x - 0.1055613458 * linear.y - 0.0638541728 * linear.z,
+        linear.x - 0.0894841775 * linear.y - 1.291485548 * linear.z);
+      lms = lms * lms * lms;
+      linear = vec3(dot(lms, vec3(4.0767416621, -3.3077115913, 0.2309699292)),
+        dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
+        dot(lms, vec3(-0.0041960863, -0.7034186147, 1.707614701)));
+    }
+    vec3 encoded = mix(12.92 * linear, 1.055 * pow(max(linear, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
+      step(vec3(0.0031308), linear));
+    color.a = clamp(color.a, 0.0, 1.0);
+    color.rgb = clamp(encoded, 0.0, 1.0) * color.a;
   }
   return color;
 }
@@ -1327,7 +1357,11 @@ function drawWebgl(
   };
 
   const densityColors = density
-    ? shading.colors.map((stop) => premultiplied(parseColor(stop.color), 1))
+    ? shading.ramp ? shading.ramp.stops.map(({ colour }): Rgba => {
+      if (shading.ramp!.space === 'linear-srgb') return [...toLinearRgb(colour), colour.a];
+      const [l, a, b] = toOklab(colour);
+      return shading.ramp!.space === 'oklab' ? [l, a, b, colour.a] : [l, Math.hypot(a, b), Math.atan2(b, a) * 180 / Math.PI, colour.a];
+    }) : shading.colors.map((stop) => premultiplied(parseColor(stop.color), 1))
     : [];
   // Positions along the gradient, where 1 is the normalising count.
   const densityPositions = (scale: keyof typeof DENSITY_SCALES, normaliser: number) => shading.mode === 'density'
@@ -1362,6 +1396,8 @@ function drawWebgl(
     gl.uniform4fv(gl.getUniformLocation(resolveProgram, 'stops'), stops.flatMap(({ index }) => densityColors[index]));
     gl.uniform1fv(gl.getUniformLocation(resolveProgram, 'positions'), stops.map(({ position }) => position));
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'stopCount'), shading.colors.length);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampSpace'), shading.ramp ? ['linear-srgb', 'oklab', 'oklch'].indexOf(shading.ramp.space) : -1);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampHue'), shading.ramp ? ['shorter', 'longer', 'increasing', 'decreasing'].indexOf(shading.ramp.hue) : 0);
   };
 
   // Draws items over the latest feedback texture and resolves them into an
@@ -1560,3 +1596,4 @@ function drawWebgl(
     },
   };
 }
+import { toLinearRgb, toOklab } from '../values';

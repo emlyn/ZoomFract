@@ -1,5 +1,6 @@
 import YAML from 'yaml';
-import { evaluateExpression, isIdentifier, isReservedName, type Variables } from './expression';
+import { evaluateExpression, evaluateValue, isIdentifier, isReservedName, type Variables } from './expression';
+import { boolean, checkValue, colourCss, colourValue, equalValues, huePath, isColourValue, isGradient, isPoint, makeGradient, mixingSpace, numeric, parseCssColour, pointValue, type GradientValue, type MixingSpace, type Value } from './values';
 
 // Keys and list indexes leading to a value in the definition.
 type ScenePath = (string | number)[];
@@ -118,11 +119,12 @@ const DEFINITION: Shape = {
     },
     variables: {
       items: {
-        keys: { ...leaves('name', 'value'), input: { keys: leaves('type', 'label', 'min', 'max', 'step') } },
+        keys: { ...leaves('name', 'type'), value: LEAF, input: { keys: { ...leaves('type', 'label', 'min', 'max', 'step'), options: { items: { keys: leaves('name', 'value') } } } } },
       },
     },
     shading: { keys: { ...leaves('mode', 'scale', 'detail'), colours: LEAF } },
     seed: { keys: leaves('colour', 'opacity', 'transparency') },
+    colourSpace: LEAF,
     scene: {
       items: {
         byType: {
@@ -292,7 +294,7 @@ export type ColorStop = {
 // cover each pixel and colours pixels by that count.
 export type Shading =
   | { mode: 'paint'; detail: number }
-  | { mode: 'density'; scale: DensityScale; colors: ColorStop[] };
+  | { mode: 'density'; scale: DensityScale; colors: ColorStop[]; ramp?: GradientValue };
 
 // How small copies are shrunk, from -1 to 1. Each shrunk block takes the
 // average alpha of its pixels at 0 (ordinary image scaling), moving towards
@@ -302,6 +304,14 @@ const DETAIL_NAMES: Record<string, number> = { average: 0, preserve: 1 };
 // How a zoom's copy combines with what is already drawn under it.
 export const BLEND_MODES = ['normal', 'multiply', 'screen', 'add', 'darken', 'lighten'] as const;
 export type BlendMode = typeof BLEND_MODES[number];
+function enumValue<T extends string>(value: unknown, choices: readonly T[], fallback: T, variables: Variables): T {
+  const resolved = value === undefined ? fallback
+    : typeof value === 'string' && choices.some((choice) => choice === value) ? value
+      : typeof value === 'string' ? evaluateValue(value, variables) : value;
+  const match = choices.find((choice) => choice === resolved);
+  if (match === undefined) throw new Error(`Expected ${choices.join(', ')}`);
+  return match;
+}
 
 export const MAXIMUM_DENSITY_COLORS = 8;
 const DEFAULT_DENSITY_COLORS = ['#fef3c7', '#c2410c', '#1c1917'];
@@ -373,7 +383,8 @@ export type SceneInfo = {
 export type SceneInput =
   | { type: 'slider'; name: string; label: string; min: number; max: number; step?: number; value: number; initial: number }
   | { type: 'click' | 'drag'; name: string; label: string; value: Vec2; initial: Vec2 }
-  | { type: 'checkbox'; name: string; label: string; value: boolean; initial: boolean };
+  | { type: 'checkbox'; name: string; label: string; value: boolean; initial: boolean }
+  | { type: 'choice'; name: string; label: string; value: number; initial: number; options: { name: string; value: Value }[] };
 
 export type InputValue = number | boolean | Vec2;
 export type InputValues = ReadonlyMap<string, InputValue>;
@@ -426,7 +437,8 @@ function asNumber(value: unknown, fallback: number, variables: Variables): numbe
     return evaluateExpression(value, variables);
   }
 
-  return fallback;
+  if (value === undefined) return fallback;
+  throw new Error('Expected a finite number or numeric expression');
 }
 
 const isNumeric = (value: unknown, variables: Variables) => {
@@ -516,6 +528,9 @@ function asColour(value: unknown, fallback: string, variables: Variables): strin
   }
   if (typeof value === 'string' && isColour(value)) {
     return value;
+  }
+  if (typeof value === 'string' && !/^rgb\(/i.test(value.trim())) {
+    return colourCss(colourValue(evaluateValue(value, variables)));
   }
   const rgb = typeof value === 'string' ? /^rgb\((.*)\)$/is.exec(value.trim()) : null;
   if (rgb) {
@@ -990,6 +1005,7 @@ const rotateVector = (vector: Vec2, angle: number): Vec2 => ({
 });
 
 function parsePoint(value: unknown, variables: Variables): Vec2 | undefined {
+  if (typeof value === 'string') return pointValue(evaluateValue(value, variables));
   if (Array.isArray(value) && value.length >= 2) {
     const x = asNumber(value[0], Number.NaN, variables);
     const y = asNumber(value[1], Number.NaN, variables);
@@ -1650,9 +1666,7 @@ function parseZoomElement(
   if (zoom.blend !== undefined && density) {
     throw new PathError(`${elementName}: blend is not used with density shading`, [...path, 'blend']);
   }
-  if (zoom.blend !== undefined && !BLEND_MODES.includes(zoom.blend as BlendMode)) {
-    throw new PathError(`${elementName} blend must be ${BLEND_MODES.slice(0, -1).join(', ')}, or ${BLEND_MODES.at(-1)}`, [...path, 'blend']);
-  }
+  const blend = atPath([...path, 'blend'], () => enumValue(zoom.blend, BLEND_MODES, 'normal', variables));
   const align = zoom.align === undefined
     ? []
     : atPath(alignPath, () => parseAlignPairs(zoom.align, resolvePoint, elementName, variables, alignPath));
@@ -1662,7 +1676,7 @@ function parseZoomElement(
     glow: atPath([...path, 'glow'], () => parseGlow(zoom.glow, elementName, variables, density, [...path, 'glow'], true)),
     ...resolveRectGeometry(zoom, resolvePoint, elementName, variables, path, { aspect, view, align }),
     opacity: parseOpacity(zoom, 1, variables, path),
-    blend: (zoom.blend as BlendMode | undefined) ?? 'normal',
+    blend,
     alignTargets: align.map((pair) => pair.to),
   };
 }
@@ -1748,6 +1762,9 @@ function resolveSceneElements(
       return point;
     }
 
+    if (!/^[^.\s]+\.(?:points\.\d+|topLeft|topRight|bottomLeft|bottomRight|centre|center|top|bottom|left|right)$/.test(value.trim())) {
+      return pointValue(evaluateValue(value, variables));
+    }
     const pointList = value.trim().match(/^([^.\s]+)\.points\.(\d+)$/);
     if (pointList) {
       const [, name, indexText] = pointList;
@@ -1867,8 +1884,11 @@ function lazy<T>(label: string, compute: () => T): () => T {
 type InputSpec =
   | { type: 'slider'; label?: string; min: unknown; max: unknown; step: unknown }
   | { type: 'click' | 'drag'; label?: string }
-  | { type: 'checkbox'; label?: string };
-type VariableDefinition = { value: unknown; index: number; input?: InputSpec };
+  | { type: 'checkbox'; label?: string }
+  | { type: 'choice'; label?: string; options: unknown };
+const VARIABLE_TYPES = ['number', 'integer', 'boolean', 'point', 'colour', 'text', 'gradient'] as const;
+type VariableType = typeof VARIABLE_TYPES[number];
+type VariableDefinition = { value: unknown; index: number; input?: InputSpec; type?: VariableType };
 
 const isPointInput = (input: InputSpec | undefined): input is Extract<InputSpec, { type: 'click' | 'drag' }> =>
   input?.type === 'click' || input?.type === 'drag';
@@ -1881,11 +1901,12 @@ function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec
   if (!record) {
     throw new PathError(`Variable "${name}" input must be slider, click, drag, checkbox, or an object with a type`, path);
   }
-  const { type, label, min, max, step } = record;
+  const { type, label, min, max, step, options } = record;
   if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
     throw new PathError(`Variable "${name}" input label must be text`, [...path, 'label']);
   }
   if (type === 'slider') {
+    if (options !== undefined) throw new PathError('Slider inputs do not use options', [...path, 'options']);
     const missing = min === undefined ? 'min' : max === undefined ? 'max' : undefined;
     if (missing) {
       throw new PathError(`Slider "${name}" needs a ${missing}`, path);
@@ -1893,14 +1914,19 @@ function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec
     return { type, label, min, max, step };
   }
   if (type === 'click' || type === 'drag' || type === 'checkbox') {
-    const unused = Object.entries({ min, max, step }).find(([, value]) => value !== undefined);
+    const unused = Object.entries({ min, max, step, options }).find(([, value]) => value !== undefined);
     if (unused) {
       throw new PathError(`${type} inputs do not use ${unused[0]}`, [...path, unused[0]]);
     }
     return { type, label };
   }
+  if (type === 'choice') {
+    if ([min, max, step].some((v) => v !== undefined)) throw new PathError('Choice inputs do not use min, max or step', path);
+    if (!Array.isArray(options) || !options.length) throw new PathError('Choice inputs need a non-empty options list', [...path, 'options']);
+    return { type, label, options };
+  }
   throw new PathError(
-    `Variable "${name}" input type must be slider, click, drag, or checkbox`,
+    `Variable "${name}" input type must be slider, click, drag, checkbox or choice`,
     typeof node === 'string' ? path : [...path, 'type'],
   );
 }
@@ -1920,7 +1946,7 @@ function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
       throw new Error(`${label} must be an object with a name and a value`);
     }
-    const { name, value, input: inputNode } = item as Record<string, unknown>;
+    const { name, value, type, input: inputNode } = item as Record<string, unknown>;
     if (typeof name !== 'string' || !isIdentifier(name)) {
       throw at('name', `${label} name must start with a letter or underscore and contain only letters, digits, and underscores`);
     }
@@ -1931,20 +1957,9 @@ function parseVariableDefinitions(node: unknown): Map<string, VariableDefinition
       throw at('name', `Variable "${name}" is defined more than once`);
     }
     const input = parseInputSpec(inputNode, name, ['variables', index, 'input']);
-    if (isPointInput(input)) {
-      if (!Array.isArray(value) && !isRecord(value)) {
-        throw at('value', `Variable "${name}" value must be a point [x, y]`);
-      }
-    } else if (input?.type === 'checkbox') {
-      if (typeof value !== 'boolean') {
-        throw at('value', `Variable "${name}" value must be true or false`);
-      }
-    } else if (typeof value === 'boolean' && input) {
-      throw at('value', `Variable "${name}" value must be a number or an expression for a ${input.type}`);
-    } else if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'boolean') {
-      throw at('value', `Variable "${name}" value must be a number, an expression, true, or false`);
-    }
-    definitions.set(name, { value, index, input });
+    if (value === undefined) throw at('value', `Variable "${name}" needs a value`);
+    if (type !== undefined && !VARIABLE_TYPES.some((t) => t === type)) throw at('type', 'Unknown variable type');
+    definitions.set(name, { value, index, input, type: type as VariableType | undefined });
   }));
   return definitions;
 }
@@ -1974,7 +1989,9 @@ function parseShading(node: unknown, variables: Variables): Shading {
   if (!node || typeof node !== 'object' || Array.isArray(node)) {
     throw new Error('shading must be an object');
   }
-  const { mode = 'paint', scale, colours, detail } = node as Record<string, unknown>;
+  const { mode: writtenMode, scale: writtenScale, colours, detail } = node as Record<string, unknown>;
+  const mode = atPath(['shading', 'mode'], () => enumValue(writtenMode, ['paint', 'density'] as const, 'paint', variables));
+  const scale = writtenScale === undefined ? undefined : atPath(['shading', 'scale'], () => enumValue(writtenScale, ['log', 'sqrt', 'linear'] as const, 'log', variables));
   if (mode === 'paint') {
     if (scale !== undefined || colours !== undefined) {
       throw new PathError('shading scale and colours are only used with density mode', ['shading', scale !== undefined ? 'scale' : 'colours']);
@@ -1990,19 +2007,60 @@ function parseShading(node: unknown, variables: Variables): Shading {
   if (scale !== undefined && scale !== 'log' && scale !== 'sqrt' && scale !== 'linear') {
     throw new PathError('shading scale must be log, sqrt, or linear', ['shading', 'scale']);
   }
+  const ramp = typeof colours === 'string' ? atPath(['shading', 'colours'], () => {
+    const value = evaluateValue(colours, variables);
+    if (!isGradient(value)) throw new Error('Density colours expression must be a gradient');
+    if (value.stops.length > MAXIMUM_DENSITY_COLORS) throw new Error(`Density supports at most ${MAXIMUM_DENSITY_COLORS} stops`);
+    return value;
+  }) : undefined;
   return {
     mode,
     scale: scale ?? 'log',
+    ramp,
     colors: colours === undefined
       ? evenStops(DEFAULT_DENSITY_COLORS)
-      : atPath(['shading', 'colours'], () => parseColorStops(colours, variables)),
+      : ramp ? ramp.stops.map((stop): ColorStop => ({ at: { kind: 'fraction', value: stop.position }, color: colourCss(stop.colour) }))
+        : atPath(['shading', 'colours'], () => parseColorStops(colours, variables)),
   };
 }
 
-function variableCell(name: string, { value, index }: VariableDefinition, lookup: Variables): () => number {
+function readVariableValue(value: unknown, type: VariableType | undefined, lookup: Variables, space: MixingSpace): Value {
+  let result: Value;
+  if (type === 'text') {
+    if (typeof value !== 'string') throw new Error('Text values must be strings');
+    return value;
+  }
+  if (type === 'gradient' && isRecord(value)) {
+    const unknown = Object.keys(value).find((key) => !['stops', 'space', 'hue'].includes(key));
+    if (unknown) throw new Error(`Unknown gradient setting "${unknown}"`);
+    if (!Array.isArray(value.stops)) throw new Error('Gradient needs a stops list');
+    return makeGradient(value.stops.map((stop) => {
+      if (!isRecord(stop) || Object.keys(stop).some((key) => !['position', 'colour'].includes(key))) throw new Error('Gradient stops need position and colour');
+      return { position: asNumber(stop.position, Number.NaN, lookup), colour: colourValue(readVariableValue(stop.colour, 'colour', lookup, space)) };
+    }), value.space === undefined ? space : mixingSpace(value.space), value.hue === undefined ? 'shorter' : huePath(value.hue));
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') result = value;
+  else if (Array.isArray(value) || isRecord(value)) {
+    if (Array.isArray(value) ? value.length !== 2
+      : Object.keys(value).some((key) => key !== 'x' && key !== 'y')) throw new Error('Point values need exactly x and y');
+    const point = parsePoint(value, lookup);
+    if (!point) throw new Error('Point values need x and y');
+    result = point;
+  } else if (typeof value === 'string') {
+    result = type === 'colour' && isColour(value) ? parseCssColour(value) : evaluateValue(value, lookup, space);
+  } else throw new Error('Unsupported variable value');
+  const valid = type === undefined || (type === 'number' && typeof result === 'number')
+    || (type === 'integer' && typeof result === 'number' && Number.isInteger(result))
+    || (type === 'boolean' && typeof result === 'boolean') || (type === 'point' && isPoint(result))
+    || (type === 'colour' && isColourValue(result)) || (type === 'gradient' && isGradient(result));
+  if (!valid) throw new Error(`Expected a ${type} value`);
+  return checkValue(result);
+}
+
+function variableCell(name: string, { value, index, type }: VariableDefinition, lookup: Variables, space: MixingSpace): () => Value {
   return lazy(`Variable "${name}"`, () => {
     try {
-      return asNumber(value, Number.NaN, lookup);
+      return readVariableValue(value, type, lookup, space);
     } catch (error) {
       if (error instanceof PathError) {
         throw error;
@@ -2016,7 +2074,7 @@ function variableCell(name: string, { value, index }: VariableDefinition, lookup
   });
 }
 
-type DefinedVariable = { cells: [string, () => number][]; input?: () => SceneInput };
+type DefinedVariable = { cells: [string, () => Value][]; input?: () => SceneInput };
 
 // The expression names a variable provides, using the value set while viewing
 // when there is one. Slider values stay within their range.
@@ -2025,49 +2083,81 @@ function defineVariable(
   definition: VariableDefinition,
   lookup: Variables,
   override: InputValue | undefined,
+  space: MixingSpace,
 ): DefinedVariable {
   const { input, index } = definition;
   const at = <T>(path: ScenePath, compute: () => T) => atPath(['variables', index, ...path], compute);
   const label = input?.label?.trim() ?? name;
+  const initialValue = variableCell(name, definition, lookup, space);
 
   if (isPointInput(input)) {
     const initial = lazy(`Variable "${name}"`, () => at(['value'], () => {
-      const point = parsePoint(definition.value, lookup);
-      if (!point) {
-        throw new Error(`Variable "${name}" value must be a point [x, y]`);
-      }
-      return point;
+      return pointValue(initialValue());
     }));
-    const current = () => typeof override === 'object' ? override : initial();
+    const current = () => {
+      if (override === undefined) return initial();
+      if (typeof override !== 'object') throw new PathError(`Point input "${name}" requires a point`, ['variables', index, 'input']);
+      return pointValue(checkValue(override));
+    };
     return {
-      cells: [[`${name}.x`, () => current().x], [`${name}.y`, () => current().y]],
+      cells: [[name, current], [`${name}.x`, () => current().x], [`${name}.y`, () => current().y]],
       input: () => ({ type: input.type, name, label, value: current(), initial: initial() }),
     };
   }
 
-  // true and false are 1 and 0 in expressions.
-  if (typeof definition.value === 'boolean') {
-    const initial = definition.value;
-    const current = () => typeof override === 'boolean' ? override : initial;
+  if (input?.type === 'checkbox') {
+    const initial = () => at(['value'], () => boolean(initialValue()));
+    const current = () => {
+      if (override === undefined) return initial();
+      if (typeof override !== 'boolean') throw new PathError(`Checkbox "${name}" requires a boolean`, ['variables', index, 'input']);
+      return override;
+    };
     return {
-      cells: [[name, () => Number(current())]],
-      input: input?.type === 'checkbox'
-        ? () => ({ type: 'checkbox', name, label, value: current(), initial })
-        : undefined,
+      cells: [[name, current]],
+      input: () => ({ type: 'checkbox', name, label, value: current(), initial: initial() }),
     };
   }
-
-  const initial = variableCell(name, definition, lookup);
-  if (input?.type !== 'slider') {
-    return { cells: [[name, initial]] };
+  if (input?.type === 'choice') {
+    const options = lazy(`Choice "${name}"`, () => at(['input', 'options'], () => {
+      if (!Array.isArray(input.options)) throw new Error('Choice options must be a list');
+      const names = new Set<string>();
+      const options = input.options.map((option, optionIndex) => at(['input', 'options', optionIndex], () => {
+        if (!isRecord(option) || typeof option.name !== 'string' || !option.name.trim() || names.has(option.name)) throw new Error('Choice option names must be non-blank and unique');
+        names.add(option.name);
+        return { name: option.name, value: readVariableValue(option.value, definition.type, lookup, space) };
+      }));
+      const kind = (value: Value) => typeof value !== 'object' ? typeof value : isPoint(value) ? 'point' : value.kind;
+      if (options.some((option) => kind(option.value) !== kind(options[0].value))) throw new Error('Choice options must have the same value type');
+      return options;
+    }));
+    const initial = () => {
+      const index = options().findIndex((option) => equalValues(option.value, initialValue()));
+      if (index < 0) throw new PathError('Choice default must match an option value', ['variables', definition.index, 'value']);
+      return index;
+    };
+    const current = () => {
+      if (override === undefined) return initial();
+      if (typeof override !== 'number' || !Number.isInteger(override) || !options()[override]) throw new PathError('Choice input index is invalid', ['variables', index, 'input']);
+      initial();
+      return override;
+    };
+    return {
+      cells: [[name, () => options()[current()].value]],
+      input: () => ({ type: 'choice', name, label, options: options(), value: current(), initial: initial() }),
+    };
   }
+  if (input?.type !== 'slider') {
+    return { cells: [[name, initialValue]] };
+  }
+  const initial = () => numeric(initialValue());
   const range = lazy(`Slider "${name}"`, () => {
     const min = at(['input', 'min'], () => asNumber(input.min, Number.NaN, lookup));
     const max = at(['input', 'max'], () => asNumber(input.max, Number.NaN, lookup));
     if (!(max > min)) {
       throw new PathError(`Slider "${name}" max must be greater than its min`, ['variables', index, 'input', 'max']);
     }
-    const step = input.step === undefined ? undefined : at(['input', 'step'], () => asPositiveNumber(input.step, lookup));
+    const step = input.step === undefined ? definition.type === 'integer' ? 1 : undefined : at(['input', 'step'], () => asPositiveNumber(input.step, lookup));
+    if (definition.type === 'integer' && (!Number.isInteger(min) || !Number.isInteger(max) || !Number.isInteger(step))) throw new Error('Integer sliders need integer bounds and step');
     if (input.step !== undefined && step === undefined) {
       throw new PathError(`Slider "${name}" step must be a positive number`, ['variables', index, 'input', 'step']);
     }
@@ -2077,7 +2167,12 @@ function defineVariable(
     }
     return { min, max, step };
   });
-  const current = () => typeof override === 'number' ? clamp(override, range().min, range().max) : initial();
+  const current = () => {
+    if (override === undefined) return initial();
+    if (typeof override !== 'number') throw new Error(`Slider "${name}" requires a number`);
+    const value = clamp(override, range().min, range().max);
+    return definition.type === 'integer' ? Math.round(value) : value;
+  };
   return {
     cells: [[name, current]],
     input: () => ({ type: 'slider', name, label, ...range(), value: current(), initial: initial() }),
@@ -2238,8 +2333,9 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
 
   // Variables and view values resolve lazily through one lookup, so each
   // may refer to the others as long as there is no loop.
-  const cells = new Map<string, () => number>();
-  const variables: Variables = (name) => cells.get(name)?.();
+  const cells = new Map<string, () => Value>();
+  const space = atPath(['colourSpace'], () => sceneRoot.colourSpace === undefined ? 'linear-srgb' : mixingSpace(sceneRoot.colourSpace));
+  const variables: Variables = Object.assign((name: string) => cells.get(name)?.(), { space });
   const axis = (key: 'x' | 'y') => {
     const path = ['view', 'coordinates', key];
     return lazy(`view.coordinates.${key}`, () => atPath(path, () =>
@@ -2278,9 +2374,11 @@ function buildScene(value: unknown, inputValues: InputValues, fitted: ViewRanges
     ...(autoOverflow ? {} : { 'view.overflow': overflow }),
   };
   Object.entries(viewValues).forEach(([name, value]) => cells.set(name, value));
+  cells.set('view.centre', () => ({ x: (xRange().from + xRange().to) / 2, y: (yRange().from + yRange().to) / 2 }));
+  cells.set('view.center', cells.get('view.centre')!);
   const inputBuilders = [...atPath(['variables'], () => parseVariableDefinitions(sceneRoot.variables))]
     .flatMap(([name, definition]) => {
-      const defined = defineVariable(name, definition, variables, inputValues.get(name));
+      const defined = defineVariable(name, definition, variables, inputValues.get(name), space);
       defined.cells.forEach(([cellName, cell]) => cells.set(cellName, cell));
       return defined.input ? [defined.input] : [];
     });

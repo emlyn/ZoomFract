@@ -1,4 +1,5 @@
 import { isMap, isScalar, isSeq, parseDocument } from 'yaml';
+import { parseScene } from './scene';
 
 type Path = (string | number)[];
 type Fields = Record<string, Field>;
@@ -90,11 +91,24 @@ const SHAPES: Record<string, { label: string; field: Field; initial: unknown }> 
   },
 };
 const numericValue = variants(0, { Number: number(0), Boolean: { initial: true }, Point: point });
+const VARIABLE_DEFAULTS: Record<string, unknown> = {
+  number: 0, integer: 0, boolean: true, point: [0, 0], colour: '#000000', text: '',
+  gradient: { stops: [{ position: 0, colour: '#000000' }, { position: 1, colour: '#ffffff' }] },
+};
+const gradientSpec = variants('palette', {
+  Expression: text('palette'),
+  Stops: object({
+    stops: list(object({ position: number(0), colour: colour('#000000') }, { position: 0, colour: '#000000' })),
+    space: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch']),
+    hue: choice('shorter', ['shorter', 'longer', 'increasing', 'decreasing']),
+  }, { stops: [{ position: 0, colour: '#000000' }, { position: 1, colour: '#ffffff' }] }),
+});
 const inputSpec = variants('drag', {
   Shorthand: choice('drag', ['slider', 'click', 'drag', 'checkbox']),
   Settings: object({
-    type: choice('slider', ['slider', 'click', 'drag', 'checkbox']),
+    type: choice('slider', ['slider', 'click', 'drag', 'checkbox', 'choice']),
     label: text(), min: number(0), max: number(1), step: number(0.01),
+    options: list(object({ name: text(), value: numericValue }, { name: 'Option', value: 0 })),
   }, { type: 'slider', min: 0, max: 1 }),
 });
 const axis = (labels: string[]) => variants([-1, 1], {
@@ -134,11 +148,16 @@ const TOP: Fields = {
     detail: number(0),
     scale: choice('log', ['log', 'sqrt', 'linear']),
     colours: variants(['#ffffff', '#000000'], {
+      Expression: text('palette'),
       'Even stops': list(colour(), ['#ffffff', '#000000']),
       'Positioned stops': object({}, { '0%': '#ffffff', '100%': '#000000' }),
     }),
   }),
-  variables: list(object({ name: text('variable'), value: numericValue, input: inputSpec }, { name: 'variable', value: 0 })),
+  variables: list(object({
+    name: text('variable'), type: choice('number', ['number', 'integer', 'boolean', 'point', 'colour', 'text', 'gradient']),
+    value: numericValue, input: inputSpec,
+  }, { name: 'variable', value: 0 })),
+  colourSpace: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch']),
 };
 const TITLES: Record<string, string> = {
   info: 'Picture information', frame: 'Frame and wall', view: 'View',
@@ -298,9 +317,38 @@ export function createDefinitionForm(
     }
     return resolved;
   }
+  const setNode = (path: Path, value: unknown) => document.setIn(documentPath(path), document.createNode(value));
   const set = (path: Path, value: unknown, structural = false) =>
-    change(path, () => document.setIn(documentPath(path), value), structural);
+    change(path, () => setNode(path, value), structural);
   const remove = (path: Path) => change(path, () => document.deleteIn(documentPath(path)), true);
+  const variableAt = (index: number): Record<string, unknown> => {
+    const value: unknown = document.toJS();
+    const variable = record(value) && Array.isArray(value.variables) ? value.variables[index] : undefined;
+    if (!record(variable)) throw new Error('Variable must be an object');
+    return variable;
+  };
+  const configureInput = (index: number, type: string) => {
+    const variable = variableAt(index);
+    const value = variable.value;
+    const label = record(variable.input) ? variable.input.label : undefined;
+    change(['variables', index, 'input'], () => {
+      if (type === 'slider') {
+        const start = typeof value === 'number' ? value : 0;
+        setNode(['variables', index, 'type'], variable.type === 'integer' ? 'integer' : 'number');
+        setNode(['variables', index, 'value'], start);
+        setNode(['variables', index, 'input'], { type, min: Math.min(0, start), max: Math.max(1, start), ...(label ? { label } : {}) });
+      } else if (type === 'checkbox' || type === 'click' || type === 'drag') {
+        const pointInput = type !== 'checkbox';
+        const start = pointInput ? variable.type === 'point' || pointLike(value) && typeof value !== 'string' ? value : [0, 0]
+          : variable.type === 'boolean' || typeof value === 'boolean' ? value : true;
+        setNode(['variables', index, 'type'], pointInput ? 'point' : 'boolean');
+        setNode(['variables', index, 'value'], start);
+        setNode(['variables', index, 'input'], typeof variable.input === 'string' ? type : { type, ...(label ? { label } : {}) });
+      } else {
+        setNode(['variables', index, 'input'], { type, options: [{ name: 'Default', value }], ...(label ? { label } : {}) });
+      }
+    }, true);
+  };
 
   function disclosure(label: string, key: string) {
     const details = make('details', 'definition-section');
@@ -335,10 +383,12 @@ export function createDefinitionForm(
     container.setAttribute('role', 'group');
     container.setAttribute('aria-label', label);
     if (field.variants) {
-      const options = Object.entries(field.variants);
+      const options = Object.entries(field.variants).filter(([key]) =>
+        !(key === 'Shorthand' && record(value) && !['click', 'drag', 'checkbox'].includes(String(value.type))));
       const active = options.find(([, option]) => matches(option, value));
       const selector = select(options.map(([key]) => [key, key]), active?.[0] ?? '', `${label} format`);
       selector.addEventListener('change', () => {
+        if (selector.value === active?.[0]) return;
         const next = field.variants![selector.value];
         // Changing from colour shorthand to seed settings keeps the colour.
         let replacement = next.initial;
@@ -359,7 +409,12 @@ export function createDefinitionForm(
         } else if (typeof next.initial === 'number' && record(value) && ('degrees' in value || 'deg' in value)) {
           replacement = value.degrees ?? value.deg;
         } else if (record(next.initial) && 'type' in next.initial && typeof value === 'string') {
-          replacement = value === 'slider' ? { ...next.initial, type: value } : { type: value };
+          const inputValue = document.getIn(documentPath(['variables', Number(path[1]), 'input']));
+          if (path[0] === 'variables' && path[2] === 'input' && inputValue === 'slider') {
+            configureInput(Number(path[1]), 'slider');
+            return;
+          }
+          replacement = { type: value };
         } else if (typeof next.initial === 'string' && record(value) && 'type' in value && field.variants?.Shorthand) {
           replacement = value.type;
         } else if (typeof next.initial === 'boolean' && typeof value === 'number') {
@@ -378,7 +433,19 @@ export function createDefinitionForm(
       Object.entries(shown).forEach(([key, child]) => {
         if (key === 'type' && path[0] === 'scene') return;
         if (!(key in value) && Object.keys(value).some((written) => SPELLINGS[written] === key)) return;
-        const spec = fields[SPELLINGS[key] ?? key] ?? (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
+        let spec = fields[SPELLINGS[key] ?? key] ?? (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
+        if (path[0] === 'variables' && key === 'value') {
+          const sourceValue: unknown = document.toJS();
+          const variable = path.length === 2 ? value : record(sourceValue) && Array.isArray(sourceValue.variables) ? sourceValue.variables[Number(path[1])] : undefined;
+          if (record(variable)) {
+            if (variable.type === 'colour') spec = colour();
+            if (variable.type === 'text') spec = text();
+            if (variable.type === 'point') spec = point;
+            if (variable.type === 'gradient') spec = gradientSpec;
+            if (variable.type === 'boolean') spec = variants(true, { Boolean: { initial: true }, Expression: text('true') });
+            if (variable.type === 'number' || variable.type === 'integer') spec = number(0);
+          }
+        }
         const row = make('div', 'definition-field');
         const header = make('div', 'definition-field-heading');
         const name = make('span');
@@ -403,10 +470,11 @@ export function createDefinitionForm(
         if (key === 'opacity' && 'transparency' in value) return false;
         if (key === 'transparency' && 'opacity' in value) return false;
         if (path[0] === 'shading') {
-          if ((value.mode ?? 'paint') === 'paint' && ['scale', 'colours'].includes(key)) return false;
-          if (value.mode === 'density' && key === 'detail') return false;
+          if (!density && ['scale', 'colours'].includes(key)) return false;
+          if (density && key === 'detail') return false;
         }
         if (path[0] === 'variables' && path[2] === 'input' && value.type !== 'slider' && ['min', 'max', 'step'].includes(key)) return false;
+        if (path[0] === 'variables' && path[2] === 'input' && value.type !== 'choice' && key === 'options') return false;
         if (path[0] === 'scene' && path.length === 2) {
           if (!density && key === 'weight') return false;
           if (density && ['colour', 'opacity', 'transparency', 'glow', 'blend'].includes(key)) return false;
@@ -417,7 +485,11 @@ export function createDefinitionForm(
         const add = select([['', '+ Add setting'], ...missing.map(([key, spec]): [string, string] => [key, spec.label ?? title(key)])], '', `Add ${label} setting`);
         add.className = 'definition-add';
         add.addEventListener('change', () => {
-          if (add.value) set([...path, add.value], fields[add.value].initial, true);
+          if (add.value === 'input' && path[0] === 'variables' && path.length === 2) {
+            const type = value.type;
+            configureInput(Number(path[1]), type === 'boolean' ? 'checkbox' : type === 'point' ? 'drag'
+              : ['colour', 'text', 'gradient'].includes(String(type)) ? 'choice' : 'slider');
+          } else if (add.value) set([...path, add.value], fields[add.value].initial, true);
         });
         container.append(add);
       } else if (Object.keys(fields).length === 0) {
@@ -464,6 +536,26 @@ export function createDefinitionForm(
             let name = 'variable';
             for (let index = 2; names.has(name); index += 1) name = `variable${index}`;
             next = { ...next, name };
+          } else if (path[0] === 'variables' && path.length === 4 && path[2] === 'input' && path[3] === 'options') {
+            const names = new Set(value.filter(record).map((option) => option.name));
+            let name = 'Option';
+            for (let index = 2; names.has(name); index += 1) name = `Option ${index}`;
+            next = { name, value: variableAt(Number(path[1])).value };
+          } else if (path[0] === 'variables' && path.at(-1) === 'stops') {
+            const positions = value.filter(record).map((stop) => stop.position).filter((position): position is number =>
+              typeof position === 'number' && position >= 0 && position <= 1).sort((a, b) => a - b);
+            const bounds = [0, ...positions, 1];
+            let start = 0;
+            let end = 1;
+            let gap = -1;
+            bounds.slice(1).forEach((position, index) => {
+              if (position - bounds[index] > gap) {
+                start = bounds[index];
+                end = position;
+                gap = end - start;
+              }
+            });
+            next = { position: (start + end) / 2, colour: '#888888' };
           }
           set([...path, value.length], next, true);
         }, 'definition-add'));
@@ -474,7 +566,33 @@ export function createDefinitionForm(
       const current = String(value);
       const choices = field.choices.includes(current) ? field.choices : [current, ...field.choices];
       const input = select(choices.map((key) => [key, title(key)]), current, label);
-      input.addEventListener('change', () => set(path, input.value, true));
+      input.addEventListener('change', () => {
+        if (path[0] === 'variables' && path.length === 3 && path[2] === 'input') {
+          configureInput(Number(path[1]), input.value);
+        } else if (path[0] === 'variables' && path.length === 4 && path[2] === 'input' && path[3] === 'type') {
+          configureInput(Number(path[1]), input.value);
+        } else if (path[0] === 'variables' && path.length === 3 && path[2] === 'type') {
+          const index = Number(path[1]);
+          const variable = variableAt(index);
+          change(path, () => {
+            setNode(path, input.value);
+            const value = variable.value;
+            const compatible = variable.type === input.value
+              || input.value === 'number' && variable.type === 'integer'
+              || (input.value === 'number' ? typeof value === 'number'
+              : input.value === 'integer' ? typeof value === 'number' && Number.isInteger(value)
+                : input.value === 'boolean' ? typeof value === 'boolean'
+                  : input.value === 'point' ? pointLike(value) && typeof value !== 'string'
+                    : input.value === 'colour' ? typeof value === 'string' && CSS.supports('color', value)
+                      : input.value === 'text' ? typeof value === 'string'
+                        : record(value) && Array.isArray(value.stops));
+            if (!compatible) {
+              setNode(['variables', index, 'value'], VARIABLE_DEFAULTS[input.value]);
+            }
+            if (variable.type !== input.value && variable.input !== undefined) document.deleteIn(['variables', index, 'input']);
+          }, true);
+        } else set(path, input.value, true);
+      });
       container.append(input);
       return container;
     }
@@ -563,6 +681,14 @@ export function createDefinitionForm(
     }
     if (!record(value)) return;
     density = record(value.shading) && value.shading.mode === 'density';
+    if (record(value.shading) && typeof value.shading.mode === 'string'
+      && !['paint', 'density'].includes(value.shading.mode)) {
+      try {
+        density = parseScene(source).shading.mode === 'density';
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    }
     const scene = disclosure('Scene', 'scene');
     scene.classList.add('definition-scene-section');
     const content = make('div', 'definition-section-body');
@@ -832,14 +958,14 @@ export function createDefinitionForm(
       fields.forEach((fieldKey) => {
         if (fieldKey === 'seed' && density && !(fieldKey in value)) return;
         const heading = make('h3', 'definition-group-heading');
-        heading.textContent = fieldKey === 'view' ? 'Area' : TITLES[fieldKey];
+        heading.textContent = fieldKey === 'view' ? 'Area' : fieldKey === 'colourSpace' ? 'Colour mixing space' : TITLES[fieldKey];
         content.append(heading);
         if (fieldKey === 'frame') content.append(frameControl);
         const defaults = fieldKey === 'shading' && density
           ? { mode: 'density', scale: 'log', colours: ['#fef3c7', '#c2410c', '#1c1917'] }
           : DEFAULT_FIELDS[fieldKey];
         content.append(fieldEditor(TOP[fieldKey], fieldKey in value ? value[fieldKey] : defaults ?? TOP[fieldKey].initial,
-          [fieldKey], TITLES[fieldKey], defaults));
+          [fieldKey], TITLES[fieldKey] ?? 'Colour mixing space', defaults));
         if (fieldKey === 'seed') {
           const hint = make('p', 'definition-hint');
           hint.textContent = 'Fills the deepest zoom copies.';
@@ -849,7 +975,7 @@ export function createDefinitionForm(
       section.append(content);
       body.append(section);
     };
-    group('Picture', 'picture', ['view', 'shading', 'seed']);
+    group('Picture', 'picture', ['view', 'shading', 'seed', 'colourSpace']);
     group('Controls', 'controls', ['variables']);
     group('Presentation', 'presentation', ['frame', 'info']);
     notifySelection();

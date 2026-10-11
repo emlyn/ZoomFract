@@ -210,6 +210,11 @@ canvas:focus-visible {
   accent-color: #52525b;
 }
 
+.input-control select {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
 .input-control.input-checkbox {
   display: flex;
   align-items: center;
@@ -1201,6 +1206,15 @@ canvas {
 
 .definition-live-input:empty {
   display: none;
+}
+
+.definition-live-input .input-name {
+  color: #e4e4e7;
+}
+
+.definition-live-input output,
+.definition-live-input .input-hint {
+  color: #b8b8c0;
 }
 
 .definition-scene-section > summary > span {

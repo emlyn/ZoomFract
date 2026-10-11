@@ -96,6 +96,10 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     Variables with inputs show a copy of the live control below their value.
     It stays in sync with the control beside the picture and does not change
     the saved default value.
+    Adding an input chooses a suitable control for the variable's type. Changing
+    the input kind gives it compatible settings and, where needed, a new default.
+    Live values survive edits when the input kind stays compatible; choices
+    follow the selected option's name.
   </p>
   <p>
     Render quality stays above the definition editor in both Visual and YAML modes.
@@ -562,6 +566,10 @@ centre: [0, "root(3, 2)"]   # quote it if it contains a comma inside [ ]</code><
     <tr><th>Logs</th><td><code>log(x)</code> and <code>ln(x)</code> (both natural log), <code>exp(x)</code></td></tr>
     <tr><th>Trigonometry</th><td><code>sin</code>, <code>cos</code>, <code>tan</code>, <code>asin</code>, <code>acos</code>, <code>atan</code>, <code>atan2(y, x)</code>, all in radians</td></tr>
     <tr><th>Other</th><td><code>abs(x)</code>; <code>min(a, b, ...)</code> and <code>max(a, b, ...)</code> choose the smallest or largest of one or more values</td></tr>
+    <tr><th>Rounding</th><td><code>floor(x)</code>, <code>ceil(x)</code>, <code>round(x)</code></td></tr>
+    <tr><th>Bounds and interpolation</th><td><code>clamp(x, min, max)</code>, <code>lerp(a, b, t)</code>, <code>mix(a, b, t)</code>. Interpolation works on numbers, points and colours; t is not clamped.</td></tr>
+    <tr><th>Logic</th><td><code>&lt; &lt;= &gt; &gt;= == !=</code>, <code>&amp;&amp;</code>, <code>||</code>, <code>!</code>. <code>condition ? yes : no</code> evaluates only the chosen branch. Quote expressions containing a colon in YAML.</td></tr>
+    <tr><th>Points</th><td><code>point(x, y)</code>, <code>length(p)</code>, <code>distance(p, q)</code>, <code>dot(p, q)</code>, <code>rotate(p, angle)</code>. Rotation uses clockwise degrees about the origin.</td></tr>
   </table>
   <p>
     <code>-2^2</code> is -4, because the power is worked out first. Use brackets to
@@ -571,7 +579,11 @@ centre: [0, "root(3, 2)"]   # quote it if it contains a comma inside [ ]</code><
 
 <section id="guide-variables">
   <h3>Variables</h3>
-  <p>Variables give a name to a number, so it can be used in expressions.</p>
+  <p>Variables name numbers, booleans, points, colours, text or gradients. An optional
+    <code>type</code> specifies <code>number</code>, <code>integer</code>,
+    <code>boolean</code>, <code>point</code>, <code>colour</code>, <code>text</code>
+    or <code>gradient</code>. Otherwise numbers, booleans, points and expression
+    results are inferred. Use an explicit type for colour or text literals.</p>
   <pre><code>variables:
   - name: s
     value: 1/sqrt(2)
@@ -588,6 +600,56 @@ scene:
     <code>pi</code> or <code>sin</code>. Variables can use each other in any order,
     as long as they do not depend on each other in a loop.
   </p>
+</section>
+
+<section id="guide-typed-colours">
+  <h3>Points, colours and gradients</h3>
+  <p>Points and colours support addition and subtraction with the same type,
+    multiplication by a number in either order, and division by a number.
+    Booleans do not silently become numbers: use <code>number(flag)</code>.
+    Points expose <code>.x</code> and <code>.y</code>; colours expose
+    <code>.r</code>, <code>.g</code>, <code>.b</code> and <code>.a</code>.
+    Components also work on results, such as <code>(end-start).x</code>.</p>
+  <p><code>colour("red")</code> parses a colour literal.
+    <code>srgb(r, g, b, alpha?)</code> uses 0–1 channels, unlike CSS
+    <code>rgb()</code>, whose numeric channels use 0–255.
+    <code>hsl(h, s, l, alpha?)</code>, <code>oklab(l, a, b, alpha?)</code> and
+    <code>oklch(l, c, h, alpha?)</code> construct colours; hue uses degrees,
+    saturation/lightness use 0–1, and alpha defaults to 1.
+    <code>toRgb(c)</code>, <code>toHsl(c)</code> and <code>toOklch(c)</code>
+    expose components in those spaces, for example <code>toOklch(c).h</code>.
+    CSS literal forms also include HWB, Lab, LCH and Display P3.</p>
+  <p>Colours retain unclamped floating-point XYZ values during calculations.
+    Basic arithmetic is linear. <code>colourSpace</code> chooses the default
+    mixing space: <code>linear-srgb</code> (default), <code>oklab</code> or
+    <code>oklch</code>. A call can override it:
+    <code>mix(a, b, t, "oklch", "shorter")</code>. Hue paths are
+    <code>shorter</code> (default), <code>longer</code>, <code>increasing</code>
+    or <code>decreasing</code>. Rendering and exports currently convert to
+    sRGB and clip at the output; wide-gamut and HDR output are not yet implemented.</p>
+  <pre><code>colourSpace: oklab
+variables:
+  - name: palette
+    type: gradient
+    value:
+      stops:
+        - { position: 0, colour: "#fef3c7" }
+        - { position: 1, colour: "#1e1b4b" }
+      # Optional: space: oklch, hue: shorter
+  - name: tint
+    type: colour
+    value: sample(palette, 0.5)
+
+shading:
+  mode: density
+  colours: palette</code></pre>
+  <p>A gradient is a reusable colour ramp, not a spatial fill.
+    Stops have distinct positions from 0 to 1 and colours may be expressions.
+    <code>sample(ramp, t)</code> returns a colour, clamping beyond the end stops.
+    Density shading can use a gradient expression with at most eight stops;
+    positions follow the scaled, normalised density. Existing absolute hit-count
+    and percentage stop mappings remain available. Linear/radial shape fills
+    are deferred; a shape can use a sampled gradient as its solid colour.</p>
 </section>
 
 <section id="guide-inputs">
@@ -611,9 +673,9 @@ scene:
       - [base.bottomRight, [apex.x, apex.y]]</code></pre>
   <p>
     The <em>Triangle to Fern</em> example uses a slider from 0 to 1 to blend two
-    pictures. Expressions of the form <code>(1 - mix) * start + mix * end</code>
+    pictures. Expressions of the form <code>(1 - transition) * start + transition * end</code>
     interpolate each zoom's scale, translation and rotation. The stem's opacity
-    and length follow <code>mix</code>. The stem and faint seed change colour
+    and length follow <code>transition</code>. The stem and faint seed change colour
     from black to green.
     The view stays fixed throughout the transition, with the fern centred.
     Zero-size zoom glows keep fine detail bold, changing from black to green
@@ -625,6 +687,7 @@ scene:
     <tr><th><code>click</code></th><td>a point, moved to wherever the picture is clicked</td></tr>
     <tr><th><code>drag</code></th><td>a point that follows the pointer while the button is held down</td></tr>
     <tr><th><code>checkbox</code></th><td>a value of <code>true</code> or <code>false</code>, switched by ticking a box</td></tr>
+    <tr><th><code>choice</code></th><td>a dropdown of <code>options</code>, each with <code>name</code> and <code>value</code>. Values must have the same type and the default must match an option. Choices can hold gradients as well as scalar values.</td></tr>
   </table>
   <ul>
     <li>
@@ -632,10 +695,12 @@ scene:
       <code>apex.x</code> and <code>apex.y</code>.
     </li>
     <li>
-      Any variable may be <code>true</code> or <code>false</code>, which count as 1 and 0 in
-      expressions. For example, <code>opacity: mix * showStem</code> hides a shape when
+      Any variable may be <code>true</code> or <code>false</code>. Convert explicitly
+      with <code>number()</code>. For example, <code>opacity: transition * number(showStem)</code> hides a shape when
       <code>showStem</code> is false.
     </li>
+    <li><code>type: integer</code> constrains a numeric variable to whole numbers.
+      Integer sliders require integer bounds and step, with step defaulting to 1.</li>
     <li>
       With more than one point, pressing the picture moves the nearest one. Write
       <code>input: drag</code> as a shortcut for <code>input: { type: drag }</code>.
@@ -650,6 +715,15 @@ scene:
       definition is loaded, unless it is a shared link that includes them.
     </li>
   </ul>
+  <pre><code>variables:
+  - name: tint
+    type: colour
+    value: red
+    input:
+      type: choice
+      options:
+        - { name: Warm, value: red }
+        - { name: Cool, value: blue }</code></pre>
 </section>
 
 <section id="guide-values">

@@ -1240,6 +1240,22 @@ function applyDefinition(
 ): boolean {
   window.clearTimeout(definitionEditTimer);
   try {
+    if (keepPicture && pendingEditorInputValues === null && inputValues.size) {
+      const defaults = parseScene(text);
+      inputValues = new Map(defaults.inputs.flatMap((input): [string, InputValue][] => {
+        const previous = state.scene.inputs.find((candidate) => candidate.name === input.name);
+        const value = inputValues.get(input.name);
+        if (!previous || value === undefined) return [];
+        if (isPointInput(input) && isPointInput(previous)) return [[input.name, value]];
+        if (input.type !== previous.type) return [];
+        if (input.type === 'choice' && previous.type === 'choice') {
+          const selected = typeof value === 'number' ? previous.options[value]?.name : undefined;
+          const index = input.options.findIndex((option) => option.name === selected);
+          return index < 0 ? [] : [[input.name, index]];
+        }
+        return [[input.name, value]];
+      }));
+    }
     const nextScene = parseScene(text, inputValues);
     // Info only changes the label, so the current picture can stay.
     const pictureChanged = JSON.stringify({ ...state.scene, info: null }) !== JSON.stringify({ ...nextScene, info: null });
@@ -1440,6 +1456,8 @@ const formatInputNumber = (value: number) => String(Number(value.toPrecision(4))
 
 const describeInputValue = (input: SceneInput) => input.type === 'slider'
   ? formatInputNumber(input.value)
+  : input.type === 'choice'
+    ? input.options[input.value].name
   : input.type === 'checkbox'
     ? ''
     : `(${formatInputNumber(input.value.x)}, ${formatInputNumber(input.value.y)})`;
@@ -1450,6 +1468,7 @@ const isPointInput = (input: SceneInput): input is PointInput => input.type === 
 const inputReadouts = new Map<string, HTMLOutputElement[]>();
 const inputSliders = new Map<string, HTMLInputElement[]>();
 const inputCheckboxes = new Map<string, HTMLInputElement[]>();
+const inputChoices = new Map<string, HTMLSelectElement[]>();
 const inputError = labelElement('p', 'input-error', '');
 const inputReset = document.createElement('button');
 inputReset.type = 'button';
@@ -1464,6 +1483,7 @@ function buildInputPanel() {
   inputReadouts.clear();
   inputSliders.clear();
   inputCheckboxes.clear();
+  inputChoices.clear();
   const panelControls = new Map<string, HTMLElement>();
   const remember = <T extends HTMLElement>(map: Map<string, T[]>, name: string, element: T) =>
     map.set(name, [...(map.get(name) ?? []), element]);
@@ -1484,7 +1504,19 @@ function buildInputPanel() {
       const readout = document.createElement('output');
       remember(inputReadouts, input.name, readout);
       row.append(labelElement('span', 'input-name', input.label), readout);
-      if (input.type === 'slider') {
+      if (input.type === 'choice') {
+        const choice = document.createElement('select');
+        choice.name = input.name;
+        input.options.forEach((option, index) => {
+          const element = document.createElement('option');
+          element.value = String(index);
+          element.textContent = option.name;
+          choice.append(element);
+        });
+        choice.addEventListener('change', () => setInputValue(input.name, Number(choice.value), true));
+        remember(inputChoices, input.name, choice);
+        row.append(choice);
+      } else if (input.type === 'slider') {
         const slider = document.createElement('input');
         slider.type = 'range';
         slider.name = input.name;
@@ -1517,6 +1549,7 @@ function refreshInputPanel() {
       return;
     }
     inputReadouts.get(input.name)!.forEach((readout) => { readout.textContent = describeInputValue(input); });
+    if (input.type === 'choice') inputChoices.get(input.name)!.forEach((choice) => { choice.value = String(input.value); });
     if (input.type === 'slider') {
       inputSliders.get(input.name)?.forEach((slider) => {
         if (Number(slider.value) !== input.value) slider.value = String(input.value);
