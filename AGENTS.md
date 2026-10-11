@@ -216,7 +216,12 @@ files unless extracting a module clearly reduces complexity.
   Gradients contain stops (position 0..1, colour), optional space and hue
   (shorter/longer/increasing/decreasing), clamp at ends and support `sample`.
   Density accepts reusable ramps (max 8 stops), interpolated in the shader.
-  Spatial gradient fills, wide-gamut output and HDR output remain deferred.
+  Shapes accept `colour: { gradient: linear|radial, colours, ... }`, with a
+  reusable ramp expression or inline colour stops (max 8). Linear uses angle
+  or from/to; radial uses centre/radius. Defaults fit the shape's own box.
+  Source gradient coordinates survive exact clipping and recursive transforms.
+  Density and shape fills share shader interpolation, including alpha and hue.
+  Conic/repeating fills, wide-gamut output and HDR output remain deferred.
 - Choice inputs use `options: [{ name, value }]`, same-type values with unique
   labels and a matching default. Runtime/share values store the option index,
   while expression lookup returns the selected typed value. Both live input

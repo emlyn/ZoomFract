@@ -652,13 +652,48 @@ variables:
 shading:
   mode: density
   colours: palette</code></pre>
-  <p>A gradient is a reusable colour ramp, not a spatial fill.
+  <p>A gradient variable is a reusable colour ramp. Shapes can apply it as a
+    linear or radial fill:
+  </p>
+  <pre><code>colour:
+  gradient: linear
+  colours: palette
+  angle: 45             # clockwise degrees; 0 runs left to right
+
+colour:
+  gradient: radial
+  colours: [white, blue]
+  centre: [0, 0]        # optional, in scene units
+  radius: 0.5           # optional, in scene units</code></pre>
+  <p>The Visual editor's Colour format selects Solid or Gradient, then the
+    gradient kind and either a gradient variable or inline stops. Fill ramps
+    support two to eight stops, including percentage-positioned stops such as
+    <code>{0%: red, 60%: yellow, 100%: blue}</code>. They use the ramp's mixing
+    space, or the definition's <code>colourSpace</code> for inline stops.
+    Each stop can include alpha, for example <code>rgba(255, 0, 0, 0.5)</code>
+    or <code>#ff000080</code>. The Visual editor shows an editable
+    <strong>Opacity (%)</strong> control for literal stop colours; for colour
+    expressions, edit alpha in the expression itself. Shape opacity multiplies
+    the whole fill's opacity.
+    Colours and alpha interpolate together; positions outside the stops clamp
+    to the first or last colour.</p>
+  <p>Linear fills default to left-to-right across the shape's own box. An
+    <code>angle</code> turns that direction clockwise; alternatively, specify
+    both <code>from</code> and <code>to</code> points, including named shape parts.
+    Do not combine endpoints and an angle. Radial fills default to an ellipse
+    centred in and fitted to the shape's box; an explicit positive
+    <code>radius</code> makes it circular. Rectangles use their rotated box,
+    circles their diameter, and polygons their bounding box. The fill rotates
+    and scales with recursive copies. Conic and repeating fills are not yet
+    supported. PowerPoint currently exports a gradient shape using its first
+    stop colour and warns about this; cached zoom pictures retain the fill.</p>
+  <p>
     Stops have distinct positions from 0 to 1 and colours may be expressions.
     <code>sample(ramp, t)</code> returns a colour, clamping beyond the end stops.
     Density shading can use a gradient expression with at most eight stops;
     positions follow the scaled, normalised density. Existing absolute hit-count
-    and percentage stop mappings remain available. Linear/radial shape fills
-    are deferred; a shape can use a sampled gradient as its solid colour.</p>
+    and percentage stop mappings remain available. A shape can also use a
+    sampled gradient as its solid colour.</p>
 </section>
 
 <section id="guide-inputs">
@@ -930,33 +965,18 @@ scene:
     centre: [0, 0]
     radius: 0.4</code></pre>
 
-  <h4>Gradients</h4>
-  <p>Any colour of a shape can be a gradient instead:</p>
+  <h4>More gradient fills</h4>
+  <p>Linear and radial fills are available now. Conic fills and repeating ramps
+    are planned:</p>
   <pre><code>colour:
-  gradient: linear         # linear, radial or conic
-  from: block.left
-  to: block.right
-  colours: [red, "#fde047", blue]
-
-colour:
-  gradient: radial
-  centre: block.centre
-  radius: 1
-  colours:
-    0%: white
-    70%: "#93c5fd"
-    100%: "#1e3a8a"
-
-colour:
   gradient: conic
   centre: [0, 0]
   angle: 90
   colours: [red, yellow, lime, cyan, blue, magenta, red]
   repeat: mirror           # none, repeat or mirror</code></pre>
   <p>
-    <code>colours</code> is written like the density shading colours. Without
-    <code>from</code> and <code>to</code> (or <code>centre</code>), a gradient spans the
-    shape's own box, so it turns and shrinks with it in every copy.
+    Conic fills turn around a centre. Repeating ramps will support
+    <code>none</code>, <code>repeat</code> and <code>mirror</code>.
   </p>
 
   <h4>Zooms</h4>

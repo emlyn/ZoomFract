@@ -1376,6 +1376,14 @@ canvas {
   grid-template-columns: minmax(0, 1fr) 2.5rem;
 }
 
+.definition-stop-opacity {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .definition-suggested-value {
   position: relative;
 }

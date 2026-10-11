@@ -100,6 +100,7 @@ const GEOMETRY: Record<string, Shape> = {
 // Align items may be pairs or, for a single pair written as a list, points.
 const ALIGN_ITEM: Shape = { keys: { from: POINT, to: POINT, ...leaves('x', 'y') } };
 const ALIGN: Shape = { keys: { from: POINT, to: POINT }, items: ALIGN_ITEM };
+const SHAPE_COLOUR: Shape = { keys: { ...leaves('gradient', 'colours', 'angle', 'radius'), from: POINT, to: POINT, centre: POINT } };
 
 const DEFINITION: Shape = {
   keys: {
@@ -129,9 +130,9 @@ const DEFINITION: Shape = {
       items: {
         byType: {
           // Scale and align are listed so rectangles get a specific error.
-          rect: { keys: { ...GEOMETRY, ...leaves('colour', 'weight', 'scale', 'align') } },
-          circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'colour', 'weight', 'opacity', 'transparency'), points: POINT_LIST } },
-          polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'colour', 'weight', 'opacity', 'transparency'), points: POINT_LIST, vertex: POINT } },
+          rect: { keys: { ...GEOMETRY, ...leaves('weight', 'scale', 'align'), colour: SHAPE_COLOUR } },
+          circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST } },
+          polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, vertex: POINT } },
           zoom: { keys: { ...GEOMETRY, ...leaves('scale', 'blend'), align: ALIGN } },
         },
       },
@@ -217,6 +218,13 @@ type SceneElement = {
   glow?: Glow;
 };
 
+export type ShapeFill = {
+  kind: 'linear' | 'radial';
+  ramp: GradientValue;
+  // Scene coordinates to gradient coordinates.
+  mapping: [number, number, number, number, number, number];
+};
+
 export type RectElement = SceneElement & {
   kind: 'rect';
   center: Vec2;
@@ -224,6 +232,7 @@ export type RectElement = SceneElement & {
   height: number;
   rotation: number;
   color: string;
+  fill?: ShapeFill;
   opacity: number;
   // Hits added per covered pixel in density shading.
   weight: number;
@@ -235,6 +244,7 @@ export type CircleElement = SceneElement & {
   radius: number;
   sourcePoints?: Vec2[];
   color: string;
+  fill?: ShapeFill;
   opacity: number;
   weight: number;
 };
@@ -243,6 +253,7 @@ export type PolygonElement = SceneElement & {
   kind: 'polygon';
   points: Vec2[];
   color: string;
+  fill?: ShapeFill;
   opacity: number;
   weight: number;
 };
@@ -340,26 +351,31 @@ function parseStopPosition(key: string): ColorStop['at'] {
 // Colours are a list spread evenly, or a mapping from hit counts or
 // percentages to colours.
 function parseColorStops(colors: unknown, variables: Variables): ColorStop[] {
-  const path = ['shading', 'colours'];
+  return readColorStops(colors, ['shading', 'colours'], (color) => asColour(color, '', variables));
+}
+
+function readColorStops<T>(colors: unknown, path: ScenePath, read: (color: unknown) => T): { at: ColorStop['at']; color: T }[] {
   const range = `2 to ${MAXIMUM_DENSITY_COLORS}`;
+  const label = path[0] === 'shading' ? 'shading colours' : 'gradient colours';
   if (Array.isArray(colors)) {
     if (colors.length < 2 || colors.length > MAXIMUM_DENSITY_COLORS || !colors.every((color) => typeof color === 'string')) {
-      throw new Error(`shading colours must be a list of ${range} colours`);
+      throw new Error(`${label} must be a list of ${range} colours`);
     }
-    return evenStops(colors.map((color, index) => atPath([...path, index], () => asColour(color, '', variables))));
+    return colors.map((color, index) => ({ at: { kind: 'fraction' as const, value: index / (colors.length - 1) },
+      color: atPath([...path, index], () => read(color)) }));
   }
   if (!colors || typeof colors !== 'object') {
-    throw new Error(`shading colours must be a list or mapping of ${range} colours`);
+    throw new Error(`${label} must be a list or mapping of ${range} colours`);
   }
   const entries = Object.entries(colors);
   if (entries.length < 2 || entries.length > MAXIMUM_DENSITY_COLORS) {
-    throw new Error(`shading colours must map ${range} positions to colours`);
+    throw new Error(`${label} must map ${range} positions to colours`);
   }
   return entries.map(([key, color]) => atPath([...path, key], () => {
     if (typeof color !== 'string') {
-      throw new Error(`shading colours position "${key}" must have a colour`);
+      throw new Error(`${label} position "${key}" must have a colour`);
     }
-    return { at: parseStopPosition(key), color: asColour(color, '', variables) };
+    return { at: parseStopPosition(key), color: read(color) };
   }));
 }
 
@@ -1447,6 +1463,72 @@ function parseGlow(
   };
 }
 
+function shapeColour(
+  value: unknown, geometry: { center: Vec2; width: number; height: number; rotation: number },
+  resolvePoint: PointResolver, variables: Variables, path: ScenePath, name?: string,
+): { color: string; fill?: ShapeFill } {
+  if (!isRecord(value)) return { color: asColour(value, '#000', variables) };
+  const at = <T>(key: string, compute: () => T) => atPath([...path, key], compute);
+  const kind = at('gradient', () => enumValue(value.gradient, ['linear', 'radial'] as const, 'linear', variables));
+  if (value.gradient === undefined) throw new PathError('A gradient fill needs gradient: linear or radial', [...path, 'gradient']);
+  const ramp = at('colours', () => {
+    if (typeof value.colours === 'string') {
+      const ramp = evaluateValue(value.colours, variables);
+      if (!isGradient(ramp)) throw new Error('Fill colours must be a gradient expression or a list of colours');
+      if (ramp.stops.length > MAXIMUM_DENSITY_COLORS) throw new Error('Shape gradients support at most eight stops');
+      return ramp;
+    }
+    const stops = readColorStops(value.colours, [...path, 'colours'],
+      (color) => colourValue(readVariableValue(color, 'colour', variables, variables.space ?? 'linear-srgb')));
+    if (stops.some((stop) => stop.at.kind !== 'fraction')) throw new Error('Shape gradient stop positions must be percentages');
+    return makeGradient(stops.map((stop) => ({ position: stop.at.value, colour: stop.color })),
+      variables.space ?? 'linear-srgb', 'shorter');
+  });
+  const point = (key: string): Vec2 | undefined => at(key, () => {
+    if (value[key] === undefined) return undefined;
+    if (name && typeof value[key] === 'string') {
+      const [target, part, extra] = value[key].split('.');
+      if (target === name && isPointPart(part) && extra === undefined) return rectPoint(geometry, part);
+    }
+    const point = resolvePoint(value[key], `Gradient ${key}`);
+    if (!point) throw new Error(`Gradient ${key} must be a point`);
+    return point;
+  });
+  const c = Math.cos(geometry.rotation), s = Math.sin(geometry.rotation);
+  const toScene = (x: number, y: number): Vec2 => ({
+    x: geometry.center.x + c * x - s * y, y: geometry.center.y + s * x + c * y,
+  });
+  let mapping: ShapeFill['mapping'];
+  if (kind === 'linear') {
+    if (value.centre !== undefined || value.radius !== undefined) throw new Error('Linear gradients do not use centre or radius');
+    if (value.angle !== undefined && (value.from !== undefined || value.to !== undefined)) throw new Error('Use an angle or from/to for a linear gradient, not both');
+    let from = point('from'), to = point('to');
+    if (!!from !== !!to) throw new Error('A linear gradient needs both from and to');
+    if (!from || !to) {
+      const angle = at('angle', () => parseRotation(value.angle ?? 0, variables)) ?? 0;
+      const dx = Math.cos(angle), dy = Math.sin(angle);
+      const span = Math.abs(dx) * geometry.width + Math.abs(dy) * geometry.height;
+      from = toScene(-dx * span / 2, -dy * span / 2);
+      to = toScene(dx * span / 2, dy * span / 2);
+    }
+    const dx = to.x - from.x, dy = to.y - from.y, length2 = dx * dx + dy * dy;
+    if (length2 <= 1e-20) throw new Error('Linear gradient endpoints must be distinct');
+    mapping = [dx / length2, 0, dy / length2, 0, -(from.x * dx + from.y * dy) / length2, 0];
+  } else {
+    if (value.from !== undefined || value.to !== undefined || value.angle !== undefined) throw new Error('Radial gradients use centre and radius, not from/to or angle');
+    const centre = point('centre') ?? geometry.center;
+    const radius = value.radius === undefined ? undefined : at('radius', () => {
+      const radius = asPositiveNumber(value.radius, variables);
+      if (!radius) throw new Error('Radial gradient radius must be positive');
+      return radius;
+    });
+    const rx = radius ?? geometry.width / 2, ry = radius ?? geometry.height / 2;
+    if (!(rx > 0 && ry > 0)) throw new Error('Radial gradient radius must be positive');
+    mapping = [c / rx, -s / ry, s / rx, c / ry, -(c * centre.x + s * centre.y) / rx, (s * centre.x - c * centre.y) / ry];
+  }
+  return { color: colourCss(ramp.stops[0].colour), fill: { kind, ramp, mapping } };
+}
+
 function parseRectElement(
   rect: Record<string, unknown>,
   name: string | undefined,
@@ -1476,14 +1558,14 @@ function parseRectElement(
   }
   const geometry = resolveRectGeometry(rect, resolvePoint, elementName, variables, path);
   const opacity = parseOpacity(rect, 1, variables, path);
-  const color = at('colour', () => asColour(rect.colour, '#000', variables));
+  const style = at('colour', () => shapeColour(rect.colour, geometry, resolvePoint, variables, [...path, 'colour'], name));
 
   return {
     kind: 'rect',
     name,
     glow: at('glow', () => parseGlow(rect.glow, elementName, variables, density, [...path, 'glow'], false)),
     ...geometry,
-    color,
+    ...style,
     opacity,
     weight,
   };
@@ -1497,7 +1579,7 @@ function parseShapeStyle<K extends 'circle' | 'polygon'>(
   variables: Variables,
   density: boolean,
   path: ScenePath,
-): { kind: K; name: string | undefined; color: string; opacity: number; weight: number } {
+): { kind: K; name: string | undefined; opacity: number; weight: number } {
   if (density && (record.colour !== undefined || record.opacity !== undefined || record.transparency !== undefined)) {
     const key = record.colour !== undefined ? 'colour' : record.opacity !== undefined ? 'opacity' : 'transparency';
     throw new PathError(
@@ -1515,7 +1597,6 @@ function parseShapeStyle<K extends 'circle' | 'polygon'>(
   return {
     kind,
     name,
-    color: atPath([...path, 'colour'], () => asColour(record.colour, '#000', variables)),
     opacity: parseOpacity(record, 1, variables, path),
     weight,
   };
@@ -1599,6 +1680,8 @@ function parseCircleElement(
   }
   return {
     ...parseShapeStyle(record, name, 'circle', elementName, variables, density, path),
+    ...atPath([...path, 'colour'], () => shapeColour(record.colour, { center, width: 2 * radius, height: 2 * radius, rotation: 0 },
+      resolvePoint, variables, [...path, 'colour'], name)),
     center,
     radius,
     ...(sourcePoints ? { sourcePoints } : {}),
@@ -1641,8 +1724,13 @@ function parsePolygonElement(
       y: center.y + radius * Math.sin(angle + index * Math.PI * 2 / sides),
     }));
   }
+  const left = Math.min(...points.map((point) => point.x)), right = Math.max(...points.map((point) => point.x));
+  const bottom = Math.min(...points.map((point) => point.y)), top = Math.max(...points.map((point) => point.y));
   return {
     ...parseShapeStyle(record, name, 'polygon', elementName, variables, density, path),
+    ...atPath([...path, 'colour'], () => shapeColour(record.colour,
+      { center: { x: (left + right) / 2, y: (bottom + top) / 2 }, width: right - left, height: top - bottom, rotation: 0 },
+      resolvePoint, variables, [...path, 'colour'], name)),
     points,
   };
 }

@@ -205,7 +205,9 @@ export type PowerPointLimit = { text: string; color?: string };
 function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
   const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
   const drawsItself = scene.elements.some((element) =>
-    (element.kind !== 'zoom' && visible(element.color, element.opacity))
+    (element.kind !== 'zoom' && (element.fill
+      ? element.opacity > 0 && element.fill.ramp.stops.some((stop) => stop.colour.a > 0)
+      : visible(element.color, element.opacity)))
     || (element.glow !== undefined && visible(element.glow.color, element.glow.opacity)));
   if (drawsItself || zooms.length === 0 || !visible(scene.seed.color, scene.seed.opacity)) {
     return null;
@@ -221,6 +223,9 @@ function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
 export function powerPointLimits(scene: SceneDefinition): PowerPointLimit[] {
   const zooms = scene.elements.filter((element) => element.kind === 'zoom' && element.opacity > 0);
   return [
+    scene.elements.some((element) => element.kind !== 'zoom' && element.fill)
+      ? { text: 'Gradient shape fills use their first stop colour in PowerPoint; cached zoom pictures retain the gradient' }
+      : null,
     scene.shading.mode === 'density' ? { text: 'Density shading is not available, so shapes are drawn in black' } : null,
     zooms.some((zoom) => zoom.opacity < 1) ? { text: 'Zoom opacity is ignored' } : null,
     zooms.some((zoom) => zoom.kind === 'zoom' && zoom.blend !== 'normal')

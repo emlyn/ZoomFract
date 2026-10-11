@@ -174,6 +174,46 @@ const glowFieldIndexes = Array.from({ length: MAXIMUM_ZOOM_GLOW_FIELDS }, (_, in
 // Blended copies read what is below them from this texture unit.
 const BACKDROP_UNIT = MAXIMUM_ZOOM_GLOW_FIELDS + 1;
 const COMPARE_UNIT = BACKDROP_UNIT + 1;
+const FILL_UNIT = COMPARE_UNIT + 1;
+
+const RAMP_SHADER = `
+vec4 gradient(float t, int stopCount, vec4 stops[${MAXIMUM_DENSITY_COLORS}], float positions[${MAXIMUM_DENSITY_COLORS}], int rampSpace, int rampHue) {
+  vec4 color = stops[0];
+  for (int i = 1; i < stopCount; i++) {
+    float start = positions[i - 1];
+    float span = positions[i] - start;
+    vec4 previous = stops[i - 1];
+    vec4 next = stops[i];
+    if (rampSpace == 2) {
+      if (previous.y < 1e-7) previous.z = next.z;
+      if (next.y < 1e-7) next.z = previous.z;
+      float increasing = mod(next.z - previous.z + 720.0, 360.0);
+      float shorter = increasing > 180.0 ? increasing - 360.0 : increasing;
+      float difference = rampHue == 2 ? increasing : rampHue == 3 ? (increasing == 0.0 ? 0.0 : increasing - 360.0)
+        : rampHue == 1 ? (shorter >= 0.0 ? shorter - 360.0 : shorter + 360.0) : shorter;
+      next.z = previous.z + difference;
+    }
+    color = t <= start ? color : span <= 0.0 ? next : mix(previous, next, min((t - start) / span, 1.0));
+  }
+  if (rampSpace >= 0) {
+    vec3 linear = color.rgb;
+    if (rampSpace > 0) {
+      if (rampSpace == 2) linear = vec3(linear.x, linear.y * cos(radians(linear.z)), linear.y * sin(radians(linear.z)));
+      vec3 lms = vec3(linear.x + 0.3963377774 * linear.y + 0.2158037573 * linear.z,
+        linear.x - 0.1055613458 * linear.y - 0.0638541728 * linear.z,
+        linear.x - 0.0894841775 * linear.y - 1.291485548 * linear.z);
+      lms = lms * lms * lms;
+      linear = vec3(dot(lms, vec3(4.0767416621, -3.3077115913, 0.2309699292)),
+        dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
+        dot(lms, vec3(-0.0041960863, -0.7034186147, 1.707614701)));
+    }
+    vec3 encoded = mix(12.92 * linear, 1.055 * pow(max(linear, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
+      step(vec3(0.0031308), linear));
+    color.a = clamp(color.a, 0.0, 1.0);
+    color.rgb = clamp(encoded, 0.0, 1.0) * color.a;
+  }
+  return color;
+}`;
 
 // Rectangle glows are worked out from the distance to the rectangle: the
 // shape is grown, then blurred over the rest of the glow size. Full softness
@@ -186,6 +226,7 @@ uniform sampler2D source;
 // Glow masks keep coverage in the red channel alone.
 uniform bool singleChannel;
 uniform sampler2D backdrop;
+uniform sampler2D fills;
 uniform int blendMode;
 // Where the backdrop's first texel lies in the framebuffer being drawn.
 uniform ivec2 tileOrigin;
@@ -195,6 +236,19 @@ in vec4 tint;
 in float drawMode;
 in vec4 shapeData;
 out vec4 outColor;
+${RAMP_SHADER}
+vec4 fillColor() {
+  int row = int(shapeData.x + 0.5);
+  vec4 metadata = texelFetch(fills, ivec2(0, row), 0);
+  vec4 stops[${MAXIMUM_DENSITY_COLORS}];
+  float positions[${MAXIMUM_DENSITY_COLORS}];
+  for (int i = 0; i < ${MAXIMUM_DENSITY_COLORS}; i++) {
+    stops[i] = texelFetch(fills, ivec2(1 + i * 2, row), 0);
+    positions[i] = texelFetch(fills, ivec2(2 + i * 2, row), 0).r;
+  }
+  vec4 color = gradient(shapeData.y > 0.5 ? length(uv) : uv.x, int(metadata.x), stops, positions, int(metadata.y), int(metadata.z)) * tint.a;
+  return singleChannel ? vec4(color.a) : color;
+}
 float rectGlow(vec2 local, vec2 halfSize, float size, float softness) {
   float distance = length(max(abs(local) - halfSize, 0.0));
   // At least half a pixel keeps hard glows antialiased.
@@ -223,7 +277,7 @@ void main() {
     ? tint * mix(vec4(1.0), sampled, drawMode)
     : drawMode < 2.5
       ? tint * rectGlow(uv, shapeData.xy, shapeData.z, shapeData.w)
-      : tint * zoomGlow(int(shapeData.x + 0.5), uv);
+      : drawMode < 3.5 ? tint * zoomGlow(int(shapeData.x + 0.5), uv) : fillColor();
   outColor = blendMode == 0 ? color : blendOver(color, texelFetch(backdrop, ivec2(gl_FragCoord.xy) - tileOrigin, 0));
 }`;
 
@@ -438,43 +492,7 @@ out vec4 outColor;
 float shape(float count) {
   return scale == 0 ? log(1.0 + count) : scale == 1 ? sqrt(count) : count;
 }
-vec4 gradient(float t) {
-  vec4 color = stops[0];
-  for (int i = 1; i < stopCount; i++) {
-    float start = positions[i - 1];
-    float span = positions[i] - start;
-    vec4 previous = stops[i - 1];
-    vec4 next = stops[i];
-    if (rampSpace == 2) {
-      if (previous.y < 1e-7) previous.z = next.z;
-      if (next.y < 1e-7) next.z = previous.z;
-      float increasing = mod(next.z - previous.z + 720.0, 360.0);
-      float shorter = increasing > 180.0 ? increasing - 360.0 : increasing;
-      float difference = rampHue == 2 ? increasing : rampHue == 3 ? (increasing == 0.0 ? 0.0 : increasing - 360.0)
-        : rampHue == 1 ? (shorter >= 0.0 ? shorter - 360.0 : shorter + 360.0) : shorter;
-      next.z = previous.z + difference;
-    }
-    color = t <= start ? color : span <= 0.0 ? next : mix(previous, next, min((t - start) / span, 1.0));
-  }
-  if (rampSpace >= 0) {
-    vec3 linear = color.rgb;
-    if (rampSpace > 0) {
-      if (rampSpace == 2) linear = vec3(linear.x, linear.y * cos(radians(linear.z)), linear.y * sin(radians(linear.z)));
-      vec3 lms = vec3(linear.x + 0.3963377774 * linear.y + 0.2158037573 * linear.z,
-        linear.x - 0.1055613458 * linear.y - 0.0638541728 * linear.z,
-        linear.x - 0.0894841775 * linear.y - 1.291485548 * linear.z);
-      lms = lms * lms * lms;
-      linear = vec3(dot(lms, vec3(4.0767416621, -3.3077115913, 0.2309699292)),
-        dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
-        dot(lms, vec3(-0.0041960863, -0.7034186147, 1.707614701)));
-    }
-    vec3 encoded = mix(12.92 * linear, 1.055 * pow(max(linear, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
-      step(vec3(0.0031308), linear));
-    color.a = clamp(color.a, 0.0, 1.0);
-    color.rgb = clamp(encoded, 0.0, 1.0) * color.a;
-  }
-  return color;
-}
+${RAMP_SHADER}
 void main() {
   ivec2 origin = ivec2(gl_FragCoord.xy) * factor;
   vec4 total = vec4(0.0);
@@ -482,7 +500,7 @@ void main() {
     for (int x = 0; x < factor; x++) {
       float count = texelFetch(source, origin + ivec2(x, y), 0).r;
       if (count > 0.0) {
-        total += gradient(shape(count) / shape(normaliser)) * min(count, 1.0);
+        total += gradient(shape(count) / shape(normaliser), stopCount, stops, positions, rampSpace, rampHue) * min(count, 1.0);
       }
     }
   }
@@ -681,7 +699,7 @@ function drawWebgl(
   // and drawn to.
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.disable(gl.BLEND);
-  for (let unit = 0; unit <= COMPARE_UNIT; unit += 1) {
+  for (let unit = 0; unit <= FILL_UNIT; unit += 1) {
     gl.activeTexture(gl.TEXTURE0 + unit);
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
@@ -754,6 +772,7 @@ function drawWebgl(
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'source'), 0);
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
+  gl.uniform1i(gl.getUniformLocation(sceneProgram, 'fills'), FILL_UNIT);
   const blendModeLocation = gl.getUniformLocation(sceneProgram, 'blendMode');
   const tileOriginLocation = gl.getUniformLocation(sceneProgram, 'tileOrigin');
   const levelFramebuffer = newFramebuffer();
@@ -983,6 +1002,31 @@ function drawWebgl(
   };
 
   const seedColor = parseColor(scene.seed.color);
+  const fillIndexes = new Map<number, number>();
+  scene.elements.forEach((element, index) => {
+    if (element.kind !== 'zoom' && element.fill) fillIndexes.set(index, fillIndexes.size);
+  });
+  const fillData = new Float32Array(Math.max(1, fillIndexes.size) * 17 * 4);
+  scene.elements.forEach((element, index) => {
+    if (element.kind === 'zoom' || !element.fill) return;
+    const row = fillIndexes.get(index)!;
+    const { ramp } = element.fill;
+    fillData.set([ramp.stops.length, ['linear-srgb', 'oklab', 'oklch'].indexOf(ramp.space),
+      ['shorter', 'longer', 'increasing', 'decreasing'].indexOf(ramp.hue), 0], row * 17 * 4);
+    ramp.stops.forEach((stop, i) => {
+      fillData.set(rampColor(ramp, stop.colour), (row * 17 + 1 + i * 2) * 4);
+      fillData[(row * 17 + 2 + i * 2) * 4] = stop.position;
+    });
+  });
+  if (fillIndexes.size > maximumSize) throw new Error('Too many gradient fills for the device texture limit');
+  const fills = gl.createTexture()!;
+  owned.push(() => gl.deleteTexture(fills));
+  gl.activeTexture(gl.TEXTURE0 + FILL_UNIT);
+  gl.bindTexture(gl.TEXTURE_2D, fills);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 17, Math.max(1, fillIndexes.size), 0, gl.RGBA, gl.FLOAT, fillData);
+  gl.activeTexture(gl.TEXTURE0);
   const shapeColors = scene.elements.map((element) => element.kind !== 'zoom' ? parseColor(element.color) : null);
   const glowColors = scene.elements.map((element) => element.glow
     ? premultiplied(parseColor(element.glow.color), element.glow.opacity)
@@ -1058,6 +1102,12 @@ function drawWebgl(
     const seedAlpha = seedColor[3] * scene.seed.opacity;
     for (const item of items) {
       if (item.kind === 'shape') {
+        const element = scene.elements[item.elementIndex];
+        if (element.kind !== 'zoom' && element.fill) {
+          pushPolygon(vertices, item.polygon, item.texCoords ?? null, [0, 0, 0, item.alpha], 4,
+            [fillIndexes.get(item.elementIndex)!, element.fill.kind === 'radial' ? 1 : 0, 0, 0]);
+          continue;
+        }
         const coverage = shapeColors[item.elementIndex]![3] * item.alpha;
         pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
       } else if (item.kind === 'leaf' && sampleSource) {
@@ -1095,7 +1145,11 @@ function drawWebgl(
 
   const pushItem = (vertices: number[], item: UnrolledItem, sampleSource: boolean) => {
     if (item.kind === 'shape') {
-      pushPolygon(vertices, item.polygon, null, premultiplied(shapeColors[item.elementIndex]!, item.alpha));
+      const element = scene.elements[item.elementIndex];
+      if (element.kind !== 'zoom' && element.fill) {
+        pushPolygon(vertices, item.polygon, item.texCoords ?? null, [0, 0, 0, item.alpha], 4,
+          [fillIndexes.get(item.elementIndex)!, element.fill.kind === 'radial' ? 1 : 0, 0, 0]);
+      } else pushPolygon(vertices, item.polygon, null, premultiplied(shapeColors[item.elementIndex]!, item.alpha));
     } else if (item.kind === 'rectGlow') {
       const element = scene.elements[item.elementIndex];
       if (element.kind !== 'rect') {
@@ -1357,11 +1411,8 @@ function drawWebgl(
   };
 
   const densityColors = density
-    ? shading.ramp ? shading.ramp.stops.map(({ colour }): Rgba => {
-      if (shading.ramp!.space === 'linear-srgb') return [...toLinearRgb(colour), colour.a];
-      const [l, a, b] = toOklab(colour);
-      return shading.ramp!.space === 'oklab' ? [l, a, b, colour.a] : [l, Math.hypot(a, b), Math.atan2(b, a) * 180 / Math.PI, colour.a];
-    }) : shading.colors.map((stop) => premultiplied(parseColor(stop.color), 1))
+    ? shading.ramp ? shading.ramp.stops.map(({ colour }): Rgba => rampColor(shading.ramp!, colour))
+      : shading.colors.map((stop) => premultiplied(parseColor(stop.color), 1))
     : [];
   // Positions along the gradient, where 1 is the normalising count.
   const densityPositions = (scale: keyof typeof DENSITY_SCALES, normaliser: number) => shading.mode === 'density'
@@ -1597,3 +1648,11 @@ function drawWebgl(
   };
 }
 import { toLinearRgb, toOklab } from '../values';
+import type { ColourValue, GradientValue } from '../values';
+
+function rampColor(ramp: GradientValue, colour: ColourValue): Rgba {
+  if (ramp.space === 'linear-srgb') return [...toLinearRgb(colour), colour.a];
+  const [l, a, b] = toOklab(colour);
+  return ramp.space === 'oklab' ? [l, a, b, colour.a]
+    : [l, Math.hypot(a, b), Math.atan2(b, a) * 180 / Math.PI, colour.a];
+}

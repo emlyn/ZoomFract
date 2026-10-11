@@ -57,7 +57,19 @@ const geometry: Fields = {
   }),
   ...opacity,
 };
-const paint: Fields = { colour: colour(), ...opacity, weight: number(1) };
+const shapeColourField = variants('#000000', {
+  Solid: colour(),
+  Gradient: object({
+    gradient: choice('linear', ['linear', 'radial']),
+    colours: variants(['#000000', '#ffffff'], {
+      'Inline stops': list(colour(), ['#000000', '#ffffff']),
+      'Gradient variable': text('palette'),
+      'Positioned stops': object({}, { '0%': '#000000', '100%': '#ffffff' }),
+    }),
+    angle: number(0), from: point, to: point, centre: point, radius: number(1),
+  }, { gradient: 'linear', colours: ['#000000', '#ffffff'] }),
+});
+const paint: Fields = { colour: shapeColourField, ...opacity, weight: number(1) };
 const SHAPES: Record<string, { label: string; field: Field; initial: unknown }> = {
   rect: {
     label: 'Rectangle',
@@ -206,6 +218,30 @@ function colourValue(value: string): { hex: string; alpha: string } | undefined 
   const hex = (part: number) => part.toString(16).padStart(2, '0');
   return { hex: `#${hex(r)}${hex(g)}${hex(b)}`, alpha: a === 255 ? '' : hex(a) };
 }
+
+function stopColour(value: string): { colour: string; opacity: number } | undefined {
+  const current = colourValue(value);
+  if (!current) return undefined;
+  const hex = /^#([a-f\d]{3,4}|[a-f\d]{6}|[a-f\d]{8})$/i.exec(value.trim());
+  if (hex) {
+    const digits = hex[1].length <= 4 ? [...hex[1]].map((digit) => digit + digit).join('') : hex[1];
+    return { colour: `#${digits.slice(0, 6)}`, opacity: digits.length === 8 ? parseInt(digits.slice(6), 16) / 255 : 1 };
+  }
+  const functional = /^(rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color)\((.*)\)$/i.exec(value.trim());
+  if (functional) {
+    const parts = functional[2].replaceAll(',', ' ').replace('/', ' ').trim().split(/\s+/);
+    const channels = functional[1].toLowerCase() === 'color' ? 4 : 3;
+    const alpha = parts[channels];
+    return { colour: `${functional[1]}(${parts.slice(0, channels).join(' ')})`,
+      opacity: alpha === undefined ? 1 : parseFloat(alpha) / (alpha.endsWith('%') ? 100 : 1) };
+  }
+  if (/^[a-z]+$/i.test(value.trim())) return { colour: current.hex, opacity: value.trim().toLowerCase() === 'transparent' ? 0 : 1 };
+  return undefined;
+}
+
+const stopWithOpacity = (colour: string, opacity: number) => colour.startsWith('#')
+  ? `rgba(${[1, 3, 5].map((start) => parseInt(colour.slice(start, start + 2), 16)).join(', ')}, ${opacity})`
+  : colour.replace(/\)$/, ` / ${opacity})`);
 
 export type DefinitionForm = {
   element: HTMLElement;
@@ -470,7 +506,12 @@ export function createDefinitionForm(
         const next = field.variants![selector.value];
         // Changing from colour shorthand to seed settings keeps the colour.
         let replacement = next.initial;
-        if (record(next.initial) && typeof value === 'string' && field.variants?.Colour) {
+        if (field === shapeColourField && selector.value === 'Gradient') {
+          replacement = { gradient: 'linear', colours: [value, '#ffffff'] };
+        } else if (field === shapeColourField && selector.value === 'Solid' && record(value)) {
+          const stops = value.colours ?? value.colors;
+          replacement = Array.isArray(stops) ? stops[0] : '#000000';
+        } else if (record(next.initial) && typeof value === 'string' && field.variants?.Colour) {
           replacement = { ...next.initial, colour: value };
         } else if (typeof next.initial === 'string' && record(value) && field.variants?.Colour) {
           replacement = value.colour ?? value.color ?? next.initial;
@@ -499,13 +540,23 @@ export function createDefinitionForm(
     if (record(value)) {
       const fields = field.fields ?? {};
       const variableFields = path[0] === 'variables';
-      const shown = { ...(variableFields ? Object.fromEntries(Object.entries(fields)
+      const fillFields = path[0] === 'scene' && ['colour', 'color'].includes(String(path[2])) && path.length === 3;
+      const shown = { ...(fillFields && value.gradient === 'linear' && value.from === undefined && value.to === undefined ? { angle: 0 } : {}),
+        ...(variableFields ? Object.fromEntries(Object.entries(fields)
         .filter(([key]) => key !== 'stops').map(([key, spec]) => [key, spec.initial])) : {}),
         ...(record(defaults) ? defaults : {}), ...value };
       Object.entries(shown).forEach(([key, child]) => {
         if (key === 'type' && path[0] === 'scene') return;
         if (!(key in value) && Object.keys(value).some((written) => SPELLINGS[written] === key)) return;
         let spec = fields[SPELLINGS[key] ?? key] ?? (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
+        if (fillFields && (SPELLINGS[key] ?? key) === 'colours' && typeof child === 'string') {
+          const root: unknown = document.toJS();
+          const names = record(root) && Array.isArray(root.variables)
+            ? root.variables.filter(record).filter((variable) => variable.type === 'gradient').map((variable) => String(variable.name)) : [];
+          spec = variants(child, { 'Gradient variable': { ...text(), suggestions: names },
+            'Inline stops': list(colour(), ['#000000', '#ffffff']),
+            'Positioned stops': object({}, { '0%': '#000000', '100%': '#ffffff' }) });
+        }
         if (path[0] === 'variables' && key === 'value') {
           const sourceValue: unknown = document.toJS();
           const variable = path.length === 2 ? value : record(sourceValue) && Array.isArray(sourceValue.variables) ? sourceValue.variables[Number(path[1])] : undefined;
@@ -527,6 +578,11 @@ export function createDefinitionForm(
       const missing = Object.entries(fields).filter(([key]) => {
         if (key === 'opacity' && 'transparency' in value) return false;
         if (key === 'transparency' && 'opacity' in value) return false;
+        if (fillFields) {
+          if (value.gradient === 'linear' && ['centre', 'radius'].includes(key)) return false;
+          if (value.gradient === 'radial' && ['angle', 'from', 'to'].includes(key)) return false;
+          if (key === 'angle' && ('from' in value || 'to' in value)) return false;
+        }
         if (path[0] === 'shading') {
           if (!density && ['scale', 'colours'].includes(key)) return false;
           if (density && key === 'detail') return false;
@@ -541,7 +597,13 @@ export function createDefinitionForm(
         const add = select([['', '+ Add setting'], ...missing.map(([key, spec]): [string, string] => [key, spec.label ?? title(key)])], '', `Add ${label} setting`);
         add.className = 'definition-add';
         add.addEventListener('change', () => {
-          if (add.value) set([...path, add.value], fields[add.value].initial, true);
+          if (fillFields && ['from', 'to'].includes(add.value)) {
+            change(path, () => {
+              document.deleteIn([...path, 'angle']);
+              setNode([...path, 'from'], [-1, 0]);
+              setNode([...path, 'to'], [1, 0]);
+            }, true);
+          } else if (add.value) set([...path, add.value], fields[add.value].initial, true);
         });
         container.append(add);
       } else if (Object.keys(fields).length === 0 && !variableFields) {
@@ -643,7 +705,18 @@ export function createDefinitionForm(
       const input = select([...(optional ? [['', 'Default'] as [string, string]] : []),
         ...choices.map((key): [string, string] => [key, title(key)])], optional && document.getIn(documentPath(path)) === undefined ? '' : current, label);
       input.addEventListener('change', () => {
-        if (optional && input.value === '') {
+        if (path[0] === 'scene' && ['colour', 'color'].includes(String(path[2])) && path[3] === 'gradient') {
+          change(path, () => {
+            setNode(path, input.value);
+            const parent = path.slice(0, -1);
+            const node = document.getIn(parent, true);
+            const fill: unknown = isMap(node) ? node.toJSON() : undefined;
+            const incompatible = input.value === 'linear' ? ['centre', 'radius'] : ['angle', 'from', 'to'];
+            for (const key of record(fill) ? Object.keys(fill) : []) {
+              if (incompatible.includes(SPELLINGS[key] ?? key)) document.deleteIn([...parent, key]);
+            }
+          }, true);
+        } else if (optional && input.value === '') {
           remove(path);
         } else if (path[0] === 'variables' && path.length === 3 && path[2] === 'type') {
           const index = Number(path[1]);
@@ -750,11 +823,45 @@ export function createDefinitionForm(
       refresh();
       input.addEventListener('input', refresh);
       picker.addEventListener('input', () => {
-        input.value = picker.value + (colourValue(input.value)?.alpha ?? '');
+        input.value = gradientStop
+          ? stopWithOpacity(picker.value, stopColour(input.value)?.opacity ?? 1)
+          : picker.value + (colourValue(input.value)?.alpha ?? '');
         set(path, input.value);
       });
       container.classList.add('definition-colour-value');
       container.append(picker);
+      const gradientStop = path.includes('stops')
+        || (path[0] === 'scene' && ['colour', 'color'].includes(String(path[2])) && ['colours', 'colors'].includes(String(path[3])))
+        || (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])));
+      if (gradientStop) {
+        const opacityRow = make('label', 'definition-stop-opacity');
+        const opacityLabel = make('span');
+        opacityLabel.textContent = 'Opacity (%)';
+        const opacity = make('input');
+        opacity.type = 'number';
+        opacity.min = '0';
+        opacity.max = '100';
+        opacity.step = 'any';
+        opacity.setAttribute('aria-label', `${label} opacity (%)`);
+        const refreshOpacity = () => {
+          const current = stopColour(input.value);
+          opacity.disabled = !current;
+          opacity.value = current ? String(Math.round(current.opacity * 10000) / 100) : '';
+          opacity.title = current ? 'Opacity of this gradient stop' : 'Edit alpha in the colour expression above';
+        };
+        refreshOpacity();
+        input.addEventListener('input', refreshOpacity);
+        picker.addEventListener('input', refreshOpacity);
+        opacity.addEventListener('input', () => {
+          const current = stopColour(input.value);
+          if (!current || !opacity.value || !opacity.checkValidity()) return;
+          input.value = stopWithOpacity(current.colour, opacity.valueAsNumber / 100);
+          set(path, input.value);
+          refresh();
+        });
+        opacityRow.append(opacityLabel, opacity);
+        container.append(opacityRow);
+      }
     }
     return container;
   }

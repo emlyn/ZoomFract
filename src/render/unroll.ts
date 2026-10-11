@@ -18,7 +18,7 @@ type ZoomNode = {
 // carries source view coordinates, which extend beyond 0 to 1 by the glow.
 // A leaf's seed covers only the declared view in its copy, not the overflow.
 export type UnrolledItem =
-  | { kind: 'shape'; polygon: Vec2[]; elementIndex: number; alpha: number }
+  | { kind: 'shape'; polygon: Vec2[]; texCoords?: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; seed: Vec2[]; alpha: number; blend: BlendMode }
   | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'zoomGlow'; polygon: Vec2[]; texCoords: Vec2[]; elementIndex: number; alpha: number };
@@ -179,14 +179,17 @@ export function unrollScene(
   });
 
   // Maps unit square coordinates onto an element, from its top-left corner.
-  const elementFrames = elementPolygons.map(([topLeft, topRight, , bottomLeft]): Affine => [
-    topRight.x - topLeft.x,
-    topRight.y - topLeft.y,
-    bottomLeft.x - topLeft.x,
-    bottomLeft.y - topLeft.y,
-    topLeft.x,
-    topLeft.y,
-  ]);
+  const elementFrames = elementPolygons.map(([topLeft, topRight, , bottomLeft], index): Affine => {
+    if (scene.elements[index].kind !== 'rect' && scene.elements[index].kind !== 'zoom') return IDENTITY;
+    return [
+      topRight.x - topLeft.x,
+      topRight.y - topLeft.y,
+      bottomLeft.x - topLeft.x,
+      bottomLeft.y - topLeft.y,
+      topLeft.x,
+      topLeft.y,
+    ];
+  });
   // The element's outline grown outwards by its glow size.
   const glowQuads = scene.elements.map((element, index) => {
     if (!element.glow || (element.kind !== 'rect' && element.kind !== 'zoom')) {
@@ -328,7 +331,15 @@ export function unrollScene(
           node.clip,
         );
         if (polygon.length > 0) {
-          items.push({ kind: 'shape', polygon, elementIndex: index, alpha: node.alpha * element.opacity });
+          const inverse = element.fill ? invertAffine(node.transform) : undefined;
+          const texCoords = element.fill && inverse ? polygon.map((point) => {
+            const pixel = applyAffine(inverse, point);
+            const x = scene.view.coordinates.x.from + pixel.x / width * (scene.view.coordinates.x.to - scene.view.coordinates.x.from);
+            const y = scene.view.coordinates.y.to - pixel.y / height * (scene.view.coordinates.y.to - scene.view.coordinates.y.from);
+            const [a, b, c, d, e, f] = element.fill!.mapping;
+            return { x: a * x + c * y + e, y: b * x + d * y + f };
+          }) : undefined;
+          items.push({ kind: 'shape', polygon, texCoords, elementIndex: index, alpha: node.alpha * element.opacity });
         }
         return;
       }
