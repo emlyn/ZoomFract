@@ -933,7 +933,7 @@ const definitionForm = createDefinitionForm(DEFAULT_SCENE_TEXT, (text) => {
 }, (indices) => {
   editedItems = indices;
   drawEditOverlay();
-}, labelRow, renderSettingsGroup);
+}, labelRow);
 const definitionModes = document.createElement('div');
 definitionModes.className = 'definition-modes';
 definitionModes.setAttribute('role', 'tablist');
@@ -949,7 +949,6 @@ const setDefinitionMode = (mode: 'graphical' | 'yaml') => {
   const changed = definitionMode !== mode;
   definitionMode = mode;
   definitionForm.setActive(mode === 'graphical');
-  if (mode === 'yaml') yamlPanel.prepend(renderSettingsGroup);
   if (mode === 'graphical') definitionForm.setText(sceneEditor.text());
   definitionForm.element.hidden = mode !== 'graphical';
   yamlPanel.hidden = mode !== 'yaml';
@@ -1186,6 +1185,7 @@ window.addEventListener('keydown', (event) => {
 
 controls.append(
   exampleRow,
+  renderSettingsGroup,
   sceneLabelRow,
   definitionModes,
   definitionForm.element,

@@ -142,7 +142,13 @@ const TOP: Fields = {
 };
 const TITLES: Record<string, string> = {
   info: 'Picture information', frame: 'Frame and wall', view: 'View',
-  seed: 'Seed', shading: 'Shading', variables: 'Variables and inputs',
+  seed: 'Starting fill', shading: 'Shading', variables: 'Variables and inputs',
+};
+const DEFAULT_FIELDS: Record<string, unknown> = {
+  info: { title: '', author: '', date: '', description: '' },
+  frame: { width: 12, radius: 6, colour: '#444', wall: '#ddd', background: '#fff', padding: 12, margin: 24 },
+  view: { aspect: 1, overflow: 0, coordinates: { x: [-100, 100], y: [-100, 100] } },
+  shading: { mode: 'paint', detail: 0 },
 };
 const SPELLINGS: Record<string, string> = { color: 'colour', colors: 'colours', center: 'centre' };
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -180,7 +186,6 @@ export function createDefinitionForm(
   onEdit: (text: string) => void,
   onSelection: (indices: number[]) => void,
   frameControl: HTMLElement,
-  renderControl: HTMLElement,
 ): DefinitionForm {
   const root = window.document.createElement('div');
   root.className = 'definition-form';
@@ -231,7 +236,7 @@ export function createDefinitionForm(
   const undo = button('Undo', () => restore(undoStack, redoStack));
   const redo = button('Redo', () => restore(redoStack, undoStack));
   toolbar.append(undo, redo);
-  root.append(toolbar, error, renderControl, body);
+  root.append(toolbar, error, body);
 
   function restore(from: string[], to: string[]) {
     const next = from.pop();
@@ -322,7 +327,7 @@ export function createDefinitionForm(
     return element;
   }
 
-  function fieldEditor(field: Field, value: unknown, path: Path, label: string): HTMLElement {
+  function fieldEditor(field: Field, value: unknown, path: Path, label: string, defaults?: unknown): HTMLElement {
     const container = make('div', 'definition-value');
     container.setAttribute('role', 'group');
     container.setAttribute('aria-label', label);
@@ -366,8 +371,10 @@ export function createDefinitionForm(
     }
     if (record(value)) {
       const fields = field.fields ?? {};
-      Object.entries(value).forEach(([key, child]) => {
+      const shown = { ...(record(defaults) ? defaults : {}), ...value };
+      Object.entries(shown).forEach(([key, child]) => {
         if (key === 'type' && path[0] === 'scene') return;
+        if (!(key in value) && Object.keys(value).some((written) => SPELLINGS[written] === key)) return;
         const spec = fields[SPELLINGS[key] ?? key] ?? (path[0] === 'shading' && ['colours', 'colors'].includes(String(path[1])) ? colour() : inferred(child));
         const row = make('div', 'definition-field');
         const header = make('div', 'definition-field-heading');
@@ -375,8 +382,9 @@ export function createDefinitionForm(
         name.textContent = spec.label ?? title(key);
         const deleteButton = button('Remove', () => remove([...path, key]), 'definition-remove');
         deleteButton.setAttribute('aria-label', `Remove ${label}: ${name.textContent}`);
-        header.append(name, deleteButton);
-        row.append(header, fieldEditor(spec, child, [...path, key], name.textContent));
+        header.append(name);
+        if (key in value) header.append(deleteButton);
+        row.append(header, fieldEditor(spec, child, [...path, key], name.textContent, record(defaults) ? defaults[key] : undefined));
         container.append(row);
       });
       const missing = Object.entries(fields).filter(([key]) => {
@@ -391,7 +399,7 @@ export function createDefinitionForm(
           if (!density && key === 'weight') return false;
           if (density && ['colour', 'opacity', 'transparency', 'glow', 'blend'].includes(key)) return false;
         }
-        return !Object.keys(value).some((written) => (SPELLINGS[written] ?? written) === key);
+        return !Object.keys(shown).some((written) => (SPELLINGS[written] ?? written) === key);
       });
       if (missing.length) {
         const add = select([['', '+ Add setting'], ...missing.map(([key, spec]): [string, string] => [key, spec.label ?? title(key)])], '', `Add ${label} setting`);
@@ -542,22 +550,7 @@ export function createDefinitionForm(
     }
     if (!record(value)) return;
     density = record(value.shading) && value.shading.mode === 'density';
-    Object.entries(TOP).forEach(([key, spec]) => {
-      const section = disclosure(TITLES[key], key);
-      const content = make('div', 'definition-section-body');
-      if (key === 'frame') content.append(frameControl);
-      if (key in value) {
-        content.append(fieldEditor(spec, value[key], [key], TITLES[key]));
-        content.append(button('Use defaults', () => remove([key]), 'definition-remove'));
-      } else {
-        const hint = make('p', 'definition-hint');
-        hint.textContent = 'Using the default settings.';
-        content.append(hint, button('+ Set up', () => set([key], spec.initial, true), 'definition-add'));
-      }
-      section.append(content);
-      body.append(section);
-    });
-    const scene = disclosure('Scene items', 'scene');
+    const scene = disclosure('Scene', 'scene');
     scene.classList.add('definition-scene-section');
     const content = make('div', 'definition-section-body');
       content.classList.add('definition-scene-list');
@@ -623,7 +616,7 @@ export function createDefinitionForm(
     addOption.disabled = true;
     const sceneHeading = scene.querySelector('summary')!;
     const sceneTitle = make('span');
-    sceneTitle.textContent = 'Scene items';
+    sceneTitle.textContent = 'Scene';
     sceneHeading.replaceChildren(sceneTitle, add);
     add.addEventListener('click', (event) => event.stopPropagation());
     add.addEventListener('keydown', (event) => event.stopPropagation());
@@ -820,6 +813,32 @@ export function createDefinitionForm(
     content.append(insertionLine);
     scene.append(content);
     body.append(scene);
+    const group = (label: string, key: string, fields: string[]) => {
+      const section = disclosure(label, key);
+      const content = make('div', 'definition-section-body');
+      fields.forEach((fieldKey) => {
+        if (fieldKey === 'seed' && density && !(fieldKey in value)) return;
+        const heading = make('h3', 'definition-group-heading');
+        heading.textContent = fieldKey === 'view' ? 'Area' : TITLES[fieldKey];
+        content.append(heading);
+        if (fieldKey === 'frame') content.append(frameControl);
+        const defaults = fieldKey === 'shading' && density
+          ? { mode: 'density', scale: 'log', colours: ['#fef3c7', '#c2410c', '#1c1917'] }
+          : DEFAULT_FIELDS[fieldKey];
+        content.append(fieldEditor(TOP[fieldKey], fieldKey in value ? value[fieldKey] : defaults ?? TOP[fieldKey].initial,
+          [fieldKey], TITLES[fieldKey], defaults));
+        if (fieldKey === 'seed') {
+          const hint = make('p', 'definition-hint');
+          hint.textContent = 'Fills the deepest zoom copies.';
+          content.append(hint);
+        }
+      });
+      section.append(content);
+      body.append(section);
+    };
+    group('Picture', 'picture', ['view', 'shading', 'seed']);
+    group('Controls', 'controls', ['variables']);
+    group('Presentation', 'presentation', ['frame', 'info']);
     notifySelection();
   }
   render();
@@ -838,7 +857,6 @@ export function createDefinitionForm(
     setActive: (next) => {
       if (!next) cancelTouchDrag?.();
       active = next;
-      if (active) root.insertBefore(renderControl, body);
       notifySelection();
     },
   };

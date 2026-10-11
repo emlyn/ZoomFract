@@ -1186,6 +1186,12 @@ canvas {
   background: rgba(var(--item-tint), 0.07);
 }
 
+.definition-group-heading {
+  margin: 0.8rem 0 0.4rem;
+  font-size: 0.85rem;
+  color: #b8b8c0;
+}
+
 .definition-scene-section > summary > span {
   flex: 1;
 }

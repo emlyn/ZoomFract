@@ -469,7 +469,7 @@ files unless extracting a module clearly reduces complexity.
   Working images are limited by both the device texture size and a
   96-million-pixel practical allocation budget (Print at 16:9 fits).
 - Edit mode follows expanded items in the Visual editor, not a checkbox or
-  scene syntax. The expanded Scene items heading holds a compact + menu.
+  scene syntax. The expanded Scene heading holds a compact + menu.
   Expanded items get outlines on a separate transparent, pointer-transparent
   overlay, marking their top-left corner and any `align` target points.
   Selection changes never redraw or fade the artwork or affect worker requests.
@@ -515,10 +515,9 @@ files unless extracting a module clearly reduces complexity.
 - The toggle has a constant label with `aria-expanded`. The wall label has a
   share button in its top-right corner. The panel header has a matching share
   icon beside the close control instead of a full-width Share button.
-  Show label is an app setting inside the Visual editor's Frame and wall
+  Show label is an app setting inside the Visual editor's Presentation
   section, not a scene definition key.
-  Render quality sits with the Visual definition sections and above the YAML
-  editor in YAML mode; the same controls move between them, retaining their
+  Render quality stays above the definition editor in both modes, retaining its
   settings and disclosure state. Quality stays out of scene syntax.
 - Share dialog tabs use a roving tabindex: one Tab stop, arrows and
   Home/End move between tabs.
@@ -581,7 +580,10 @@ files unless extracting a module clearly reduces complexity.
 - Visual is the default definition editor; YAML is the secondary view of the
   same draft. Visual changes auto-apply after 500 ms; YAML waits for Apply or
   switching back to Visual. Invalid drafts retain the last valid picture.
-  Collapsible sections edit every top-level setting, including variables and view.
+  Sections are Scene, Picture (area, shading and starting fill), Controls
+  (variables and inputs), and Presentation (frame, wall and information).
+  Scene starts open; the others start collapsed. Common defaults are shown
+  without writing them to YAML until edited.
   Scene cards have subtle type-specific tints and arrow/bin controls in their
   headings. Headings drag via mouse/touch with a horizontal insertion marker.
   Touch requires a one-second hold that lifts the card; earlier swipes scroll normally.
