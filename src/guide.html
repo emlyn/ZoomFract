@@ -96,8 +96,15 @@ scene:      # the shapes and zooms, in drawing order</code></pre>
     Variables with inputs show a copy of the live control below their value.
     It stays in sync with the control beside the picture and does not change
     the saved default value.
-    Adding an input chooses a suitable control for the variable's type. Changing
-    the input kind gives it compatible settings and, where needed, a new default.
+    Each variable shows Name, Type, Value and Input in that order. Value becomes
+    Default value when the variable has an input. Input starts
+    at None and offers controls suited to the type. An input's empty Label uses
+    the variable name; an empty slider Step allows continuous values (whole
+    numbers for integers). Use the bin to delete a variable, choice option or
+    gradient stop. Changing the input kind gives it compatible settings.
+    Variable cards have a tinted background and show their number and name at
+    the top. Click the heading to expand or collapse each card; new cards open
+    ready for editing.
     Live values survive edits when the input kind stays compatible; choices
     follow the selected option's name.
   </p>

@@ -95,6 +95,27 @@ const VARIABLE_DEFAULTS: Record<string, unknown> = {
   number: 0, integer: 0, boolean: true, point: [0, 0], colour: '#000000', text: '',
   gradient: { stops: [{ position: 0, colour: '#000000' }, { position: 1, colour: '#ffffff' }] },
 };
+const VARIABLE_INPUTS: Record<string, string[]> = {
+  number: ['slider', 'choice'], integer: ['slider', 'choice'], boolean: ['checkbox', 'choice'],
+  point: ['click', 'drag', 'choice'], colour: ['choice'], text: ['choice'], gradient: ['choice'],
+};
+const variableTypeField = choice('number', Object.keys(VARIABLE_DEFAULTS));
+const variableType = (variable: Record<string, unknown>): string => {
+  if (typeof variable.type === 'string') return variable.type;
+  const input = record(variable.input) ? variable.input.type : variable.input;
+  if (input === 'checkbox' || typeof variable.value === 'boolean') return 'boolean';
+  if (input === 'click' || input === 'drag' || Array.isArray(variable.value)
+    || record(variable.value) && 'x' in variable.value && 'y' in variable.value) return 'point';
+  return 'number';
+};
+const variableValueField = (type: string): Field => {
+  if (type === 'colour') return colour();
+  if (type === 'text') return text();
+  if (type === 'point') return point;
+  if (type === 'gradient') return gradientSpec;
+  if (type === 'boolean') return variants(true, { Boolean: { initial: true }, Expression: text('true') });
+  return number(0);
+};
 const gradientSpec = variants('palette', {
   Expression: text('palette'),
   Stops: object({
@@ -103,14 +124,7 @@ const gradientSpec = variants('palette', {
     hue: choice('shorter', ['shorter', 'longer', 'increasing', 'decreasing']),
   }, { stops: [{ position: 0, colour: '#000000' }, { position: 1, colour: '#ffffff' }] }),
 });
-const inputSpec = variants('drag', {
-  Shorthand: choice('drag', ['slider', 'click', 'drag', 'checkbox']),
-  Settings: object({
-    type: choice('slider', ['slider', 'click', 'drag', 'checkbox', 'choice']),
-    label: text(), min: number(0), max: number(1), step: number(0.01),
-    options: list(object({ name: text(), value: numericValue }, { name: 'Option', value: 0 })),
-  }, { type: 'slider', min: 0, max: 1 }),
-});
+const choiceOptionsField = list(object({ name: text(), value: numericValue }, { name: 'Option', value: 0 }));
 const axis = (labels: string[]) => variants([-1, 1], {
   Range: tuple(number(0), [-1, 1], labels),
   Object: object({
@@ -154,8 +168,7 @@ const TOP: Fields = {
     }),
   }),
   variables: list(object({
-    name: text('variable'), type: choice('number', ['number', 'integer', 'boolean', 'point', 'colour', 'text', 'gradient']),
-    value: numericValue, input: inputSpec,
+    name: text('variable'), type: variableTypeField, value: numericValue,
   }, { name: 'variable', value: 0 })),
   colourSpace: choice('linear-srgb', ['linear-srgb', 'oklab', 'oklch']),
 };
@@ -332,18 +345,17 @@ export function createDefinitionForm(
     const value = variable.value;
     const label = record(variable.input) ? variable.input.label : undefined;
     change(['variables', index, 'input'], () => {
-      if (type === 'slider') {
-        const start = typeof value === 'number' ? value : 0;
-        setNode(['variables', index, 'type'], variable.type === 'integer' ? 'integer' : 'number');
-        setNode(['variables', index, 'value'], start);
+      if (type === '') {
+        document.deleteIn(['variables', index, 'input']);
+      } else if (type === 'slider') {
+        const probe = document.clone();
+        probe.setIn(['variables', index, 'input'], probe.createNode({ type, min: -Number.MAX_VALUE / 2, max: Number.MAX_VALUE / 2 }));
+        const resolved = parseScene(probe.toString()).inputs.find((input) => input.name === variable.name);
+        if (resolved?.type !== 'slider') throw new Error('Could not resolve the slider default');
+        const start = resolved.value;
         setNode(['variables', index, 'input'], { type, min: Math.min(0, start), max: Math.max(1, start), ...(label ? { label } : {}) });
       } else if (type === 'checkbox' || type === 'click' || type === 'drag') {
-        const pointInput = type !== 'checkbox';
-        const start = pointInput ? variable.type === 'point' || pointLike(value) && typeof value !== 'string' ? value : [0, 0]
-          : variable.type === 'boolean' || typeof value === 'boolean' ? value : true;
-        setNode(['variables', index, 'type'], pointInput ? 'point' : 'boolean');
-        setNode(['variables', index, 'value'], start);
-        setNode(['variables', index, 'input'], typeof variable.input === 'string' ? type : { type, ...(label ? { label } : {}) });
+        setNode(['variables', index, 'input'], { type, ...(label ? { label } : {}) });
       } else {
         setNode(['variables', index, 'input'], { type, options: [{ name: 'Default', value }], ...(label ? { label } : {}) });
       }
@@ -378,13 +390,78 @@ export function createDefinitionForm(
     return element;
   }
 
+  function bin(label: string, action: () => void) {
+    const control = button('', action, 'definition-item-action definition-bin');
+    control.setAttribute('aria-label', label);
+    control.title = label;
+    const svg = window.document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = window.document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7');
+    svg.append(path);
+    control.append(svg);
+    return control;
+  }
+
+  function variableEditor(variable: Record<string, unknown>, index: number) {
+    const container = make('div', 'definition-value');
+    const path: Path = ['variables', index];
+    const type = variableType(variable);
+    const field = (label: string, editor: HTMLElement) => {
+      const row = make('div', 'definition-field');
+      const heading = make('div', 'definition-field-heading');
+      heading.textContent = label;
+      row.append(heading, editor);
+      container.append(row);
+      return row;
+    };
+    field('Name', fieldEditor(text(), variable.name ?? '', [...path, 'name'], 'Name'));
+    field('Type', fieldEditor(variableTypeField, type, [...path, 'type'], 'Type'));
+    const valueLabel = variable.input === undefined ? 'Value' : 'Default value';
+    const valueRow = field(valueLabel, fieldEditor(variableValueField(type), variable.value ?? '', [...path, 'value'], valueLabel));
+    if (typeof variable.name === 'string' && variable.input !== undefined) {
+      const slot = make('div', 'definition-live-input');
+      slot.setAttribute('role', 'group');
+      slot.setAttribute('aria-label', `Live input: ${variable.name}`);
+      inputSlots.set(variable.name, slot);
+      const control = inputControls.get(variable.name);
+      if (control) slot.append(control);
+      valueRow.append(slot);
+    }
+    const input = record(variable.input) ? variable.input : { type: variable.input ?? '' };
+    const kind = String(input.type);
+    const kinds = VARIABLE_INPUTS[type] ?? [];
+    const options: [string, string][] = [['', 'None'], ...kinds.map((kind): [string, string] => [kind, title(kind)])];
+    if (kind && !kinds.includes(kind)) options.push([kind, title(kind)]);
+    const selector = select(options, kind, 'Input');
+    selector.addEventListener('change', () => {
+      if (selector.value !== kind) configureInput(index, selector.value);
+    });
+    field('Input', selector);
+    if (kind) {
+      const label = fieldEditor(text(), input.label ?? '', [...path, 'input', 'label'], 'Label');
+      label.querySelector('input')!.placeholder = String(variable.name ?? '');
+      field('Label', label);
+      if (kind === 'slider') {
+        for (const key of ['min', 'max', 'step']) {
+          field(title(key), fieldEditor(number(0), input[key] ?? '', [...path, 'input', key], title(key)));
+        }
+      } else if (kind === 'choice') {
+        field('Options', fieldEditor(choiceOptionsField, input.options ?? [],
+          [...path, 'input', 'options'], 'Options'));
+      }
+    }
+    return container;
+  }
+
   function fieldEditor(field: Field, value: unknown, path: Path, label: string, defaults?: unknown): HTMLElement {
     const container = make('div', 'definition-value');
     container.setAttribute('role', 'group');
     container.setAttribute('aria-label', label);
+    if (path[0] === 'variables' && path.length === 2 && record(value)) return variableEditor(value, Number(path[1]));
     if (field.variants) {
-      const options = Object.entries(field.variants).filter(([key]) =>
-        !(key === 'Shorthand' && record(value) && !['click', 'drag', 'checkbox'].includes(String(value.type))));
+      const options = Object.entries(field.variants);
       const active = options.find(([, option]) => matches(option, value));
       const selector = select(options.map(([key]) => [key, key]), active?.[0] ?? '', `${label} format`);
       selector.addEventListener('change', () => {
@@ -408,15 +485,6 @@ export function createDefinitionForm(
           replacement = { degrees: value };
         } else if (typeof next.initial === 'number' && record(value) && ('degrees' in value || 'deg' in value)) {
           replacement = value.degrees ?? value.deg;
-        } else if (record(next.initial) && 'type' in next.initial && typeof value === 'string') {
-          const inputValue = document.getIn(documentPath(['variables', Number(path[1]), 'input']));
-          if (path[0] === 'variables' && path[2] === 'input' && inputValue === 'slider') {
-            configureInput(Number(path[1]), 'slider');
-            return;
-          }
-          replacement = { type: value };
-        } else if (typeof next.initial === 'string' && record(value) && 'type' in value && field.variants?.Shorthand) {
-          replacement = value.type;
         } else if (typeof next.initial === 'boolean' && typeof value === 'number') {
           replacement = value !== 0;
         } else if (typeof next.initial === 'number' && typeof value === 'boolean') {
@@ -429,7 +497,10 @@ export function createDefinitionForm(
     }
     if (record(value)) {
       const fields = field.fields ?? {};
-      const shown = { ...(record(defaults) ? defaults : {}), ...value };
+      const variableFields = path[0] === 'variables';
+      const shown = { ...(variableFields ? Object.fromEntries(Object.entries(fields)
+        .filter(([key]) => key !== 'stops').map(([key, spec]) => [key, spec.initial])) : {}),
+        ...(record(defaults) ? defaults : {}), ...value };
       Object.entries(shown).forEach(([key, child]) => {
         if (key === 'type' && path[0] === 'scene') return;
         if (!(key in value) && Object.keys(value).some((written) => SPELLINGS[written] === key)) return;
@@ -438,12 +509,7 @@ export function createDefinitionForm(
           const sourceValue: unknown = document.toJS();
           const variable = path.length === 2 ? value : record(sourceValue) && Array.isArray(sourceValue.variables) ? sourceValue.variables[Number(path[1])] : undefined;
           if (record(variable)) {
-            if (variable.type === 'colour') spec = colour();
-            if (variable.type === 'text') spec = text();
-            if (variable.type === 'point') spec = point;
-            if (variable.type === 'gradient') spec = gradientSpec;
-            if (variable.type === 'boolean') spec = variants(true, { Boolean: { initial: true }, Expression: text('true') });
-            if (variable.type === 'number' || variable.type === 'integer') spec = number(0);
+            spec = variableValueField(variableType(variable));
           }
         }
         const row = make('div', 'definition-field');
@@ -453,17 +519,8 @@ export function createDefinitionForm(
         const deleteButton = button('Remove', () => remove([...path, key]), 'definition-remove');
         deleteButton.setAttribute('aria-label', `Remove ${label}: ${name.textContent}`);
         header.append(name);
-        if (key in value) header.append(deleteButton);
+        if (key in value && !variableFields) header.append(deleteButton);
         row.append(header, fieldEditor(spec, child, [...path, key], name.textContent, record(defaults) ? defaults[key] : undefined));
-        if (path[0] === 'variables' && path.length === 2 && key === 'value' && typeof value.name === 'string' && value.input !== undefined) {
-          const slot = make('div', 'definition-live-input');
-          slot.setAttribute('role', 'group');
-          slot.setAttribute('aria-label', `Live input: ${value.name}`);
-          inputSlots.set(value.name, slot);
-          const control = inputControls.get(value.name);
-          if (control) slot.append(control);
-          row.append(slot);
-        }
         container.append(row);
       });
       const missing = Object.entries(fields).filter(([key]) => {
@@ -473,26 +530,20 @@ export function createDefinitionForm(
           if (!density && ['scale', 'colours'].includes(key)) return false;
           if (density && key === 'detail') return false;
         }
-        if (path[0] === 'variables' && path[2] === 'input' && value.type !== 'slider' && ['min', 'max', 'step'].includes(key)) return false;
-        if (path[0] === 'variables' && path[2] === 'input' && value.type !== 'choice' && key === 'options') return false;
         if (path[0] === 'scene' && path.length === 2) {
           if (!density && key === 'weight') return false;
           if (density && ['colour', 'opacity', 'transparency', 'glow', 'blend'].includes(key)) return false;
         }
         return !Object.keys(shown).some((written) => (SPELLINGS[written] ?? written) === key);
       });
-      if (missing.length) {
+      if (missing.length && !variableFields) {
         const add = select([['', '+ Add setting'], ...missing.map(([key, spec]): [string, string] => [key, spec.label ?? title(key)])], '', `Add ${label} setting`);
         add.className = 'definition-add';
         add.addEventListener('change', () => {
-          if (add.value === 'input' && path[0] === 'variables' && path.length === 2) {
-            const type = value.type;
-            configureInput(Number(path[1]), type === 'boolean' ? 'checkbox' : type === 'point' ? 'drag'
-              : ['colour', 'text', 'gradient'].includes(String(type)) ? 'choice' : 'slider');
-          } else if (add.value) set([...path, add.value], fields[add.value].initial, true);
+          if (add.value) set([...path, add.value], fields[add.value].initial, true);
         });
         container.append(add);
-      } else if (Object.keys(fields).length === 0) {
+      } else if (Object.keys(fields).length === 0 && !variableFields) {
         const entry = make('div', 'definition-list-entry');
         entry.classList.add('definition-stop-entry');
         const position = make('input');
@@ -520,10 +571,31 @@ export function createDefinitionForm(
         const childLabel = field.labels?.[index] ?? `${label} ${index + 1}`;
         const heading = make('span', 'definition-coordinate-label');
         heading.textContent = field.labels?.[index] ?? String(index + 1);
+        if (path.length === 1 && path[0] === 'variables') {
+          const card = disclosure('', `variables.${index}`);
+          card.classList.add('definition-variable');
+          heading.textContent = `${index + 1}${record(child) && child.name ? ` - ${child.name}` : ''}`;
+          const header = card.querySelector('summary')!;
+          header.className = 'definition-variable-heading';
+          header.append(heading, bin(`Delete variable ${index + 1}`, () => {
+            const open = value.map((_, i) => body.querySelectorAll<HTMLDetailsElement>('.definition-variable')[i]?.open ?? false);
+            open.splice(index, 1);
+            value.forEach((_, i) => expanded.delete(`variables.${i}`));
+            open.forEach((isOpen, i) => { if (isOpen) expanded.add(`variables.${i}`); });
+            remove([...path, index]);
+          }));
+          const settings = make('div', 'definition-section-body');
+          settings.append(fieldEditor(spec, child, [...path, index], childLabel));
+          card.append(settings);
+          container.append(card);
+          return;
+        }
         row.append(heading, fieldEditor(spec, child, [...path, index], childLabel));
         if (!field.labels || value.length !== field.labels.length) {
-          const del = button('Remove', () => remove([...path, index]), 'definition-remove');
-          del.setAttribute('aria-label', `Remove ${childLabel}`);
+          const del = path[0] === 'variables'
+            ? bin(`Delete ${childLabel}`, () => remove([...path, index]))
+            : button('Remove', () => remove([...path, index]), 'definition-remove');
+          if (path[0] !== 'variables') del.setAttribute('aria-label', `Remove ${childLabel}`);
           row.append(del);
         }
         container.append(row);
@@ -535,7 +607,8 @@ export function createDefinitionForm(
             const names = new Set(value.filter(record).map((variable) => variable.name));
             let name = 'variable';
             for (let index = 2; names.has(name); index += 1) name = `variable${index}`;
-            next = { ...next, name };
+            next = { ...next, name, type: 'number' };
+            expanded.add(`variables.${value.length}`);
           } else if (path[0] === 'variables' && path.length === 4 && path[2] === 'input' && path[3] === 'options') {
             const names = new Set(value.filter(record).map((option) => option.name));
             let name = 'Option';
@@ -564,13 +637,13 @@ export function createDefinitionForm(
     }
     if (field.choices) {
       const current = String(value);
+      const optional = path[0] === 'variables' && ['space', 'hue'].includes(String(path.at(-1)));
       const choices = field.choices.includes(current) ? field.choices : [current, ...field.choices];
-      const input = select(choices.map((key) => [key, title(key)]), current, label);
+      const input = select([...(optional ? [['', 'Default'] as [string, string]] : []),
+        ...choices.map((key): [string, string] => [key, title(key)])], optional && document.getIn(documentPath(path)) === undefined ? '' : current, label);
       input.addEventListener('change', () => {
-        if (path[0] === 'variables' && path.length === 3 && path[2] === 'input') {
-          configureInput(Number(path[1]), input.value);
-        } else if (path[0] === 'variables' && path.length === 4 && path[2] === 'input' && path[3] === 'type') {
-          configureInput(Number(path[1]), input.value);
+        if (optional && input.value === '') {
+          remove(path);
         } else if (path[0] === 'variables' && path.length === 3 && path[2] === 'type') {
           const index = Number(path[1]);
           const variable = variableAt(index);
@@ -589,7 +662,13 @@ export function createDefinitionForm(
             if (!compatible) {
               setNode(['variables', index, 'value'], VARIABLE_DEFAULTS[input.value]);
             }
-            if (variable.type !== input.value && variable.input !== undefined) document.deleteIn(['variables', index, 'input']);
+            if (variable.type !== input.value && variable.input !== undefined) {
+              const kind = record(variable.input) ? variable.input.type : variable.input;
+              if (!VARIABLE_INPUTS[input.value]?.includes(String(kind))) document.deleteIn(['variables', index, 'input']);
+              else if (!compatible && kind === 'choice') {
+                setNode(['variables', index, 'input', 'options'], [{ name: 'Default', value: variableAt(index).value }]);
+              }
+            }
           }, true);
         } else set(path, input.value, true);
       });
@@ -609,10 +688,34 @@ export function createDefinitionForm(
       input.addEventListener('focus', () => { editKey = ''; });
       input.addEventListener('input', () => {
         const written = input.value;
+        if (path[0] === 'variables' && written.trim() === '' && path[2] === 'input' && ['label', 'step'].includes(String(path[3]))) {
+          if (record(variableAt(Number(path[1])).input)) change(path, () => document.deleteIn(documentPath(path)));
+          return;
+        }
+        if (path[0] === 'variables' && path[2] === 'input' && typeof variableAt(Number(path[1])).input === 'string') {
+          change(path, () => {
+            setNode(['variables', Number(path[1]), 'input'], { type: variableAt(Number(path[1])).input });
+            setNode(path, written);
+          });
+          return;
+        }
         const next = typeof field.initial === 'number' || typeof value === 'number'
           ? (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(written.trim()) ? Number(written) : written)
           : written;
         set(path, next);
+        if (path[0] === 'variables' && path.length === 3 && path[2] === 'name') {
+          const card = input.closest('.definition-variable');
+          const heading = card?.querySelector('.definition-variable-heading span');
+          if (heading) heading.textContent = `${Number(path[1]) + 1}${written ? ` - ${written}` : ''}`;
+          const slot = card?.querySelector<HTMLElement>('.definition-live-input');
+          if (slot) {
+            for (const [name, existing] of inputSlots) if (existing === slot) inputSlots.delete(name);
+            inputSlots.set(written, slot);
+            slot.setAttribute('aria-label', `Live input: ${written}`);
+          }
+          const label = card?.querySelector<HTMLInputElement>('input[aria-label="Label"]');
+          if (label) label.placeholder = written;
+        }
       });
     }
     container.append(input);

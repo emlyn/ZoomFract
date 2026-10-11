@@ -1902,7 +1902,7 @@ function parseInputSpec(node: unknown, name: string, path: ScenePath): InputSpec
     throw new PathError(`Variable "${name}" input must be slider, click, drag, checkbox, or an object with a type`, path);
   }
   const { type, label, min, max, step, options } = record;
-  if (label !== undefined && (typeof label !== 'string' || !label.trim())) {
+  if (label !== undefined && typeof label !== 'string') {
     throw new PathError(`Variable "${name}" input label must be text`, [...path, 'label']);
   }
   if (type === 'slider') {
@@ -2087,7 +2087,7 @@ function defineVariable(
 ): DefinedVariable {
   const { input, index } = definition;
   const at = <T>(path: ScenePath, compute: () => T) => atPath(['variables', index, ...path], compute);
-  const label = input?.label?.trim() ?? name;
+  const label = input?.label?.trim() || name;
   const initialValue = variableCell(name, definition, lookup, space);
 
   if (isPointInput(input)) {

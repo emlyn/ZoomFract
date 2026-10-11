@@ -1184,6 +1184,32 @@ canvas {
   border-bottom: 1px solid #3f3f46;
 }
 
+.definition-variable {
+  --item-tint: 165, 180, 252;
+  margin-top: 0.6rem;
+  border: 1px solid rgba(var(--item-tint), 0.3);
+  background: rgba(var(--item-tint), 0.09);
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.definition-variable-heading {
+  display: flex;
+  align-items: center;
+}
+
+.definition-variable-heading .definition-coordinate-label {
+  flex: 1;
+  padding-top: 0;
+  color: #d4d4d8;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.definition-bin:hover {
+  color: #fca5a5;
+}
+
 .definition-item {
   --item-tint: 161, 161, 170;
   margin-top: 0.6rem;

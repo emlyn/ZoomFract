@@ -606,6 +606,10 @@ files unless extracting a module clearly reduces complexity.
   (variables and inputs), and Presentation (frame, wall and information).
   Scene starts open; the others start collapsed. Common defaults are shown
   without writing them to YAML until edited.
+  Variables show Name, Type, a typed Value and an Input dropdown (None by
+  default, choices depend on type). Inputs show Label, which uses the variable
+  name when empty, and their relevant settings. Only variables, choice options
+  and gradient stops have bins; ordinary fields have no remove links.
   Scene cards have subtle type-specific tints and arrow/bin controls in their
   headings. Headings drag via mouse/touch with a horizontal insertion marker.
   Touch requires a one-second hold that lifts the card; earlier swipes scroll normally.
