@@ -43,6 +43,11 @@ export default defineConfig({
   build: {
     // The CodeMirror editor makes the single app bundle about 540 kB.
     chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks: { 'outline-geometry': ['clipper-lib', 'earcut'] },
+      },
+    },
   },
   worker: {
     format: 'es',

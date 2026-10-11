@@ -1082,6 +1082,8 @@ function drawWebgl(
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, fillWidth, Math.max(1, ramps.length), 0, gl.RGBA, gl.FLOAT, fillData);
   gl.activeTexture(gl.TEXTURE0);
   const shapeColors = scene.elements.map((element) => element.kind !== 'zoom' ? parseColor(element.color) : null);
+  const outlineColors = scene.elements.map((element) => element.kind !== 'zoom' && element.outline
+    ? parseColor(element.outline.color) : null);
   const glowColors = scene.elements.map((element) => element.glow
     ? premultiplied(parseColor(element.glow.color), element.glow.opacity)
     : null);
@@ -1155,7 +1157,10 @@ function drawWebgl(
     const vertices: number[] = [];
     const seedAlpha = seedColor[3] * scene.seed.opacity;
     for (const item of items) {
-      if (item.kind === 'shape') {
+      if (item.kind === 'outline') {
+        const coverage = outlineColors[item.elementIndex]![3] * item.alpha;
+        pushPolygon(vertices, item.polygon, null, [coverage, coverage, coverage, coverage]);
+      } else if (item.kind === 'shape') {
         const element = scene.elements[item.elementIndex];
         if (element.kind !== 'zoom' && element.fill) {
           pushPolygon(vertices, item.polygon, item.texCoords ?? null, [0, 0, 0, item.alpha], 4,
@@ -1198,7 +1203,9 @@ function drawWebgl(
   };
 
   const pushItem = (vertices: number[], item: UnrolledItem, sampleSource: boolean) => {
-    if (item.kind === 'shape') {
+    if (item.kind === 'outline') {
+      pushPolygon(vertices, item.polygon, null, premultiplied(outlineColors[item.elementIndex]!, item.alpha));
+    } else if (item.kind === 'shape') {
       const element = scene.elements[item.elementIndex];
       if (element.kind !== 'zoom' && element.fill) {
         pushPolygon(vertices, item.polygon, item.texCoords ?? null, [0, 0, 0, item.alpha], 4,

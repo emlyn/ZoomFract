@@ -312,7 +312,7 @@ scene:
   colour: "#d97757"
   opacity: 0.8         # 0 is invisible, 1 is solid</code></pre>
   <p>
-    Rectangles are filled with <code>colour</code> (black by default) and have no outline.
+    Rectangles are filled with <code>colour</code> (black by default) and have no outline by default.
     <code>opacity</code> defaults to 1. With
     <a href="#guide-shading">density shading</a>, use <code>weight</code> instead.
   </p>
@@ -346,6 +346,32 @@ scene:
     <code>hsl(200 60% 50%)</code> or <code>oklch(70% 0.1 200)</code>. A colour's own
     transparency combines with <code>opacity</code>.
   </p>
+  <p>Rectangles, circles and polygons can have a centred outline. Half its
+    thickness lies inside the shape and half outside. In the Visual editor,
+    choose <em>Outline</em> from the shape's <em>Add setting</em> menu.</p>
+  <pre><code>- type: polygon
+  points: [[0, 0], [2, 0], [1, 1]]
+  colour: transparent
+  outline:
+    colour: navy
+    thickness: 0.05
+    opacity: 0.8
+    joins: round            # miter (default) or round</code></pre>
+  <p><code>thickness</code> is required, non-negative, and measured in scene
+    units. Colour defaults to black and outline opacity to 1; expressions,
+    colour alpha and <code>transparency</code> work as usual.
+    Shape opacity multiplies both fill and outline opacity. Use
+    <code>colour: transparent</code> for a hollow shape.
+    The outline draws over the fill, scales with zooms and contributes to
+    automatic overflow fitting. Geometry references still refer to the shape
+    without its outline. Mitred corners fall back to bevels when the tip would
+    exceed four times the half-thickness; rounded joins avoid sharp tips.
+    Outlines are not used in density shading, except on background shapes.
+    PowerPoint exports editable, centred strokes with the same join setting;
+    outlined shapes require equally sized x and y units on the slide.
+    Outline geometry uses
+    <a href="./clipper-license.txt" target="_blank" rel="noopener">Clipper (Boost licence)</a>
+    and <a href="./earcut-license.txt" target="_blank" rel="noopener">Earcut (ISC licence)</a>.</p>
   <p>
     The three comma-separated channels in <code>rgb()</code> may also be
     expressions, such as <code>rgb(68 * mix, 204 * mix, 68 * mix)</code>.
@@ -951,12 +977,7 @@ scene:
       <code>name.points.1</code> and so on, counting from 0.
     </li>
     <li><code>path</code> uses SVG path commands, in view coordinates.</li>
-    <li>Any shape can have an outline:</li>
   </ul>
-  <pre><code>  outline:
-    colour: black
-    thickness: 0.02
-    opacity: 0.8</code></pre>
 
   <h4>Images</h4>
   <pre><code>- type: image

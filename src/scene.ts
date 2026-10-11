@@ -1,4 +1,5 @@
 import YAML from 'yaml';
+import { outlineTriangles } from './outline';
 import { evaluateExpression, evaluateValue, isIdentifier, isReservedName, type Variables } from './expression';
 import { boolean, checkValue, colourCss, colourValue, equalValues, huePath, isColourValue, isGradient, isPoint, makeGradient, mixingSpace, numeric, parseCssColour, pointValue, type GradientValue, type MixingSpace, type Value } from './values';
 
@@ -101,10 +102,11 @@ const GEOMETRY: Record<string, Shape> = {
 const ALIGN_ITEM: Shape = { keys: { from: POINT, to: POINT, ...leaves('x', 'y') } };
 const ALIGN: Shape = { keys: { from: POINT, to: POINT }, items: ALIGN_ITEM };
 const SHAPE_COLOUR: Shape = { keys: { ...leaves('gradient', 'colours', 'angle', 'radius'), from: POINT, to: POINT, centre: POINT } };
+const OUTLINE: Shape = { keys: leaves('colour', 'thickness', 'opacity', 'transparency', 'joins') };
 const SHAPE_ITEMS: Record<string, Shape> = {
-  rect: { keys: { ...GEOMETRY, ...leaves('weight', 'scale', 'align'), colour: SHAPE_COLOUR } },
-  circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST } },
-  polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, vertex: POINT } },
+  rect: { keys: { ...GEOMETRY, ...leaves('weight', 'scale', 'align'), colour: SHAPE_COLOUR, outline: OUTLINE } },
+  circle: { keys: { ...leaves('type', 'name', 'centre', 'radius', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, outline: OUTLINE } },
+  polygon: { keys: { ...leaves('type', 'name', 'sides', 'centre', 'weight', 'opacity', 'transparency'), colour: SHAPE_COLOUR, points: POINT_LIST, vertex: POINT, outline: OUTLINE } },
 };
 
 const DEFINITION: Shape = {
@@ -228,8 +230,10 @@ export type ShapeFill = {
   // Scene coordinates to gradient coordinates.
   mapping: [number, number, number, number, number, number];
 };
+export type Outline = { color: string; thickness: number; opacity: number; joins: 'miter' | 'round' };
 
 export type RectElement = SceneElement & {
+  outline?: Outline;
   kind: 'rect';
   center: Vec2;
   width: number;
@@ -243,6 +247,7 @@ export type RectElement = SceneElement & {
 };
 
 export type CircleElement = SceneElement & {
+  outline?: Outline;
   kind: 'circle';
   center: Vec2;
   radius: number;
@@ -254,6 +259,7 @@ export type CircleElement = SceneElement & {
 };
 
 export type PolygonElement = SceneElement & {
+  outline?: Outline;
   kind: 'polygon';
   points: Vec2[];
   color: string;
@@ -827,16 +833,18 @@ function contentBounds(elements: DrawableElement[], view: ViewFrame): Bounds {
     .filter((element): element is ShapeElement =>
       element.kind !== 'zoom' && (element.opacity > 0 || (element.kind === 'rect' && element.glow !== undefined)))
     .flatMap((shape) => {
+      const stroke = outlineTriangles(shape).flat();
       if (shape.kind === 'circle') {
-        return CIRCLE_BOUNDS.map((point) => add(shape.center, scaleVector(point, shape.radius)));
+        return CIRCLE_BOUNDS.map((point) => add(shape.center, scaleVector(point,
+          shape.radius + (shape.outline && shape.outline.opacity > 0 ? shape.outline.thickness / 2 : 0))));
       }
       if (shape.kind === 'polygon') {
-        return shape.points;
+        return [...shape.points, ...stroke];
       }
       const rect = shape;
       const grow = 2 * (rect.glow?.size ?? 0);
-      return CORNER_NAMES.map((name) =>
-        rectCorner({ ...rect, width: rect.width + grow, height: rect.height + grow }, name));
+      return [...stroke, ...CORNER_NAMES.map((name) =>
+        rectCorner({ ...rect, width: rect.width + grow, height: rect.height + grow }, name))];
     });
   if (base.length === 0 && zooms.length === 0) {
     throw new Error('overflow: auto needs something in the scene to fit');
@@ -1545,6 +1553,19 @@ function shapeColour(
   return { color: colourCss(ramp.stops[0].colour), fill: { kind, ramp, mapping } };
 }
 
+function parseOutline(value: unknown, variables: Variables, density: boolean, path: ScenePath): Outline | undefined {
+  if (value === undefined) return undefined;
+  if (density) throw new PathError('Outlines are not used with density shading', path);
+  if (!isRecord(value)) throw new PathError('Outline must be an object with a thickness', path);
+  const thickness = atPath([...path, 'thickness'], () => asNumber(value.thickness, Number.NaN, variables));
+  if (!Number.isFinite(thickness) || thickness < 0) throw new PathError('Outline thickness must be a non-negative number', [...path, 'thickness']);
+  const joins = atPath([...path, 'joins'], () => enumValue(value.joins, ['miter', 'round'] as const, 'miter', variables));
+  return {
+    color: atPath([...path, 'colour'], () => asColour(value.colour, 'black', variables)),
+    thickness, joins, opacity: parseOpacity(value, 1, variables, path),
+  };
+}
+
 function parseRectElement(
   rect: Record<string, unknown>,
   name: string | undefined,
@@ -1578,6 +1599,7 @@ function parseRectElement(
 
   return {
     kind: 'rect',
+    outline: parseOutline(rect.outline, variables, density, [...path, 'outline']),
     name,
     glow: at('glow', () => parseGlow(rect.glow, elementName, variables, density, [...path, 'glow'], false)),
     ...geometry,
@@ -1595,7 +1617,7 @@ function parseShapeStyle<K extends 'circle' | 'polygon'>(
   variables: Variables,
   density: boolean,
   path: ScenePath,
-): { kind: K; name: string | undefined; opacity: number; weight: number } {
+): { kind: K; name: string | undefined; opacity: number; weight: number; outline?: Outline } {
   if (density && (record.colour !== undefined || record.opacity !== undefined || record.transparency !== undefined)) {
     const key = record.colour !== undefined ? 'colour' : record.opacity !== undefined ? 'opacity' : 'transparency';
     throw new PathError(
@@ -1612,6 +1634,7 @@ function parseShapeStyle<K extends 'circle' | 'polygon'>(
   }
   return {
     kind,
+    outline: parseOutline(record.outline, variables, density, [...path, 'outline']),
     name,
     opacity: parseOpacity(record, 1, variables, path),
     weight,

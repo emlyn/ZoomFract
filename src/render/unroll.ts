@@ -1,5 +1,6 @@
 import type { BlendMode, ResolvedSceneDefinition, Vec2 } from '../scene';
 import { elementPoints, scenePointToCanvas } from './common';
+import { outlineTriangles } from '../outline';
 
 // x' = a x + c y + e, y' = b x + d y + f
 type Affine = [number, number, number, number, number, number];
@@ -18,6 +19,7 @@ type ZoomNode = {
 // carries source view coordinates, which extend beyond 0 to 1 by the glow.
 // A leaf's seed covers only the declared view in its copy, not the overflow.
 export type UnrolledItem =
+  | { kind: 'outline'; polygon: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'shape'; polygon: Vec2[]; texCoords?: Vec2[]; elementIndex: number; alpha: number }
   | { kind: 'leaf'; polygon: Vec2[]; texCoords: Vec2[]; seed: Vec2[]; alpha: number; blend: BlendMode }
   | { kind: 'rectGlow'; polygon: Vec2[]; local: Vec2[]; elementIndex: number; alpha: number }
@@ -178,6 +180,15 @@ export function unrollScene(
     ];
   });
 
+  const strokeTolerance = 0.25 / Math.max(
+    width / Math.abs(scene.view.coordinates.x.to - scene.view.coordinates.x.from),
+    height / Math.abs(scene.view.coordinates.y.to - scene.view.coordinates.y.from),
+  );
+  const outlines = scene.elements.map((element) => element.kind === 'zoom' ? [] :
+    outlineTriangles(element, strokeTolerance).map((triangle) => triangle.map((point) => {
+      const pixel = scenePointToCanvas(point, scene);
+      return { x: pixel.x * factor, y: pixel.y * factor };
+    })));
   // Maps unit square coordinates onto an element, from its top-left corner.
   const elementFrames = elementPolygons.map(([topLeft, topRight, , bottomLeft], index): Affine => {
     if (scene.elements[index].kind !== 'rect' && scene.elements[index].kind !== 'zoom') return IDENTITY;
@@ -258,7 +269,7 @@ export function unrollScene(
   });
   enqueueChildren(root);
   const triangleCost = scene.elements.reduce((total, element, index) =>
-    total + (element.kind === 'zoom' ? 2 : Math.max(1, elementPolygons[index].length - 2)), 0);
+    total + (element.kind === 'zoom' ? 2 : Math.max(1, elementPolygons[index].length - 2) + outlines[index].length), 0);
   let itemCount = triangleCost;
   let expandedZooms = 0;
   const expandCost = triangleCost - 2;
@@ -340,6 +351,11 @@ export function unrollScene(
             return { x: a * x + c * y + e, y: b * x + d * y + f };
           }) : undefined;
           items.push({ kind: 'shape', polygon, texCoords, elementIndex: index, alpha: node.alpha * element.opacity });
+        }
+        for (const triangle of outlines[index]) {
+          const polygon = clipPolygon(triangle.map((point) => applyAffine(node.transform, point)), node.clip);
+          if (polygon.length) items.push({ kind: 'outline', polygon, elementIndex: index,
+            alpha: node.alpha * element.opacity * (element.outline?.opacity ?? 1) });
         }
         return;
       }

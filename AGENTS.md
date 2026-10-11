@@ -254,6 +254,15 @@ files unless extracting a module clearly reduces complexity.
 
 - `rect` is borderless by default and uses `colour` (default black) plus
   optional `opacity`.
+- Shapes accept `outline: { colour?, thickness, opacity?, transparency?, joins? }`.
+  Thickness is a non-negative scene-unit distance; strokes are centred.
+  Joins are miter (default, limit 4, bevel beyond it) or round. Shape opacity
+  multiplies stroke opacity; transparent fill makes a hollow shape.
+  Stroke geometry is unioned before triangulation to avoid double-painting
+  translucent joins, then transformed and clipped alongside recursive fills.
+  Outlines contribute to auto-fit and zoom glow coverage, but not named geometry.
+  Density outlines are errors (backgrounds still paint). PowerPoint uses native
+  centred strokes and requires square scene units for them.
 - `circle` uses either `centre` and positive `radius`, or exactly three
   non-collinear `points`. `polygon` uses an ordered list of at least three
   simple, non-crossing `points`, or `sides` (3-256), `centre`, and one

@@ -11,6 +11,7 @@ import type {
   ZoomElement,
 } from './scene';
 import { sample, toRgb, type ColourValue } from './values';
+import { MITER_LIMIT } from './outline';
 
 // A PowerPoint file with one slide holding the scene's top level: shapes
 // become vector shapes, and zooms become Slide Zooms of the slide itself, so
@@ -287,6 +288,19 @@ export async function powerPointGradientPictures(scene: SceneDefinition, resolut
   return pictures;
 }
 
+function outlineXml(element: ShapeElement, mapping: ReturnType<typeof slideMapping>) {
+  const outline = element.outline;
+  if (!outline || outline.thickness === 0 || !visible(outline.color, outline.opacity * element.opacity)) return '<a:ln><a:noFill/></a:ln>';
+  const x = Math.abs(mapping.vector({ x: 1, y: 0 }).x);
+  const y = Math.abs(mapping.vector({ x: 0, y: 1 }).y);
+  if (Math.abs(x - y) > SQUARE_TOLERANCE * Math.max(x, y)) {
+    throw new Error('Shape outlines need equally sized x and y units in PowerPoint');
+  }
+  return `<a:ln w="${Math.max(1, Math.round(mapping.length(outline.thickness)))}" algn="ctr">`
+    + `<a:solidFill>${colorXml(outline.color, outline.opacity * element.opacity)}</a:solidFill>`
+    + (outline.joins === 'round' ? '<a:round/>' : `<a:miter lim="${MITER_LIMIT * 100000}"/>`) + '</a:ln>';
+}
+
 function shapeFillXml(element: ShapeElement, mapping: ReturnType<typeof slideMapping>, pictureId?: number) {
   if (element.opacity <= 0) return '<a:noFill/>';
   if (pictureId !== undefined) return `<a:blipFill rotWithShape="1"><a:blip r:embed="rId${pictureId}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>`;
@@ -345,6 +359,8 @@ function powerPointFadeWarning(scene: SceneDefinition): PowerPointLimit | null {
     (element.kind !== 'zoom' && (element.fill
       ? element.opacity > 0 && element.fill.ramp.stops.some((stop) => stop.colour.a > 0)
       : visible(element.color, element.opacity)))
+    || (element.kind !== 'zoom' && element.outline !== undefined
+      && element.outline.thickness > 0 && visible(element.outline.color, element.outline.opacity * element.opacity))
     || (element.glow !== undefined && visible(element.glow.color, element.glow.opacity)));
   if (drawsItself || zooms.length === 0 || !visible(scene.seed.color, scene.seed.opacity)) {
     return null;
@@ -401,7 +417,7 @@ function shapeXml(element: DrawableElement, id: number, mapping: ReturnType<type
     const fill = shapeFillXml(element, mapping, pictureId);
     return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
       + `<p:spPr>${transformXml('a:xfrm', place)}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>${fill}`
-      + `<a:ln><a:noFill/></a:ln>${glowXml(element.glow, mapping)}</p:spPr>`
+      + `${outlineXml(element, mapping)}${glowXml(element.glow, mapping)}</p:spPr>`
       + '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>';
   }
   const name = escapeXml(element.name ?? `Slide Zoom ${id}`);
@@ -457,9 +473,10 @@ function polygonShapeXml(
   return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>`
     + `<p:spPr><a:xfrm><a:off x="${Math.round(left)}" y="${Math.round(top)}"/>`
     + `<a:ext cx="${Math.max(1, Math.round(width))}" cy="${Math.max(1, Math.round(height))}"/></a:xfrm>`
-    + `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="100000" b="100000"/>`
-    + `<a:pathLst><a:path w="100000" h="100000" fill="norm" stroke="0">${commands}</a:path></a:pathLst></a:custGeom>`
-    + `${fill}<a:ln><a:noFill/></a:ln></p:spPr>`
+    + (element.kind === 'circle' ? '<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+      : `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="100000" b="100000"/>`
+      + `<a:pathLst><a:path w="100000" h="100000" fill="norm" stroke="1">${commands}</a:path></a:pathLst></a:custGeom>`)
+    + `${fill}${outlineXml(element, mapping)}</p:spPr>`
     + '<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>';
 }
 

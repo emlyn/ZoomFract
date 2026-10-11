@@ -69,7 +69,11 @@ const shapeColourField = variants('#000000', {
     angle: number(0), from: point, to: point, centre: point, radius: number(1),
   }, { gradient: 'linear', colours: ['#000000', '#ffffff'] }),
 });
-const paint: Fields = { colour: shapeColourField, ...opacity, weight: number(1) };
+const paint: Fields = {
+  colour: shapeColourField, ...opacity, weight: number(1),
+  outline: object({ colour: colour(), thickness: number(0.02), ...opacity,
+    joins: choice('miter', ['miter', 'round']) }, { colour: 'black', thickness: 0.02, joins: 'miter' }),
+};
 const SHAPES: Record<string, { label: string; field: Field; initial: unknown }> = {
   rect: {
     label: 'Rectangle',
@@ -661,7 +665,7 @@ export function createDefinitionForm(
         if (['scene', 'background'].includes(String(path[0])) && path.length === 2) {
           const itemDensity = density && path[0] === 'scene';
           if (!itemDensity && key === 'weight') return false;
-          if (itemDensity && ['colour', 'opacity', 'transparency', 'glow', 'blend'].includes(key)) return false;
+          if (itemDensity && ['colour', 'opacity', 'transparency', 'glow', 'blend', 'outline'].includes(key)) return false;
         }
         return !Object.keys(shown).some((written) => (SPELLINGS[written] ?? written) === key);
       });
