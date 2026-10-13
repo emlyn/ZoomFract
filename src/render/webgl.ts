@@ -1947,7 +1947,10 @@ function drawWebgl(
     copyToCanvas(finalOutput);
   };
 
-  const renderLevels = (levels: number, levelLimit: number, frameCallbacks: FrameCallbacks): RenderOutcome => {
+  const renderLevels = (
+    { levels, levelLimit, autoLevelLimitReached }: RenderSettings,
+    frameCallbacks: FrameCallbacks,
+  ): RenderOutcome => {
     prepareGlowFields(levels);
     const preview = completedFeedbackLevels === 0 && !blended && settings.recursionDepth > 1;
     if (preview) {
@@ -2056,13 +2059,13 @@ function drawWebgl(
       details: details(),
       levels: levelsShown(),
       stepChange: compared ? { fraction: changedFraction(referenceOutput, finalOutput), levels: 1 } : undefined,
-      limitReached: settings.autoLevels && (settings.autoLevelLimitReached || stoppedAtLimit),
+      limitReached: settings.autoLevels && (autoLevelLimitReached || stoppedAtLimit),
     };
   };
   return {
-    outcome: renderLevels(settings.levels, settings.levelLimit, callbacks),
+    outcome: renderLevels(settings, callbacks),
     // Exact geometry is kept from the first render; only feedback levels are added.
-    continueTo: (next, frameCallbacks) => renderLevels(next.levels, next.levelLimit, frameCallbacks),
+    continueTo: renderLevels,
     dispose: () => {
       owned.forEach((giveBack) => giveBack());
       if (lastMask) {
