@@ -560,12 +560,14 @@ export function createShareDialog(options: ShareDialogOptions) {
       return;
     }
     const size = Math.round(qrImage.width * QR_PREVIEW_SCALES[qrZoom]);
-    qrPreview.width = size;
-    qrPreview.height = size;
+    const pixelRatio = window.devicePixelRatio || 1;
+    qrPreview.width = Math.round(size * pixelRatio);
+    qrPreview.height = Math.round(size * pixelRatio);
     qrPreview.style.width = `${size}px`;
+    qrPreview.style.height = `${size}px`;
     const context = context2d(qrPreview);
     context.imageSmoothingQuality = 'high';
-    context.drawImage(qrImage, 0, 0, size, size);
+    context.drawImage(qrImage, 0, 0, qrPreview.width, qrPreview.height);
     const zoomed = qrZoom > 0;
     qrPreview.classList.toggle('zoomed', zoomed);
     dialog.classList.toggle('wide', zoomed);
