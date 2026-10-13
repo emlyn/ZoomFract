@@ -727,8 +727,13 @@ scene:
     <code>shorter</code> (default), <code>longer</code>, <code>increasing</code>
     or <code>decreasing</code>. The Render settings panel can display in sRGB
     or Display P3 when the browser, display and WebGL implementation support
-    it. sRGB remains the default, and image, QR and PowerPoint exports remain
-    sRGB. Display P3 is a wider gamut, not HDR; HDR output is not implemented.</p>
+    it. sRGB remains the default. Image PNGs can be exported as sRGB or Display
+    P3 when the browser supports wide-gamut canvas export; use Display P3 in
+    Render settings as well to preserve colours outside sRGB. QR and PowerPoint
+    exports remain sRGB. Display P3 rendering is still being refined: alpha
+    compositing and recursive filtering are not yet fully colourimetrically
+    accurate. Display P3 is a wider gamut, not HDR; HDR output is not
+    implemented.</p>
   <p><code>spectral</code> mixes like pigments rather than light, so blue and
     yellow can make green. It uses
     <a href="https://github.com/rvanwijnen/spectral.js" target="_blank" rel="noopener">Spectral.js</a>
@@ -916,9 +921,10 @@ scene:
   <p>The share icon at the top of the settings panel or on the picture label opens a window with five tabs:</p>
   <ul>
     <li>
-      <strong>Image</strong> copies or downloads the picture as a PNG, at full size or
-      smaller, optionally with a transparent background. These wait until rendering
-      has finished.
+      <strong>Image</strong> copies or downloads the picture as an sRGB or Display
+      P3 PNG, at full size or smaller, optionally with a transparent background.
+      Display P3 PNGs include a colour profile; choose Display P3 in Render settings
+      too to preserve colours outside sRGB. These wait until rendering has finished.
     </li>
     <li>
       <strong>Link</strong> copies a link that contains the applied definition, so it

@@ -1,4 +1,5 @@
 import { powerPointFile, powerPointGradientPictures, powerPointLimits } from './pptx';
+import type { OutputColorSpace } from './render/common';
 import type { SceneDefinition } from './scene';
 import type { DecodedImages } from './image-assets';
 
@@ -193,13 +194,21 @@ function checkboxRow(name: string, label: string, checked: boolean) {
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error ? `${fallback}: ${error.message}` : fallback;
 
-function context2d(target: HTMLCanvasElement) {
-  const context = target.getContext('2d');
+function context2d(target: HTMLCanvasElement, colorSpace: OutputColorSpace = 'srgb') {
+  const context = target.getContext('2d', colorSpace === 'display-p3' ? { colorSpace } : undefined);
   if (!context) {
     throw new Error('Could not create a canvas for the image');
   }
+  if (colorSpace === 'display-p3' && context.getContextAttributes().colorSpace !== 'display-p3') {
+    throw new Error('This browser cannot create a Display P3 PNG');
+  }
   return context;
 }
+
+const supportsP3Canvas = () => {
+  const canvas = document.createElement('canvas');
+  return canvas.getContext('2d', { colorSpace: 'display-p3' })?.getContextAttributes().colorSpace === 'display-p3';
+};
 
 const pngBlob = (image: HTMLCanvasElement): Promise<Blob> => new Promise((resolve, reject) => image.toBlob((blob) => {
   if (blob) {
@@ -265,13 +274,25 @@ export function createShareDialog(options: ShareDialogOptions) {
   const sizeSelect = document.createElement('select');
   sizeSelect.name = 'image-size';
   sizeRow.append(sizeSelect);
+  const colorSpaceRow = element('label', 'select-row');
+  colorSpaceRow.append(element('span', '', 'Colour space'));
+  const imageColorSpace = document.createElement('select');
+  imageColorSpace.name = 'image-colour-space';
+  imageColorSpace.append(new Option('sRGB', 'srgb'));
+  const p3CanvasAvailable = supportsP3Canvas();
+  const p3Option = new Option(p3CanvasAvailable ? 'Display P3' : 'Display P3 (unavailable)', 'display-p3');
+  p3Option.disabled = !p3CanvasAvailable;
+  imageColorSpace.append(p3Option);
+  colorSpaceRow.append(imageColorSpace);
+  colorSpaceRow.title = 'Display P3 PNGs include a colour profile. The current render must also use Display P3 '
+    + 'to preserve colours outside sRGB.';
   const transparent = checkboxRow('transparent', 'Transparent background', false);
   const copyImage = button('apply-scene', 'Copy');
   const downloadImage = button('apply-scene', 'Download');
   const imageButtons = element('div', 'share-buttons');
   imageButtons.append(copyImage, downloadImage);
   const imagePanel = element('div', 'share-panel');
-  imagePanel.append(preview, sizeRow, transparent.row, imageButtons);
+  imagePanel.append(preview, sizeRow, colorSpaceRow, transparent.row, imageButtons);
 
   // The link options are shared by the Link and QR code tabs, and move to
   // whichever of them is shown.
@@ -377,10 +398,17 @@ export function createShareDialog(options: ShareDialogOptions) {
   });
 
   // The picture at the chosen size, on the background unless it is transparent.
-  function drawImage(target: HTMLCanvasElement, width: number, height: number, withBackground: boolean, source: CanvasImageSource = canvas) {
+  function drawImage(
+    target: HTMLCanvasElement,
+    width: number,
+    height: number,
+    withBackground: boolean,
+    source: CanvasImageSource = canvas,
+    colorSpace: OutputColorSpace = 'srgb',
+  ) {
     target.width = width;
     target.height = height;
-    const context = context2d(target);
+    const context = context2d(target, colorSpace);
     if (withBackground) {
       context.fillStyle = options.scene().frame.background;
       context.fillRect(0, 0, width, height);
@@ -392,7 +420,9 @@ export function createShareDialog(options: ShareDialogOptions) {
 
   function imageBlob(): Promise<Blob> {
     const { width, height } = imageSize(scale());
-    return pngBlob(drawImage(document.createElement('canvas'), width, height, !transparent.input.checked));
+    const colorSpace = imageColorSpace.value === 'display-p3' ? 'display-p3' : 'srgb';
+    return pngBlob(drawImage(document.createElement('canvas'), width, height,
+      !transparent.input.checked, canvas, colorSpace));
   }
 
   let imageZoom = 0;
@@ -609,6 +639,7 @@ export function createShareDialog(options: ShareDialogOptions) {
   });
 
   sizeSelect.addEventListener('change', refreshImage);
+  imageColorSpace.addEventListener('change', refreshImage);
   transparent.input.addEventListener('change', refreshImage);
   for (const input of [includeInputs.input, includeSettings.input, qrPicture.input]) {
     input.addEventListener('change', () => void refreshLink());
