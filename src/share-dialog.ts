@@ -1,5 +1,5 @@
 import { powerPointFile, powerPointGradientPictures, powerPointLimits } from './pptx';
-import type { OutputColorSpace } from './render/common';
+import type { OutputColorSpace, QualityMode } from './render/common';
 import type { SceneDefinition } from './scene';
 import type { DecodedImages } from './image-assets';
 
@@ -12,6 +12,9 @@ export type LinkOptions = { inputs: boolean; settings: boolean };
 
 type ShareDialogOptions = {
   canvas: HTMLCanvasElement;
+  imageQualities: (colorSpace: OutputColorSpace) => { quality: QualityMode; label: string; width: number; height: number }[];
+  currentImageSettings: () => { quality: QualityMode; colorSpace: OutputColorSpace };
+  renderImage: (quality: QualityMode, colorSpace: OutputColorSpace) => Promise<HTMLCanvasElement>;
   powerPointLayers: () => { foreground: CanvasImageSource; background?: CanvasImageSource };
   powerPointImages: () => DecodedImages;
   scene: () => SceneDefinition;
@@ -274,6 +277,11 @@ export function createShareDialog(options: ShareDialogOptions) {
   const sizeSelect = document.createElement('select');
   sizeSelect.name = 'image-size';
   sizeRow.append(sizeSelect);
+  const qualityRow = element('label', 'select-row');
+  qualityRow.append(element('span', '', 'Render quality'));
+  const imageQuality = document.createElement('select');
+  imageQuality.name = 'image-quality';
+  qualityRow.append(imageQuality);
   const colorSpaceRow = element('label', 'select-row');
   colorSpaceRow.append(element('span', '', 'Colour space'));
   const imageColorSpace = document.createElement('select');
@@ -286,13 +294,16 @@ export function createShareDialog(options: ShareDialogOptions) {
   colorSpaceRow.append(imageColorSpace);
   colorSpaceRow.title = 'Display P3 PNGs include a colour profile. The current render must also use Display P3 '
     + 'to preserve colours outside sRGB.';
+  const rerenderWarning = element('p', 'share-limits');
+  rerenderWarning.hidden = true;
+  rerenderWarning.textContent = 'This image will be re-rendered for the PNG save. Downscaling does not require a re-render.';
   const transparent = checkboxRow('transparent', 'Transparent background', false);
   const copyImage = button('apply-scene', 'Copy');
   const downloadImage = button('apply-scene', 'Download');
   const imageButtons = element('div', 'share-buttons');
   imageButtons.append(copyImage, downloadImage);
   const imagePanel = element('div', 'share-panel');
-  imagePanel.append(preview, sizeRow, colorSpaceRow, transparent.row, imageButtons);
+  imagePanel.append(preview, qualityRow, sizeRow, colorSpaceRow, rerenderWarning, transparent.row, imageButtons);
 
   // The link options are shared by the Link and QR code tabs, and move to
   // whichever of them is shown.
@@ -392,9 +403,18 @@ export function createShareDialog(options: ShareDialogOptions) {
   dialog.append(header, ...tabs.map(({ panel }) => panel), status);
 
   const scale = () => IMAGE_SCALES[sizeSelect.selectedIndex];
+  const selectedQuality = () => imageQuality.value as QualityMode;
+  const selectedColorSpace = (): OutputColorSpace => imageColorSpace.value === 'display-p3' ? 'display-p3' : 'srgb';
+  const selectedResolution = () => options.imageQualities(selectedColorSpace())
+    .find(({ quality }) => quality === selectedQuality()) ?? { width: canvas.width, height: canvas.height };
+  const rerenderNeeded = () => {
+    const current = options.currentImageSettings();
+    return selectedQuality() !== current.quality
+      || (selectedColorSpace() === 'display-p3' && current.colorSpace === 'srgb');
+  };
   const imageSize = (factor: number) => ({
-    width: Math.max(1, Math.round(canvas.width * factor)),
-    height: Math.max(1, Math.round(canvas.height * factor)),
+    width: Math.max(1, Math.round(selectedResolution().width * factor)),
+    height: Math.max(1, Math.round(selectedResolution().height * factor)),
   });
 
   // The picture at the chosen size, on the background unless it is transparent.
@@ -418,16 +438,26 @@ export function createShareDialog(options: ShareDialogOptions) {
     return target;
   }
 
-  function imageBlob(): Promise<Blob> {
+  async function imageBlob(): Promise<Blob> {
     const { width, height } = imageSize(scale());
-    const colorSpace = imageColorSpace.value === 'display-p3' ? 'display-p3' : 'srgb';
+    const colorSpace = selectedColorSpace();
+    const rerender = rerenderNeeded();
+    if (rerender) showStatus(`Rendering PNG at ${imageQuality.selectedOptions[0]?.textContent ?? 'selected quality'}...`);
+    const source = rerender ? await options.renderImage(selectedQuality(), colorSpace) : canvas;
     return pngBlob(drawImage(document.createElement('canvas'), width, height,
-      !transparent.input.checked, canvas, colorSpace));
+      !transparent.input.checked, source, colorSpace));
   }
 
   let imageZoom = 0;
 
   function refreshImage() {
+    const qualities = options.imageQualities(selectedColorSpace());
+    const currentQuality = imageQuality.value as QualityMode;
+    imageQuality.replaceChildren(...qualities.map(({ quality, label, width, height }) =>
+      new Option(`${label} — ${width} \u00d7 ${height} px`, quality)));
+    imageQuality.value = qualities.some(({ quality }) => quality === currentQuality)
+      ? currentQuality
+      : options.currentImageSettings().quality;
     const selected = Math.max(0, sizeSelect.selectedIndex);
     sizeSelect.replaceChildren(...IMAGE_SCALES.map((factor) => {
       const { width, height } = imageSize(factor);
@@ -447,13 +477,20 @@ export function createShareDialog(options: ShareDialogOptions) {
     preview.title = zoomed ? 'Click to shrink' : 'Click to enlarge';
     copyImage.disabled = !imageReady;
     downloadImage.disabled = !imageReady;
-    showStatus(imageReady ? '' : 'Available when rendering finishes');
+    rerenderWarning.hidden = !rerenderNeeded();
+    if (!imageReady) showStatus('Available when rendering finishes');
   }
 
   preview.addEventListener('click', () => {
     imageZoom = imageZoom === 0 ? 1 : 0;
     refreshImage();
   });
+  const updateImageSettings = () => {
+    showStatus('');
+    refreshImage();
+  };
+  imageQuality.addEventListener('change', updateImageSettings);
+  imageColorSpace.addEventListener('change', updateImageSettings);
 
   // Black modules on white with a quiet zone, and the drawn part of the
   // picture over the middle on a white backing that follows its shape.
@@ -657,6 +694,7 @@ export function createShareDialog(options: ShareDialogOptions) {
   async function savePng(blob: () => Promise<Blob>, fileName: string) {
     try {
       downloadBlob(await blob(), fileName);
+      showStatus('PNG downloaded');
     } catch (error) {
       showStatus(errorMessage(error, 'Could not save image'), true);
     }
@@ -809,6 +847,8 @@ export function createShareDialog(options: ShareDialogOptions) {
     open() {
       dialog.showModal();
       dialog.focus();
+      imageQuality.value = options.currentImageSettings().quality;
+      imageColorSpace.value = options.currentImageSettings().colorSpace;
       selectTab(tabs.findIndex(({ panel }) => panel === currentTab()));
     },
     close() {

@@ -1107,6 +1107,108 @@ function loadDefinitionFile(text: string): boolean {
 
 const shareDialog = createShareDialog({
   canvas,
+  imageQualities: (colorSpace) => {
+    const display = {
+      width: canvas.clientWidth || canvas.width,
+      height: canvas.clientHeight || canvas.height,
+    };
+    return (Object.keys(QUALITY_LABELS) as QualityMode[]).map((quality) => {
+      if (quality === state.quality && colorSpace === state.outputColorSpace) {
+        return { quality, label: QUALITY_LABELS[quality], width: canvas.width, height: canvas.height };
+      }
+      const options = quality === 'custom'
+        ? state.custom ?? { ...QUALITY_MODES.high, resolution: { mode: 'fixed' as const, height: canvas.height } }
+        : QUALITY_MODES[quality];
+      const { width, height } = outputResolution(state.scene, display, options, colorSpace);
+      return { quality, label: QUALITY_LABELS[quality], width, height };
+    });
+  },
+  currentImageSettings: () => ({ quality: state.quality, colorSpace: state.outputColorSpace }),
+  renderImage: async (quality, colorSpace) => {
+    const options = quality === 'custom' ? customOptions() : QUALITY_MODES[quality];
+    const display = {
+      width: canvas.clientWidth || canvas.width,
+      height: canvas.clientHeight || canvas.height,
+    };
+    const resolution = outputResolution(state.scene, display, options, colorSpace);
+    const scene = withResolution(state.scene, { width: resolution.width, height: resolution.height });
+    const request: RenderRequest = {
+      scene,
+      options: {
+        supersampling: options.supersampling,
+        recursionDepth: options.recursionDepth,
+        levels: options.levels,
+      },
+      outputColorSpace: colorSpace,
+      webglDisabled,
+    };
+    const worker = new Worker(new URL('./render/worker.ts', import.meta.url), { type: 'module' });
+    return new Promise<HTMLCanvasElement>((resolve, reject) => {
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        worker.terminate();
+        reject(error instanceof Error ? error : new Error(String(error)));
+      };
+      const closeLayers = (message: Extract<RenderMessage, { type: 'frame' }>) => {
+        message.foreground?.close();
+        message.background?.close();
+      };
+      worker.onmessage = (event: MessageEvent<RenderMessage>) => {
+        const message = event.data;
+        if (message.type === 'frame') {
+          closeLayers(message);
+          if (!message.final) {
+            message.bitmap.close();
+            return;
+          }
+          try {
+            const result = document.createElement('canvas');
+            result.width = message.bitmap.width;
+            result.height = message.bitmap.height;
+            const context = result.getContext('2d', colorSpace === 'display-p3' ? { colorSpace } : undefined);
+            if (!context) throw new Error('Could not prepare the PNG render');
+            if (colorSpace === 'display-p3' && context.getContextAttributes().colorSpace !== 'display-p3') {
+              throw new Error('This browser cannot create a Display P3 PNG');
+            }
+            context.drawImage(message.bitmap, 0, 0);
+            message.bitmap.close();
+            settled = true;
+            worker.terminate();
+            resolve(result);
+          } catch (error) {
+            message.bitmap.close();
+            fail(error);
+          }
+        } else if (message.type === 'error') {
+          fail(new Error(message.message));
+        } else if (message.type === 'done') {
+          fail(new Error('PNG render finished without an image'));
+        }
+      };
+      worker.onerror = (event) => fail(new Error(event.message || 'PNG render failed'));
+      const sources = [...new Set([...scene.elements, ...scene.background]
+        .flatMap((element) => element.kind === 'image' ? [element.source] : []))];
+      void Promise.allSettled(sources.map(async (source) => {
+        const image = state.imageAssets.get(source);
+        if (!image) throw new Error(`PNG render needs image "${source}"`);
+        return { source, bitmap: await createImageBitmap(image.bitmap, { premultiplyAlpha: 'premultiply' }) };
+      })).then((results) => {
+        const imageAssets = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure?.status === 'rejected') {
+          imageAssets.forEach(({ bitmap }) => bitmap.close());
+          throw failure.reason;
+        }
+        if (settled) {
+          imageAssets.forEach(({ bitmap }) => bitmap.close());
+          return;
+        }
+        worker.postMessage({ ...request, imageAssets }, imageAssets.map(({ bitmap }) => bitmap));
+      }).catch(fail);
+    });
+  },
   powerPointLayers: () => ({ foreground: displayedFrame?.foreground ?? canvas, background: displayedFrame?.background }),
   powerPointImages: () => state.imageAssets,
   scene: () => resolvedScene(),
