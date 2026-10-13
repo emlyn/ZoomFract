@@ -81,6 +81,15 @@ export type RenderMessage =
 export type FrameCallbacks = {
   // Earlier frames are rougher previews of the final one.
   frame: (canvas: OffscreenCanvas, final: boolean, layers?: { foreground: OffscreenCanvas; background: OffscreenCanvas }) => void;
+  // Gives layered scenes a chance to composite before converting the final
+  // linear XYZ texture for display.
+  linearFrame?: (
+    texture: WebGLTexture,
+    width: number,
+    height: number,
+    canvas: OffscreenCanvas,
+    final: boolean,
+  ) => WebGLTexture | undefined;
   progress: (progress: number) => void;
 };
 

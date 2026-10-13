@@ -227,8 +227,10 @@ files unless extracting a module clearly reduces complexity.
   boundary; never normalise typed colours through an 8-bit canvas. Display
   output is sRGB by default, with optional Display P3 when supported. Image PNG
   exports can use sRGB or Display P3 when wide-gamut canvas export is supported;
-  QR and PowerPoint exports remain sRGB. P3 alpha compositing and recursive
-  filtering are not yet fully colourimetrically accurate.
+  QR and PowerPoint exports remain sRGB. Paint rendering keeps premultiplied
+  linear XYZ through compositing, recursive filtering and output conversion;
+  this needs floating-point WebGL2 render, blend and filter support, including
+  for sRGB output.
   Named CSS colours alone use a canvas lookup. `srgb` has 0..1 components;
   existing CSS rgb expressions retain 0..255 components. Constructors include
   `colour`, `hsl`, `oklab`, `oklch`; `toRgb`, `toHsl`, `toOklch` expose components.

@@ -719,6 +719,8 @@ scene:
     expose components in those spaces, for example <code>toOklch(c).h</code>.
     CSS literal forms also include HWB, Lab, LCH and Display P3.</p>
   <p>Colours retain unclamped floating-point XYZ values during calculations.
+    Paint rendering keeps premultiplied linear XYZ through alpha compositing
+    and recursive filtering, then converts to the selected output space.
     Basic arithmetic is linear. <code>colourSpace</code> chooses the default
     mixing space: <code>linear-srgb</code> (default), <code>oklab</code>,
     <code>oklch</code>     or <code>spectral</code>. This controls interpolation, not the output
@@ -730,10 +732,9 @@ scene:
     it. sRGB remains the default. Image PNGs can be exported as sRGB or Display
     P3 when the browser supports wide-gamut canvas export; use Display P3 in
     Render settings as well to preserve colours outside sRGB. QR and PowerPoint
-    exports remain sRGB. Display P3 rendering is still being refined: alpha
-    compositing and recursive filtering are not yet fully colourimetrically
-    accurate. Display P3 is a wider gamut, not HDR; HDR output is not
-    implemented.</p>
+    exports remain sRGB. Rendering needs WebGL2 floating-point render, blend
+    and filter support, including for sRGB output. Display P3 is a wider gamut,
+    not HDR; HDR output is not implemented.</p>
   <p><code>spectral</code> mixes like pigments rather than light, so blue and
     yellow can make green. It uses
     <a href="https://github.com/rvanwijnen/spectral.js" target="_blank" rel="noopener">Spectral.js</a>
