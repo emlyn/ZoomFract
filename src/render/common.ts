@@ -10,6 +10,7 @@ import {
 } from '../scene';
 
 export type QualityMode = 'fast' | 'display' | 'high' | 'print' | 'custom';
+export type OutputColorSpace = 'srgb' | 'display-p3';
 
 export type RenderOptions = {
   supersampling: number;
@@ -41,6 +42,7 @@ export type RenderSettings = {
 export type RenderRequest = {
   scene: ResolvedSceneDefinition;
   options: RenderOptions;
+  outputColorSpace?: OutputColorSpace;
   imageAssets?: { source: string; bitmap: ImageBitmap }[];
   // Extra generations requested after automatic levels hit their limit.
   additionalLevels?: number;
@@ -100,8 +102,8 @@ export type RenderResult = {
 
 // Requests with equal keys differ only in levels, so a render can continue
 // from an earlier one with fewer fixed levels.
-export const continuationKey = ({ scene, options }: RenderRequest) =>
-  JSON.stringify([scene, options.supersampling, options.recursionDepth]);
+export const continuationKey = ({ scene, options, outputColorSpace = 'srgb' }: RenderRequest) =>
+  JSON.stringify([scene, options.supersampling, options.recursionDepth, outputColorSpace]);
 
 export const canContinue = (from: RenderRequest, to: RenderRequest) =>
   continuationKey(from) === continuationKey(to)

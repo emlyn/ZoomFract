@@ -25,6 +25,7 @@ import {
   scenePointToCanvas,
   type QualityMode,
   type QualityOptions,
+  type OutputColorSpace,
   type RenderMessage,
   type RenderOptions,
   type RenderRequest,
@@ -235,7 +236,27 @@ canvasFrame.className = 'canvas-frame';
 const canvas = document.createElement('canvas');
 canvas.tabIndex = 0;
 canvas.setAttribute('role', 'img');
-const displayContext = canvas.getContext('2d')!;
+const p3DisplayContext = canvas.getContext('2d', { colorSpace: 'display-p3' });
+const hasP3Canvas = p3DisplayContext?.getContextAttributes().colorSpace === 'display-p3';
+const hasP3Display = window.matchMedia('(color-gamut: p3)').matches;
+const displayContext = p3DisplayContext && hasP3Canvas
+  ? p3DisplayContext
+  : canvas.getContext('2d')!;
+const hasP3Webgl = (() => {
+  const probe = new OffscreenCanvas(1, 1);
+  const gl = probe.getContext('webgl2');
+  if (!gl || !gl.getExtension('EXT_color_buffer_float')
+    || !gl.getExtension('EXT_float_blend') || !gl.getExtension('OES_texture_float_linear')
+    || !('drawingBufferColorSpace' in gl)) {
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return false;
+  }
+  gl.drawingBufferColorSpace = 'display-p3';
+  const supported = gl.drawingBufferColorSpace === 'display-p3';
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
+  return supported;
+})();
+const p3OutputAvailable = hasP3Display && hasP3Canvas && hasP3Webgl;
 const editOverlay = document.createElement('canvas');
 editOverlay.className = 'edit-overlay';
 editOverlay.setAttribute('aria-hidden', 'true');
@@ -647,6 +668,20 @@ const recursionControl = selectRow<number>(
 recursionControl.row.title = 'How many levels of zooms are drawn precisely as shapes. Deeper levels reuse '
   + 'an earlier picture, which is faster but slightly blurrier. Higher values are sharper but slower.';
 
+const outputColorControl = selectRow<OutputColorSpace>(
+  'output-colour-row',
+  'Output colour',
+  [['srgb', 'sRGB'], ['display-p3', 'Display P3']],
+  (outputColorSpace) => {
+    state.outputColorSpace = outputColorSpace;
+    render();
+  },
+);
+outputColorControl.row.title = 'Display P3 uses a wider colour gamut when the display and browser support it. '
+  + 'Downloaded images remain sRGB.';
+outputColorControl.select.querySelector<HTMLOptionElement>('option[value="display-p3"]')!.disabled = !p3OutputAvailable;
+outputColorControl.select.disabled = !p3OutputAvailable;
+
 function resolutionInput(label: string) {
   const row = document.createElement('label');
   row.className = 'select-row resolution-row';
@@ -767,6 +802,7 @@ customSettingsBody.append(
   heightControl.row,
   supersamplingControl.row,
   recursionControl.row,
+  outputColorControl.row,
   levelsRow,
   qualityDetails,
 );
@@ -788,7 +824,7 @@ function syncQualityControls() {
   supersamplingControl.setValue(options.supersampling);
   recursionControl.setValue(options.recursionDepth);
   const resolution = isCustom
-    ? outputResolution(state.scene, { width: canvas.width, height: canvas.height }, options)
+    ? outputResolution(state.scene, { width: canvas.width, height: canvas.height }, options, state.outputColorSpace)
     : null;
   widthControl.input.value = String(resolution?.requestedWidth ?? canvas.width);
   heightControl.input.value = String(resolution?.requestedHeight ?? canvas.height);
@@ -799,6 +835,7 @@ function syncQualityControls() {
   widthControl.input.title = inferredWidth ? 'Calculated from height and the scene aspect' : 'Output width in pixels';
   heightControl.input.title = inferredHeight ? 'Calculated from width and the scene aspect' : 'Output height in pixels';
   levelsSlider.value = String(options.levels === 'auto' ? AUTO_LEVELS_POSITION : options.levels);
+  outputColorControl.setValue(state.outputColorSpace);
   levelsValue.textContent = isAuto
     ? `Auto${state.resolvedLevels === null ? '' : ` (${state.resolvedLevels})`}`
     : String(options.levels);
@@ -811,6 +848,7 @@ function syncQualityControls() {
   ]) {
     control.disabled = !isCustom;
   }
+  outputColorControl.select.disabled = !p3OutputAvailable;
   addLevelButton.disabled = !isCustom || options.levels === 'auto' || options.levels >= MAXIMUM_LEVELS;
   customSettingsBody.classList.toggle('read-only', !isCustom);
 }
@@ -1050,7 +1088,12 @@ async function shareLink({ inputs, settings }: LinkOptions): Promise<string> {
   url.hash = encodeSharedDefinition({
     text,
     inputs: inputs ? state.inputValues : new Map(),
-    settings: settings ? { quality: state.quality, custom: state.custom, label: labelToggle.checked } : null,
+    settings: settings ? {
+      quality: state.quality,
+      custom: state.custom,
+      label: labelToggle.checked,
+      outputColorSpace: state.outputColorSpace,
+    } : null,
   });
   return url.href;
 }
@@ -1209,6 +1252,7 @@ app.append(shell);
 const baseScene = parseScene(DEFAULT_SCENE_TEXT);
 const state = {
   quality: 'display' as QualityMode,
+  outputColorSpace: 'srgb' as OutputColorSpace,
   custom: null as QualityOptions | null,
   resolvedLevels: null as number | null,
   offsetX: 0,
@@ -1427,16 +1471,29 @@ async function loadDefinitionLocation(location: DefinitionLocation, updateUrl: b
         return;
       }
       const { text, inputs, settings } = decodeSharedDefinition(location.code);
-      const renderChanged = settings !== null && JSON.stringify([settings.quality, settings.custom])
-        !== JSON.stringify([state.quality, state.quality === 'custom' ? state.custom : null]);
+      const requestedColorSpace = settings?.outputColorSpace ?? 'srgb';
+      const outputColorSpace = requestedColorSpace === 'display-p3' && !p3OutputAvailable ? 'srgb' : requestedColorSpace;
+      const renderChanged = settings !== null && JSON.stringify([
+        settings.quality,
+        settings.custom,
+        outputColorSpace,
+      ]) !== JSON.stringify([
+        state.quality,
+        state.quality === 'custom' ? state.custom : null,
+        state.outputColorSpace,
+      ]);
       if (settings) {
         state.quality = settings.quality;
         state.custom = settings.custom ?? state.custom;
+        state.outputColorSpace = outputColorSpace;
         labelToggle.checked = settings.label;
         syncQualityControls();
       }
-      if (applyDefinition(text, location, updateUrl, inputs, true) && renderChanged) {
-        render();
+      if (applyDefinition(text, location, updateUrl, inputs, true)) {
+        if (renderChanged) render();
+        if (requestedColorSpace !== outputColorSpace) {
+          showSceneStatus('Display P3 output is unavailable here; showing sRGB instead');
+        }
       }
     } catch (error) {
       if (revision === definitionLoadRevision) {
@@ -1796,6 +1853,7 @@ function outputResolution(
   scene: SceneDefinition,
   display: { width: number; height: number },
   options: QualityOptions,
+  outputColorSpace: OutputColorSpace = 'srgb',
 ): OutputResolution {
   const aspect = outputAspect(scene);
   let requestedWidth: number;
@@ -1822,7 +1880,10 @@ function outputResolution(
   const workingSide = Math.max(requestedWidth, requestedHeight) * factor;
   const workingPixels = requestedWidth * requestedHeight * factor * factor;
   const dimensionScale = textureLimit === null ? 1 : textureLimit / workingSide;
-  const areaScale = Math.sqrt(MAX_WEBGL_WORKING_PIXELS / workingPixels);
+  const workingPixelLimit = outputColorSpace === 'display-p3'
+    ? MAX_WEBGL_WORKING_PIXELS / 2
+    : MAX_WEBGL_WORKING_PIXELS;
+  const areaScale = Math.sqrt(workingPixelLimit / workingPixels);
   const scale = Math.min(1, dimensionScale, areaScale);
   return {
     width: Math.max(1, Math.floor(requestedWidth * scale)),
@@ -1830,7 +1891,7 @@ function outputResolution(
     requestedWidth,
     requestedHeight,
     textureLimit,
-    workingPixelLimit: MAX_WEBGL_WORKING_PIXELS,
+    workingPixelLimit,
   };
 }
 
@@ -1891,7 +1952,7 @@ function resizeCanvas() {
     ? fitAspect(aspect, availableWidth, availableHeight)
     : labelBelow ? below : beside;
   const options = renderOptions();
-  const resolution = outputResolution(state.scene, display, options);
+  const resolution = outputResolution(state.scene, display, options, state.outputColorSpace);
   showTextureLimit(resolution, options);
   artwork.classList.toggle('label-below', labelBelow);
 
@@ -2187,6 +2248,7 @@ function render(resized = false) {
   const baseRequest: RenderRequest = {
     scene: resolvedScene(),
     options: renderOptions(),
+    outputColorSpace: state.outputColorSpace,
     webglDisabled,
   };
   const key = continuationKey(baseRequest);

@@ -220,10 +220,15 @@ vec4 gradient(float t, int stopCount, vec4 stops[${MAXIMUM_DENSITY_COLORS}], flo
         dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
         dot(lms, vec3(-0.0041960863, -0.7034186147, 1.707614701)));
     }
+    if (outputColorSpace == 1) {
+      linear = mat3(0.8225929, 0.0331995, 0.0170853,
+        0.1775340, 0.9667835, 0.0723957,
+        0.0, 0.0, 0.9103015) * linear;
+    }
     vec3 encoded = mix(12.92 * linear, 1.055 * pow(max(linear, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
       step(vec3(0.0031308), linear));
     color.a = clamp(color.a, 0.0, 1.0);
-    color.rgb = clamp(encoded, 0.0, 1.0) * color.a;
+    color.rgb = (outputColorSpace == 1 ? encoded : clamp(encoded, 0.0, 1.0)) * color.a;
   }
   return color;
 }`;
@@ -242,6 +247,7 @@ uniform bool singleChannel;
 uniform sampler2D backdrop;
 uniform sampler2D fills;
 uniform int blendMode;
+uniform int outputColorSpace;
 // Where the backdrop's first texel lies in the framebuffer being drawn.
 uniform ivec2 tileOrigin;
 ${glowFieldIndexes.map((index) => `uniform sampler2D glow${index};`).join('\n')}
@@ -274,9 +280,19 @@ float zoomGlow(int field, vec2 coords) {
 }
 vec4 imageSample(vec2 coords) {
   if (any(lessThan(coords, shapeData.xy)) || any(greaterThan(coords, shapeData.zw))) return vec4(0.0);
-  return drawMode > 5.5
+  vec4 color = drawMode > 5.5
     ? texelFetch(imageTexture, clamp(ivec2(coords * vec2(textureSize(imageTexture, 0))), ivec2(0), textureSize(imageTexture, 0) - 1), 0)
     : texture(imageTexture, coords);
+  if (outputColorSpace == 1) {
+    vec3 straight = color.a > 0.0 ? color.rgb / color.a : vec3(0.0);
+    vec3 linear = mix(straight / 12.92, pow((straight + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), straight));
+    linear = mat3(0.8225929, 0.0331995, 0.0170853,
+      0.1775340, 0.9667835, 0.0723957,
+      0.0, 0.0, 0.9103015) * linear;
+    color.rgb = mix(12.92 * linear, 1.055 * pow(max(linear, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
+      step(vec3(0.0031308), linear)) * color.a;
+  }
+  return color;
 }
 // Blend modes on premultiplied colours, in the order of BLEND_MODES, drawn
 // over a copy of what is below. Normal draws use fixed-function blending.
@@ -427,6 +443,14 @@ void main() {
   outColor = total / float(factor * factor);
 }`;
 
+const PRESENT_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+uniform sampler2D source;
+out vec4 outColor;
+void main() {
+  outColor = texelFetch(source, ivec2(gl_FragCoord.xy), 0);
+}`;
+
 // Counts the pixels in each block that differ between two output images by
 // more than rounding noise. Texels are premultiplied, so rounding in nearly
 // transparent pixels is not counted. A block's count must fit in a byte.
@@ -514,6 +538,7 @@ uniform float positions[${MAXIMUM_DENSITY_COLORS}];
 uniform int stopCount;
 uniform int rampSpace;
 uniform int rampHue;
+uniform int outputColorSpace;
 out vec4 outColor;
 float shape(float count) {
   return scale == 0 ? log(1.0 + count) : scale == 1 ? sqrt(count) : count;
@@ -533,8 +558,25 @@ void main() {
   outColor = total / float(factor * factor);
 }`;
 
-function createColorParser(): (color: string) => Rgba {
-  const context = new OffscreenCanvas(1, 1).getContext('2d', { willReadFrequently: true })!;
+function createColorParser(outputColorSpace: OutputColorSpace): (color: string) => Rgba {
+  if (outputColorSpace === 'display-p3') {
+    const cache = new Map<string, Rgba>();
+    return (color) => {
+      const cached = cache.get(color);
+      if (cached) return cached;
+      const value = parseCssColour(color);
+      const encode = (channel: number) => Math.abs(channel) <= 0.0031308
+        ? channel * 12.92
+        : Math.sign(channel) * (1.055 * Math.abs(channel) ** (1 / 2.4) - 0.055);
+      const [red, green, blue] = toLinearP3(value).map(encode);
+      const rgba: Rgba = [red, green, blue, value.a];
+      cache.set(color, rgba);
+      return rgba;
+    };
+  }
+  const context = new OffscreenCanvas(1, 1).getContext('2d', {
+    willReadFrequently: true,
+  })!;
   const cache = new Map<string, Rgba>();
   return (color) => {
     const cached = cache.get(color);
@@ -660,10 +702,10 @@ function createLevelTexture(
 // An image the size of the output, kept on the GPU.
 type OutputTarget = { texture: WebGLTexture; framebuffer: WebGLFramebuffer; width: number; height: number };
 
-function createFieldTexture(gl: WebGL2RenderingContext, width: number, height: number): WebGLTexture {
+function createFieldTexture(gl: WebGL2RenderingContext, width: number, height: number, format: number): WebGLTexture {
   const texture = gl.createTexture()!;
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, format, width, height);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -691,13 +733,14 @@ export function renderWebgl(
   settings: RenderSettings,
   callbacks: FrameCallbacks,
   imageAssets: readonly { source: string; bitmap: ImageBitmap }[] = [],
+  outputColorSpace: OutputColorSpace = 'srgb',
 ): RenderResult {
   if (scene.background.length) {
     const { width, height } = scene.view.resolution;
     const background = new OffscreenCanvas(width, height);
-    const backgroundContext = background.getContext('2d');
+    const backgroundContext = background.getContext('2d', outputColorSpace === 'display-p3' ? { colorSpace: 'display-p3' } : undefined);
     const composite = new OffscreenCanvas(width, height);
-    const context = composite.getContext('2d');
+    const context = composite.getContext('2d', outputColorSpace === 'display-p3' ? { colorSpace: 'display-p3' } : undefined);
     if (!backgroundContext || !context) throw new Error('Background compositing needs a 2D canvas');
     const painted = renderWebgl({
       ...scene, background: [], elements: scene.background,
@@ -705,7 +748,7 @@ export function renderWebgl(
     }, { ...settings, recursionDepth: 0, levels: 1, autoLevels: false }, {
       frame: (canvas, final) => { if (final) backgroundContext.drawImage(canvas, 0, 0); },
       progress: () => {},
-    }, imageAssets);
+    }, imageAssets, outputColorSpace);
     painted.dispose();
     const compositeCallbacks = (target: FrameCallbacks): FrameCallbacks => ({
       progress: target.progress,
@@ -716,7 +759,7 @@ export function renderWebgl(
         target.frame(composite, final, final ? { foreground, background } : undefined);
       },
     });
-    const result = renderWebgl({ ...scene, background: [] }, settings, compositeCallbacks(callbacks), imageAssets);
+    const result = renderWebgl({ ...scene, background: [] }, settings, compositeCallbacks(callbacks), imageAssets, outputColorSpace);
     return {
       ...result,
       continueTo: (next, target) => result.continueTo(next, compositeCallbacks(target)),
@@ -727,6 +770,19 @@ export function renderWebgl(
   const sceneImages = imageAssets.filter(({ source }) => imageSources.has(source));
   const current = gpu && !gpu.gl.isContextLost() ? gpu : createGpu(width, height);
   gpu = current;
+  if (outputColorSpace === 'display-p3') {
+    const { gl } = current;
+    if (!gl.getExtension('EXT_color_buffer_float') || !gl.getExtension('EXT_float_blend')
+      || !gl.getExtension('OES_texture_float_linear') || !('drawingBufferColorSpace' in gl)) {
+      throw new Error('Display P3 output needs float WebGL2 rendering and a Display P3 drawing buffer');
+    }
+    gl.drawingBufferColorSpace = 'display-p3';
+    if (gl.drawingBufferColorSpace !== 'display-p3') {
+      throw new Error('Display P3 output is not supported by this WebGL2 implementation');
+    }
+  } else if ('drawingBufferColorSpace' in current.gl) {
+    current.gl.drawingBufferColorSpace = 'srgb';
+  }
   if (current.output.width !== width || current.output.height !== height) {
     current.output.width = width;
     current.output.height = height;
@@ -734,7 +790,7 @@ export function renderWebgl(
   // Chrome keeps only a few contexts per page and drops the oldest, so a
   // failed render releases its context straight away.
   try {
-    return drawWebgl(current, scene, settings, callbacks, sceneImages);
+    return drawWebgl(current, scene, settings, callbacks, sceneImages, outputColorSpace);
   } catch (error) {
     current.gl.getExtension('WEBGL_lose_context')?.loseContext();
     gpu = null;
@@ -748,6 +804,7 @@ function drawWebgl(
   settings: RenderSettings,
   callbacks: FrameCallbacks,
   imageAssets: readonly { source: string; bitmap: ImageBitmap }[],
+  outputColorSpace: OutputColorSpace,
 ): RenderResult {
   const { gl, output } = gpu;
   const outputWidth = output.width;
@@ -817,13 +874,14 @@ function drawWebgl(
   const newFramebuffer = () => take(gpu.framebuffers, 'framebuffer', () => gl.createFramebuffer()!);
   // A lost context turns later calls into no-ops, so it is checked each time
   // the queue drains.
-  const waitForGpu = () => {
+  const waitForGpu = (stage: string) => {
     gl.finish();
     if (gl.isContextLost()) {
       throw new Error(GPU_LOST_MESSAGE);
     }
+    const error = gl.getError();
+    if (error !== gl.NO_ERROR) throw new Error(`WebGL error ${error} during ${stage}`);
   };
-
   if (width > maximumSize || height > maximumSize) {
     throw new Error(`WebGL2 is limited to ${maximumSize}px textures; this render needs ${Math.max(width, height)}px`);
   }
@@ -836,13 +894,18 @@ function drawWebgl(
 
   const shading = scene.shading;
   const density = shading.mode === 'density';
-  const format = density ? densityFormat(gl) : gl.RGBA8;
-  const parseColor = createColorParser();
+  const outputSpaceIndex = outputColorSpace === 'display-p3' ? 1 : 0;
+  const workingFormat = outputColorSpace === 'display-p3' ? gl.RGBA16F : gl.RGBA8;
+  const format = density ? densityFormat(gl) : workingFormat;
+  const parseColor = createColorParser(outputColorSpace);
   const sceneProgram = program('scene', SCENE_VERTEX_SHADER, SCENE_FRAGMENT_SHADER);
   const mipProgram = program('mip', FULLSCREEN_VERTEX_SHADER, MIP_FRAGMENT_SHADER);
   const resolveProgram = density
     ? program('density', FULLSCREEN_VERTEX_SHADER, DENSITY_FRAGMENT_SHADER)
     : program('resolve', FULLSCREEN_VERTEX_SHADER, RESOLVE_FRAGMENT_SHADER);
+  const presentationProgram = outputColorSpace === 'display-p3'
+    ? program('presentation', FULLSCREEN_VERTEX_SHADER, PRESENT_FRAGMENT_SHADER)
+    : null;
   const glowDilateProgram = program('glowDilate', FULLSCREEN_VERTEX_SHADER, GLOW_DILATE_FRAGMENT_SHADER);
   const glowBlurProgram = program('glowBlur', FULLSCREEN_VERTEX_SHADER, GLOW_BLUR_FRAGMENT_SHADER);
   const compareProgram = program('compare', FULLSCREEN_VERTEX_SHADER, COMPARE_FRAGMENT_SHADER);
@@ -859,9 +922,11 @@ function drawWebgl(
   glowFieldIndexes.forEach((index) => gl.uniform1i(gl.getUniformLocation(sceneProgram, `glow${index}`), index + 1));
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'backdrop'), BACKDROP_UNIT);
   gl.uniform1i(gl.getUniformLocation(sceneProgram, 'fills'), FILL_UNIT);
+  gl.uniform1i(gl.getUniformLocation(sceneProgram, 'outputColorSpace'), outputSpaceIndex);
   if (density) {
     gl.useProgram(resolveProgram);
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'fills'), FILL_UNIT);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'outputColorSpace'), outputSpaceIndex);
     gl.useProgram(sceneProgram);
   }
   const blendModeLocation = gl.getUniformLocation(sceneProgram, 'blendMode');
@@ -888,17 +953,17 @@ function drawWebgl(
     clearTexture(level.texture, width, height, level.levels);
     return level;
   };
-  const fieldTexture = (textureWidth: number, textureHeight: number) => {
-    const texture = take(gpu.fieldTextures, `${textureWidth}x${textureHeight} `,
-      () => createFieldTexture(gl, textureWidth, textureHeight));
+  const fieldTexture = (textureWidth: number, textureHeight: number, textureFormat = workingFormat) => {
+    const texture = take(gpu.fieldTextures, `${textureWidth}x${textureHeight} ${textureFormat}`,
+      () => createFieldTexture(gl, textureWidth, textureHeight, textureFormat));
     clearTexture(texture, textureWidth, textureHeight);
     return texture;
   };
   const textures = [levelTexture(format), levelTexture(format)];
   // Output images stay on the GPU: they are compared there and copied to the
   // canvas, which is posted without reading pixels back.
-  const outputTarget = (targetWidth: number, targetHeight: number) => {
-    const texture = fieldTexture(targetWidth, targetHeight);
+  const outputTarget = (targetWidth: number, targetHeight: number, textureFormat = workingFormat) => {
+    const texture = fieldTexture(targetWidth, targetHeight, textureFormat);
     const framebuffer = newFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
@@ -906,13 +971,18 @@ function drawWebgl(
   };
   const referenceOutput = outputTarget(outputWidth, outputHeight);
   const finalOutput = outputTarget(outputWidth, outputHeight);
-  const changeCounts = outputTarget(Math.ceil(outputWidth / COMPARE_BLOCK), Math.ceil(outputHeight / COMPARE_BLOCK));
+  const changeCounts = outputTarget(
+    Math.ceil(outputWidth / COMPARE_BLOCK),
+    Math.ceil(outputHeight / COMPARE_BLOCK),
+    gl.RGBA8,
+  );
   // Feedback levels are compared at the mip level nearest the output size.
   const differenceLod = Math.floor(Math.log2(factor));
   const differences = settings.autoLevels && !density
     ? outputTarget(
       Math.ceil(Math.max(1, width >> differenceLod) / COMPARE_BLOCK),
       Math.ceil(Math.max(1, height >> differenceLod) / COMPARE_BLOCK),
+      gl.RGBA8,
     )
     : null;
 
@@ -930,7 +1000,7 @@ function drawWebgl(
   }
   const tileKey = `${width}x${height} tile`;
   const tileTexture = () => {
-    const texture = take(gpu.fieldTextures, tileKey, () => createFieldTexture(gl, tileWidth, tileHeight));
+    const texture = take(gpu.fieldTextures, `${tileKey} ${workingFormat}`, () => createFieldTexture(gl, tileWidth, tileHeight, workingFormat));
     clearTexture(texture, tileWidth, tileHeight);
     return texture;
   };
@@ -944,10 +1014,10 @@ function drawWebgl(
     ? Math.min(MSAA_SAMPLES, gl.getParameter(gl.MAX_SAMPLES))
     : 0;
   const multisample = samples > 0 ? (() => {
-    const renderbuffer = take(gpu.renderbuffers, `${tileKey} ${samples}`, () => {
+    const renderbuffer = take(gpu.renderbuffers, `${tileKey} ${samples} ${workingFormat}`, () => {
       const created = gl.createRenderbuffer()!;
       gl.bindRenderbuffer(gl.RENDERBUFFER, created);
-      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.RGBA8, tileWidth, tileHeight);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, workingFormat, tileWidth, tileHeight);
       return created;
     });
     const drawFramebuffer = newFramebuffer();
@@ -1447,7 +1517,7 @@ function drawWebgl(
         gl.uniform1i(blendModeLocation, blend);
         for (const [first, count] of batches) {
           gl.drawArrays(gl.TRIANGLES, first, count);
-          waitForGpu();
+          waitForGpu('scene draw');
         }
         if (blend > 0) {
           gl.enable(gl.BLEND);
@@ -1487,7 +1557,7 @@ function drawWebgl(
     const target = unusedTexture();
     drawLevel(target, lastFeedback, levelItems);
     generateMips(target);
-    waitForGpu();
+    waitForGpu('feedback level');
     previousLevelKept = lastFeedback !== null;
     lastFeedback = target;
     completedFeedbackLevels += 1;
@@ -1530,7 +1600,7 @@ function drawWebgl(
       drawLevel(target, lastMask, levelItems, true);
       // Any visible detail should glow, however small.
       generateMips(target, 1, true);
-      waitForGpu();
+      waitForGpu('glow mask');
       spareMask = lastMask;
       lastMask = target;
     }
@@ -1582,6 +1652,7 @@ function drawWebgl(
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampSpace'), shading.ramp ? MIXING_SPACES.indexOf(shading.ramp.space) : -1);
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampRow'), densityRampRow);
     gl.uniform1i(gl.getUniformLocation(resolveProgram, 'rampHue'), shading.ramp ? ['shorter', 'longer', 'increasing', 'decreasing'].indexOf(shading.ramp.hue) : 0);
+    gl.uniform1i(gl.getUniformLocation(resolveProgram, 'outputColorSpace'), outputSpaceIndex);
   };
 
   // Draws items over the latest feedback texture and resolves them into an
@@ -1599,7 +1670,7 @@ function drawWebgl(
     gl.bindVertexArray(emptyVertexArray);
     gl.bindTexture(gl.TEXTURE_2D, finalTexture.texture);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    waitForGpu();
+    waitForGpu('output resolve');
   };
 
   // Reading the error waits for every queued command, so it is left until
@@ -1613,6 +1684,18 @@ function drawWebgl(
 
   // Posting the canvas waits for the GPU, so it is copied first.
   const copyToCanvas = (target: OutputTarget) => {
+    if (presentationProgram) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, outputWidth, outputHeight);
+      gl.disable(gl.BLEND);
+      gl.useProgram(presentationProgram);
+      gl.uniform1i(gl.getUniformLocation(presentationProgram, 'source'), 0);
+      gl.bindVertexArray(emptyVertexArray);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, target.texture);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      return;
+    }
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.framebuffer);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     gl.blitFramebuffer(0, 0, outputWidth, outputHeight, 0, 0, outputWidth, outputHeight, gl.COLOR_BUFFER_BIT, gl.NEAREST);
@@ -1780,8 +1863,9 @@ function drawWebgl(
     },
   };
 }
-import { colourValue, interpolate, MIXING_SPACES, toLinearRgb, toOklab } from '../values';
+import { colourValue, interpolate, MIXING_SPACES, parseCssColour, toLinearP3, toLinearRgb, toOklab } from '../values';
 import type { ColourValue, GradientValue } from '../values';
+import type { OutputColorSpace } from './common';
 
 const pigmentTables = new WeakMap<GradientValue, Float32Array>();
 function pigmentSamples(ramp: GradientValue): Float32Array {

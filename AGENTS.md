@@ -223,8 +223,10 @@ files unless extracting a module clearly reduces complexity.
   `point`, `length`, `distance`, `dot`, clockwise-degree `rotate`, `clamp`,
   `floor`, `ceil`, `round`, `lerp`, `mix` and `sample` are built-ins.
   `mix` is now reserved; the Triangle to Fern variable is `transition`.
-- Colours retain extended linear XYZ D65 and alpha until the sRGB output
-  boundary; never normalise typed colours through an 8-bit canvas.
+- Colours retain extended linear XYZ D65 and alpha until the selected output
+  boundary; never normalise typed colours through an 8-bit canvas. Display
+  output is sRGB by default, with optional Display P3 when supported; image,
+  QR and PowerPoint exports remain sRGB.
   Named CSS colours alone use a canvas lookup. `srgb` has 0..1 components;
   existing CSS rgb expressions retain 0..255 components. Constructors include
   `colour`, `hsl`, `oklab`, `oklch`; `toRgb`, `toHsl`, `toOklch` expose components.
@@ -244,7 +246,9 @@ files unless extracting a module clearly reduces complexity.
   or from/to; radial uses centre/radius. Defaults fit the shape's own box.
   Source gradient coordinates survive exact clipping and recursive transforms.
   Density and shape fills share shader interpolation, including alpha and hue.
-  Conic/repeating fills, wide-gamut output and HDR output remain deferred.
+  Conic/repeating fills and HDR output remain deferred. Display P3 is an
+  application-level output choice, separate from definition interpolation
+  `colourSpace`.
 - Choice inputs use `options: [{ name, value }]`, same-type values with unique
   labels and a matching default. Runtime/share values store the option index,
   while expression lookup returns the selected typed value. Both live input

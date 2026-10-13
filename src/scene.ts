@@ -1,7 +1,7 @@
 import YAML from 'yaml';
 import { outlineTriangles } from './outline';
 import { evaluateExpression, evaluateValue, isIdentifier, isReservedName, type Variables } from './expression';
-import { boolean, checkValue, colourCss, colourValue, equalValues, huePath, isColourValue, isGradient, isPoint, makeGradient, mixingSpace, numeric, parseCssColour, pointValue, type GradientValue, type MixingSpace, type Value } from './values';
+import { boolean, checkValue, colourCssDisplayP3, colourValue, equalValues, huePath, isColourValue, isGradient, isPoint, makeGradient, mixingSpace, numeric, parseCssColour, pointValue, type GradientValue, type MixingSpace, type Value } from './values';
 
 // Keys and list indexes leading to a value in the definition.
 type ScenePath = (string | number)[];
@@ -602,7 +602,7 @@ function asColour(value: unknown, fallback: string, variables: Variables): strin
     return value;
   }
   if (typeof value === 'string' && !/^rgb\(/i.test(value.trim())) {
-    return colourCss(colourValue(evaluateValue(value, variables)));
+    return colourCssDisplayP3(colourValue(evaluateValue(value, variables)));
   }
   const rgb = typeof value === 'string' ? /^rgb\((.*)\)$/is.exec(value.trim()) : null;
   if (rgb) {
@@ -1599,7 +1599,7 @@ function shapeColour(
     if (!(rx > 0 && ry > 0)) throw new Error('Radial gradient radius must be positive');
     mapping = [c / rx, -s / ry, s / rx, c / ry, -(c * centre.x + s * centre.y) / rx, (s * centre.x - c * centre.y) / ry];
   }
-  return { color: colourCss(ramp.stops[0].colour), fill: { kind, ramp, mapping } };
+  return { color: colourCssDisplayP3(ramp.stops[0].colour), fill: { kind, ramp, mapping } };
 }
 
 function parseOutline(value: unknown, variables: Variables, density: boolean, path: ScenePath): Outline | undefined {
@@ -2288,7 +2288,7 @@ function parseShading(node: unknown, variables: Variables): Shading {
     ramp,
     colors: colours === undefined
       ? evenStops(DEFAULT_DENSITY_COLORS)
-      : ramp ? ramp.stops.map((stop): ColorStop => ({ at: { kind: 'fraction', value: stop.position }, color: colourCss(stop.colour) }))
+      : ramp ? ramp.stops.map((stop): ColorStop => ({ at: { kind: 'fraction', value: stop.position }, color: colourCssDisplayP3(stop.colour) }))
         : atPath(['shading', 'colours'], () => parseColorStops(colours, variables)),
   };
 }

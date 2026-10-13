@@ -721,11 +721,14 @@ scene:
   <p>Colours retain unclamped floating-point XYZ values during calculations.
     Basic arithmetic is linear. <code>colourSpace</code> chooses the default
     mixing space: <code>linear-srgb</code> (default), <code>oklab</code>,
-    <code>oklch</code> or <code>spectral</code>. A call can override it:
+    <code>oklch</code>     or <code>spectral</code>. This controls interpolation, not the output
+    display profile. A call can override it:
     <code>mix(a, b, t, "oklch", "shorter")</code>. Hue paths are
     <code>shorter</code> (default), <code>longer</code>, <code>increasing</code>
-    or <code>decreasing</code>. Rendering and exports currently convert to
-    sRGB and clip at the output; wide-gamut and HDR output are not yet implemented.</p>
+    or <code>decreasing</code>. The Render settings panel can display in sRGB
+    or Display P3 when the browser, display and WebGL implementation support
+    it. sRGB remains the default, and image, QR and PowerPoint exports remain
+    sRGB. Display P3 is a wider gamut, not HDR; HDR output is not implemented.</p>
   <p><code>spectral</code> mixes like pigments rather than light, so blue and
     yellow can make green. It uses
     <a href="https://github.com/rvanwijnen/spectral.js" target="_blank" rel="noopener">Spectral.js</a>

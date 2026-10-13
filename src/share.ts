@@ -7,6 +7,7 @@ import {
   SUPERSAMPLING_CHOICES,
   type QualityMode,
   type QualityOptions,
+  type OutputColorSpace,
 } from './render/common';
 import type { InputValue, InputValues } from './scene';
 
@@ -68,7 +69,12 @@ export function qrSharedUrl(url: string): { prefix: string; payload: string } {
   return { prefix: url.slice(0, hash + 1), payload: `A${code[0]}${toAlphanumeric(fromBase64Url(code.slice(1)))}` };
 }
 
-export type SharedSettings = { quality: QualityMode; custom: QualityOptions | null; label: boolean };
+export type SharedSettings = {
+  quality: QualityMode;
+  custom: QualityOptions | null;
+  label: boolean;
+  outputColorSpace: OutputColorSpace;
+};
 
 export type SharedDefinition = { text: string; inputs: InputValues; settings: SharedSettings | null };
 
@@ -150,13 +156,15 @@ function parseSettings(extras: Record<string, unknown>): SharedSettings | null {
     return null;
   }
   const quality = extras.q;
-  if (typeof quality !== 'string' || !Object.hasOwn(QUALITY_LABELS, quality) || typeof extras.l !== 'boolean') {
+  if (typeof quality !== 'string' || !Object.hasOwn(QUALITY_LABELS, quality) || typeof extras.l !== 'boolean'
+    || (extras.c !== undefined && extras.c !== 'display-p3' && extras.c !== 'srgb')) {
     invalid('settings');
   }
   return {
     quality: quality as QualityMode,
     custom: quality === 'custom' ? parseRenderOptions(extras.r) : null,
     label: extras.l,
+    outputColorSpace: extras.c === 'display-p3' ? 'display-p3' : 'srgb',
   };
 }
 
@@ -165,6 +173,7 @@ function extrasJson(inputs: InputValues, settings: SharedSettings | null) {
   return {
     ...(inputs.size > 0 ? { i: Object.fromEntries([...inputs].map(([name, value]) => [name, inputJson(value)])) } : {}),
     ...(settings ? { q: settings.quality, l: settings.label } : {}),
+    ...(settings?.outputColorSpace === 'display-p3' ? { c: settings.outputColorSpace } : {}),
     ...(custom ? {
       r: [
         'webgl',

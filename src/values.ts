@@ -59,7 +59,16 @@ export const toLinearRgb = (c: ColourValue): [number, number, number] => [
   -0.9692436 * c.x + 1.8759675 * c.y + 0.0415551 * c.z,
   0.0556301 * c.x - 0.203977 * c.y + 1.0569715 * c.z,
 ];
+export const toLinearP3 = (c: ColourValue): [number, number, number] => [
+  2.4934969 * c.x - 0.9313836 * c.y - 0.4027108 * c.z,
+  -0.829489 * c.x + 1.7626641 * c.y + 0.0236247 * c.z,
+  0.0358458 * c.x - 0.0761724 * c.y + 0.9568845 * c.z,
+];
 export const toRgb = (c: ColourValue) => toLinearRgb(c).map(encode);
+export function colourCssDisplayP3(c: ColourValue): string {
+  const channels = toLinearP3(c).map(encode);
+  return `color(display-p3 ${channels.join(' ')} / ${Math.max(0, Math.min(1, c.a))})`;
+}
 export function oklab(l: number, a: number, b: number, alpha = 1): ColourValue {
   const ll = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
   const mm = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;

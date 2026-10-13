@@ -734,7 +734,7 @@ canvas {
   border-left: 2px solid rgba(212, 212, 216, 0.14);
 }
 
-.render-settings-body.read-only > :not(.quality-details) {
+.render-settings-body.read-only > :not(.quality-details):not(.output-colour-row) {
   opacity: 0.55;
 }
 
